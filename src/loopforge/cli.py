@@ -6,7 +6,13 @@ import argparse
 import sys
 from pathlib import Path
 
-from loopforge.engine import DEFAULT_PROFILE, create_run, current_status, initialize_project
+from loopforge.engine import (
+    DEFAULT_PROFILE,
+    continue_run,
+    create_run,
+    current_status,
+    initialize_project,
+)
 
 
 def print_native_artifacts(state: dict[str, object] | None) -> None:
@@ -40,6 +46,21 @@ def print_legacy_artifacts(state: dict[str, object] | None) -> None:
                 print(f"- {error}")
 
 
+def print_loop_contract(state: dict[str, object] | None) -> None:
+    if state is None:
+        return
+    print(f"loop contract: {state['status']}")
+    print(f"success checks: {len(state.get('success_checks', []))}")
+    print(f"subjective: {'yes' if state.get('subjective') else 'no'}")
+    if state.get("subjective"):
+        print(f"rubric: {'present' if state.get('rubric') else 'missing'}")
+    errors = state.get("errors", [])
+    if errors:
+        print("loop contract notes:")
+        for error in errors:
+            print(f"- {error}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="loopforge")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -64,10 +85,50 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Task description for the run.",
     )
+    run_parser.add_argument(
+        "--success-check",
+        action="append",
+        default=[],
+        help="Objective check required before an autonomous continuation.",
+    )
+    run_parser.add_argument(
+        "--skill",
+        action="append",
+        default=[],
+        help="Selected LoopForge skill for this run. Can be passed more than once.",
+    )
+    run_parser.add_argument(
+        "--allow-tool",
+        action="append",
+        default=[],
+        help="Allowed tool or command family for this run. Can be passed more than once.",
+    )
+    run_parser.add_argument(
+        "--max-attempts",
+        type=int,
+        default=3,
+        help="Maximum bounded attempts allowed by the loop contract.",
+    )
+    run_parser.add_argument(
+        "--timeout",
+        type=int,
+        default=1800,
+        help="Maximum wall-clock seconds allowed by the loop contract.",
+    )
+    run_parser.add_argument(
+        "--rubric",
+        default="",
+        help="Subjective quality rubric required before autonomous subjective work.",
+    )
 
     subcommands.add_parser(
         "status",
         help="Show the current LoopForge loop state.",
+    )
+
+    subcommands.add_parser(
+        "continue",
+        help="Validate the current loop contract before the next bounded action.",
     )
 
     return parser
@@ -91,7 +152,16 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "run":
         try:
-            result = create_run(Path.cwd(), task=args.task)
+            result = create_run(
+                Path.cwd(),
+                task=args.task,
+                success_checks=args.success_check,
+                selected_skills=args.skill,
+                allowed_tools=args.allow_tool,
+                max_attempts=args.max_attempts,
+                timeout_seconds=args.timeout,
+                subjective_rubric=args.rubric,
+            )
         except (FileNotFoundError, ValueError) as error:
             print(f"LoopForge run failed: {error}", file=sys.stderr)
             return 1
@@ -100,6 +170,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"task id: {result.run['task_id']}")
         print(f"base commit: {result.run['base_commit'] or 'none'}")
         print(f"status: {result.run['status']}")
+        print(f"loop contract: {result.run['loop_contract']['path']}")
+        if result.run["loop_contract"]["subjective"] and not args.rubric:
+            print("rubric: needed before autonomous attempts")
         return 0
     if args.command == "status":
         result = current_status(Path.cwd())
@@ -137,6 +210,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"base commit: {run.get('base_commit') or 'none'}")
         print(f"run directory: {result.run_dir}")
         print_native_artifacts(result.native_artifacts)
+        print_loop_contract(result.loop_contract)
         print_legacy_artifacts(result.legacy_artifacts)
         print("blockers:")
         if result.blockers:
@@ -146,6 +220,20 @@ def main(argv: list[str] | None = None) -> int:
             print("- none")
         print(f"next step: {result.next_step}")
         return 0
+    if args.command == "continue":
+        result = continue_run(Path.cwd())
+        output = sys.stdout if result.ok else sys.stderr
+        print(result.message, file=output)
+        if result.run_dir is not None:
+            print(f"run directory: {result.run_dir}", file=output)
+        if result.contract is not None:
+            print(f"loop contract: {result.contract['status']}", file=output)
+            print(f"success checks: {len(result.contract.get('success_checks', []))}", file=output)
+        if result.blockers:
+            print("blockers:", file=output)
+            for blocker in result.blockers:
+                print(f"- {blocker}", file=output)
+        return 0 if result.ok else 1
     parser.error(f"unknown command: {args.command}")
     return 2
 

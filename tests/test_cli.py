@@ -143,9 +143,11 @@ class CliTests(unittest.TestCase):
             self.assertEqual(run_json["base_commit"], base_commit)
             self.assertEqual(run_json["profile"], "supervised")
             self.assertEqual(run_json["pack"], "generic-code")
-            self.assertEqual(run_json["status"], "ready_for_verification")
+            self.assertEqual(run_json["status"], "loop_contract_draft")
             self.assertEqual(run_json["success_checks"], [])
             self.assertEqual(run_json["blockers"], [])
+            self.assertEqual(run_json["loop_contract"]["status"], "loop_contract_draft")
+            self.assertFalse(run_json["loop_contract"]["requires_rubric"])
             self.assertEqual(run_json["legacy"]["issue_source"], "generated_from_task_id")
             self.assertIsInstance(run_json["legacy"]["issue"], int)
             self.assertGreater(run_json["legacy"]["issue"], 0)
@@ -193,6 +195,11 @@ class CliTests(unittest.TestCase):
             exchange = json.loads((run_dir / "exchange.json").read_text(encoding="utf-8"))
             self.assertEqual(exchange["run_id"], run_id)
             self.assertIn("Add a useful command", (run_dir / "task.md").read_text(encoding="utf-8"))
+            loop_contract = (run_dir / "loop.md").read_text(encoding="utf-8")
+            self.assertIn("# Objective", loop_contract)
+            self.assertIn("# Selected Project Pack", loop_contract)
+            self.assertIn("generic-code", loop_contract)
+            self.assertIn("None recorded.", loop_contract)
             self.assertIn("LoopForge run created", output.getvalue())
 
             self.assertFalse((repo / "run.json").exists())
@@ -255,12 +262,143 @@ class CliTests(unittest.TestCase):
             self.assertIn(f"current run: {config['current_run_id']}", text)
             self.assertIn("task: Add status output", text)
             self.assertIn("profile: supervised", text)
-            self.assertIn("loop status: ready_for_verification", text)
+            self.assertIn("loop status: loop_contract_draft", text)
             self.assertIn("native artifacts: complete", text)
+            self.assertIn("loop contract: valid", text)
+            self.assertIn("success checks: 0", text)
             self.assertIn("legacy artifacts: valid", text)
             self.assertIn("legacy issue:", text)
             self.assertIn("blockers:\n- none", text)
-            self.assertIn("next step: Review the run artifacts", text)
+            self.assertIn("next step: Complete the loop contract", text)
+
+    def test_run_records_success_checks_and_continue_accepts_contract_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(
+                        [
+                            "run",
+                            "--task",
+                            "Add status output",
+                            "--success-check",
+                            "loopforge status prints the current run",
+                        ]
+                    ),
+                    0,
+                )
+                self.assertEqual(main(["continue"]), 0)
+
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+            run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            self.assertEqual(run_json["status"], "loop_contract_ready")
+            self.assertEqual(
+                run_json["success_checks"],
+                ["loopforge status prints the current run"],
+            )
+            self.assertIn(
+                "- loopforge status prints the current run",
+                (run_dir / "loop.md").read_text(encoding="utf-8"),
+            )
+            self.assertIn("Loop contract accepted", output.getvalue())
+            self.assertIn("Phase 4", output.getvalue())
+
+    def test_continue_refuses_without_success_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            error = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(main(["run", "--task", "Add status output"]), 0)
+                with contextlib.redirect_stderr(error):
+                    self.assertEqual(main(["continue"]), 1)
+
+            text = error.getvalue()
+            self.assertIn("continue refused", text)
+            self.assertIn("no success checks", text)
+
+    def test_autonomous_subjective_task_requires_rubric_before_continue(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            error = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init", "--profile", "autonomous"]), 0)
+                self.assertEqual(
+                    main(
+                        [
+                            "run",
+                            "--task",
+                            "Improve the onboarding copy",
+                            "--success-check",
+                            "README contains an onboarding section",
+                        ]
+                    ),
+                    0,
+                )
+                with contextlib.redirect_stderr(error):
+                    self.assertEqual(main(["continue"]), 1)
+
+            text = error.getvalue()
+            self.assertIn("subjective work needs a rubric", text)
+
+    def test_autonomous_subjective_task_accepts_rubric(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["init", "--profile", "autonomous"]), 0)
+                self.assertEqual(
+                    main(
+                        [
+                            "run",
+                            "--task",
+                            "Improve the onboarding copy",
+                            "--success-check",
+                            "README contains an onboarding section",
+                            "--rubric",
+                            "Clear, concise, and accurate for a first-time user.",
+                        ]
+                    ),
+                    0,
+                )
+                self.assertEqual(main(["continue"]), 0)
+
+            self.assertIn("Loop contract accepted", output.getvalue())
 
     def test_run_without_git_uses_native_task_id_and_legacy_sentinel(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

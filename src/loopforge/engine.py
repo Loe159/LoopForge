@@ -18,6 +18,8 @@ CONFIG_FILE = "config.json"
 DEFAULT_PROFILE = "supervised"
 DEFAULT_PACK = "generic-code"
 READY_FOR_VERIFICATION = "ready_for_verification"
+LOOP_CONTRACT_DRAFT = "loop_contract_draft"
+LOOP_CONTRACT_READY = "loop_contract_ready"
 SYNTHETIC_LEGACY_BASE_COMMIT = "0" * 40
 
 CONFIG_KEYS = (
@@ -54,6 +56,40 @@ LEGACY_ARTIFACT_NAMES = (
     "progress.md",
     "verification.md",
     "review.md",
+)
+
+REQUIRED_LOOP_SECTIONS = (
+    "Objective",
+    "Scope",
+    "Inputs",
+    "Selected Project Pack",
+    "Selected Skills",
+    "Allowed Tools",
+    "Success Checks",
+    "Limits",
+    "Stagnation Rule",
+    "Rollback Strategy",
+    "Human Review Conditions",
+)
+
+DEFAULT_ALLOWED_TOOLS = (
+    "Read project files and LoopForge run artifacts.",
+    "Write bounded changes inside the target workspace.",
+    "Run local deterministic verification commands.",
+)
+
+SUBJECTIVE_TASK_MARKERS = (
+    "better",
+    "copy",
+    "design",
+    "draft",
+    "evaluate",
+    "improve",
+    "polish",
+    "rewrite",
+    "review",
+    "summarize",
+    "ux",
 )
 
 TEMPLATES: dict[str, str] = {
@@ -188,7 +224,19 @@ class StatusResult:
     run: dict[str, Any] | None
     native_artifacts: dict[str, Any] | None
     legacy_artifacts: dict[str, Any] | None
+    loop_contract: dict[str, Any] | None
     next_step: str
+    blockers: list[str]
+
+
+@dataclass(frozen=True)
+class ContinueResult:
+    project_dir: Path
+    run_dir: Path | None
+    run: dict[str, Any] | None
+    contract: dict[str, Any] | None
+    ok: bool
+    message: str
     blockers: list[str]
 
 
@@ -392,6 +440,89 @@ def native_artifact_state(run_dir: Path) -> dict[str, Any]:
     }
 
 
+def parse_frontmatter(markdown: str) -> dict[str, str]:
+    lines = markdown.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}
+    values: dict[str, str] = {}
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        values[key.strip()] = value.strip()
+    return values
+
+
+def markdown_sections(markdown: str) -> dict[str, list[str]]:
+    sections: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in markdown.splitlines():
+        if line.startswith("# "):
+            current = line[2:].strip()
+            sections[current] = []
+            continue
+        if current is not None:
+            sections[current].append(line)
+    return sections
+
+
+def section_text(sections: dict[str, list[str]], name: str) -> str:
+    return "\n".join(sections.get(name, [])).strip()
+
+
+def bullet_items(text: str) -> list[str]:
+    items: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("- "):
+            continue
+        item = stripped[2:].strip()
+        if item and not item.lower().startswith("none recorded"):
+            items.append(item)
+    return items
+
+
+def loop_contract_state(loop_path: Path) -> dict[str, Any]:
+    if not loop_path.exists():
+        return {
+            "status": "missing",
+            "path": str(loop_path),
+            "missing_fields": list(REQUIRED_LOOP_SECTIONS),
+            "success_checks": [],
+            "subjective": False,
+            "rubric": "",
+            "errors": [f"loop contract not found: {loop_path}"],
+        }
+
+    markdown = loop_path.read_text(encoding="utf-8")
+    frontmatter = parse_frontmatter(markdown)
+    sections = markdown_sections(markdown)
+    missing_fields = [
+        name for name in REQUIRED_LOOP_SECTIONS if not section_text(sections, name)
+    ]
+    success_checks = bullet_items(section_text(sections, "Success Checks"))
+    rubric = section_text(sections, "Subjective Rubric")
+    if rubric.lower().startswith("none recorded"):
+        rubric = ""
+    subjective = frontmatter.get("subjective", "false").lower() == "true"
+    status = "valid"
+    errors: list[str] = []
+    if missing_fields:
+        status = "invalid"
+        errors.append(f"missing required contract fields: {', '.join(missing_fields)}")
+    return {
+        "status": status,
+        "path": str(loop_path),
+        "missing_fields": missing_fields,
+        "success_checks": success_checks,
+        "subjective": subjective,
+        "rubric": rubric,
+        "errors": errors,
+    }
+
+
 def legacy_artifact_state(run: dict[str, Any]) -> dict[str, Any]:
     legacy = run.get("legacy", {})
     if not isinstance(legacy, dict):
@@ -555,11 +686,162 @@ def detect_git_base_commit(project_dir: Path) -> str | None:
     return commit or None
 
 
+def task_looks_subjective(task: str) -> bool:
+    lowered = task.lower()
+    return any(marker in lowered for marker in SUBJECTIVE_TASK_MARKERS)
+
+
+def normalize_nonempty_strings(values: list[str] | None) -> list[str]:
+    if values is None:
+        return []
+    return [value.strip() for value in values if value.strip()]
+
+
+def append_unique(items: list[str], value: str) -> None:
+    if value not in items:
+        items.append(value)
+
+
+def loop_contract_status(
+    *,
+    success_checks: list[str],
+    profile: str,
+    subjective: bool,
+    subjective_rubric: str,
+) -> str:
+    if not success_checks:
+        return LOOP_CONTRACT_DRAFT
+    if profile == "autonomous" and subjective and not subjective_rubric.strip():
+        return LOOP_CONTRACT_DRAFT
+    return LOOP_CONTRACT_READY
+
+
+def render_loop_contract(
+    *,
+    task: str,
+    task_id: str,
+    project_dir: Path,
+    base_commit: str | None,
+    profile: str,
+    pack: str,
+    skills: list[str],
+    allowed_tools: list[str],
+    success_checks: list[str],
+    max_attempts: int,
+    timeout_seconds: int,
+    subjective: bool,
+    subjective_rubric: str,
+) -> str:
+    status = loop_contract_status(
+        success_checks=success_checks,
+        profile=profile,
+        subjective=subjective,
+        subjective_rubric=subjective_rubric,
+    )
+
+    def list_block(items: list[str], empty: str = "None recorded.") -> str:
+        if not items:
+            return empty
+        return "\n".join(f"- {item}" for item in items)
+
+    review_conditions = [
+        "Success checks are missing or no longer match the task.",
+        (
+            "The next action would publish, delete, expose secrets, spend money, "
+            "or use hidden network access."
+        ),
+        "Two attempts produce the same failure without new evidence.",
+    ]
+    if subjective:
+        review_conditions.append(
+            "Subjective quality is involved and the rubric is missing or disputed."
+        )
+
+    return f"""---
+loop_version: 1
+status: {status}
+autonomy: {profile}
+subjective: {str(subjective).lower()}
+---
+
+# Objective
+
+{task}
+
+# Scope
+
+In scope:
+
+- Complete the task described in `task.md`.
+- Keep changes bounded to the target project and the external LoopForge run artifacts.
+
+Out of scope:
+
+- Publishing, remote side effects, destructive cleanup, or memory promotion
+  without a later explicit phase.
+- Treating receipts, validation, or metrics as publication authority.
+
+# Inputs
+
+- Task ID: {task_id}
+- Task: {task}
+- Repository: {project_dir}
+- Base commit: {base_commit or "none"}
+
+# Selected Project Pack
+
+{pack}
+
+# Selected Skills
+
+{list_block(skills)}
+
+# Allowed Tools
+
+{list_block(allowed_tools)}
+
+# Success Checks
+
+{list_block(success_checks)}
+
+# Subjective Rubric
+
+{subjective_rubric.strip() or "None recorded."}
+
+# Limits
+
+- Max attempts: {max_attempts}
+- Timeout seconds: {timeout_seconds}
+- Max output: adapter default
+
+# Stagnation Rule
+
+Stop after two attempts produce the same failure, the same blocker, or no new evidence.
+
+# Rollback Strategy
+
+Use Git or explicit patch review to inspect and undo LoopForge changes. Preserve
+unrelated working-tree changes.
+
+# Human Review Conditions
+
+{list_block(review_conditions)}
+
+# Current Attempt
+
+No autonomous attempt has run yet.
+"""
+
+
 def describe_next_step(run: dict[str, Any]) -> str:
     status = str(run.get("status", "unknown"))
     blockers = run.get("blockers", [])
     if isinstance(blockers, list) and blockers:
         return "Resolve the listed blockers before continuing the loop."
+    if status == LOOP_CONTRACT_DRAFT:
+        return "Complete the loop contract, especially success checks, before continuing."
+    if status == LOOP_CONTRACT_READY:
+        return "Run `loopforge continue` to validate the contract before adapter execution."
     if status == READY_FOR_VERIFICATION:
         return "Review the run artifacts, then add verification in the next implementation phase."
     return "Inspect the run artifacts and decide the next bounded action."
@@ -579,6 +861,7 @@ def current_status(project_dir: Path) -> StatusResult:
             run=None,
             native_artifacts=None,
             legacy_artifacts=None,
+            loop_contract=None,
             next_step="Initialize LoopForge with `loopforge init`.",
             blockers=[],
         )
@@ -596,6 +879,7 @@ def current_status(project_dir: Path) -> StatusResult:
             run=None,
             native_artifacts=None,
             legacy_artifacts=None,
+            loop_contract=None,
             next_step='Create a run with `loopforge run --task "..."`.',
             blockers=[],
         )
@@ -613,6 +897,7 @@ def current_status(project_dir: Path) -> StatusResult:
             run=None,
             native_artifacts=native_artifact_state(run_dir) if run_dir.exists() else None,
             legacy_artifacts=None,
+            loop_contract=loop_contract_state(run_dir / "loop.md") if run_dir.exists() else None,
             next_step="Restore the missing run artifacts or create a new run.",
             blockers=[f"current run metadata not found: {run_json_path}"],
         )
@@ -620,6 +905,10 @@ def current_status(project_dir: Path) -> StatusResult:
     run = read_json(run_json_path)
     raw_blockers = run.get("blockers", [])
     blockers = [str(blocker) for blocker in raw_blockers] if isinstance(raw_blockers, list) else []
+    contract = loop_contract_state(run_dir / "loop.md")
+    if contract["status"] != "valid":
+        for error in contract["errors"]:
+            append_unique(blockers, str(error))
     return StatusResult(
         project_dir=project_dir,
         config_path=config_path,
@@ -630,6 +919,7 @@ def current_status(project_dir: Path) -> StatusResult:
         run=run,
         native_artifacts=native_artifact_state(run_dir),
         legacy_artifacts=legacy_artifact_state(run),
+        loop_contract=contract,
         next_step=describe_next_step(run),
         blockers=blockers,
     )
@@ -640,9 +930,23 @@ def new_run_id() -> str:
     return f"run-{timestamp}-{uuid.uuid4().hex[:8]}"
 
 
-def create_run(project_dir: Path, task: str) -> RunResult:
+def create_run(
+    project_dir: Path,
+    task: str,
+    *,
+    success_checks: list[str] | None = None,
+    selected_skills: list[str] | None = None,
+    allowed_tools: list[str] | None = None,
+    max_attempts: int = 3,
+    timeout_seconds: int = 1800,
+    subjective_rubric: str = "",
+) -> RunResult:
     if not task.strip():
         raise ValueError("task must not be empty")
+    if max_attempts < 1:
+        raise ValueError("max attempts must be at least 1")
+    if timeout_seconds < 1:
+        raise ValueError("timeout must be at least 1 second")
 
     project_dir = project_dir.resolve()
     config_path = project_config_path(project_dir)
@@ -669,6 +973,19 @@ def create_run(project_dir: Path, task: str) -> RunResult:
     task_id = run_id
     legacy_issue = legacy_issue_for_task(task_id)
     legacy_base_commit = base_commit or SYNTHETIC_LEGACY_BASE_COMMIT
+    normalized_success_checks = normalize_nonempty_strings(success_checks)
+    normalized_skills = normalize_nonempty_strings(selected_skills)
+    normalized_allowed_tools = normalize_nonempty_strings(allowed_tools) or list(
+        DEFAULT_ALLOWED_TOOLS
+    )
+    normalized_rubric = subjective_rubric.strip()
+    subjective = task_looks_subjective(task)
+    contract_status = loop_contract_status(
+        success_checks=normalized_success_checks,
+        profile=str(config["profile"]),
+        subjective=subjective,
+        subjective_rubric=normalized_rubric,
+    )
     run_data: dict[str, Any] = {
         "run_id": run_id,
         "task_id": task_id,
@@ -677,10 +994,17 @@ def create_run(project_dir: Path, task: str) -> RunResult:
         "base_commit": base_commit,
         "profile": config["profile"],
         "pack": DEFAULT_PACK,
-        "status": READY_FOR_VERIFICATION,
+        "status": contract_status,
         "created_at": now,
-        "success_checks": [],
+        "success_checks": normalized_success_checks,
         "blockers": [],
+        "loop_contract": {
+            "path": str(run_dir / "loop.md"),
+            "version": 1,
+            "status": contract_status,
+            "subjective": subjective,
+            "requires_rubric": str(config["profile"]) == "autonomous" and subjective,
+        },
         "artifacts": {
             "task": str(run_dir / "task.md"),
             "loop": str(run_dir / "loop.md"),
@@ -708,7 +1032,21 @@ def create_run(project_dir: Path, task: str) -> RunResult:
     write_json_atomic(run_dir / "run.json", run_data)
     (run_dir / "task.md").write_text(f"# Task\n\n{task.strip()}\n", encoding="utf-8")
     (run_dir / "loop.md").write_text(
-        read_project_template(project_dir, "loop.md"),
+        render_loop_contract(
+            task=task.strip(),
+            task_id=task_id,
+            project_dir=project_dir,
+            base_commit=base_commit,
+            profile=str(config["profile"]),
+            pack=DEFAULT_PACK,
+            skills=normalized_skills,
+            allowed_tools=normalized_allowed_tools,
+            success_checks=normalized_success_checks,
+            max_attempts=max_attempts,
+            timeout_seconds=timeout_seconds,
+            subjective=subjective,
+            subjective_rubric=normalized_rubric,
+        ),
         encoding="utf-8",
     )
     (run_dir / "plan.md").write_text("# Plan\n\nNo plan recorded yet.\n", encoding="utf-8")
@@ -759,4 +1097,66 @@ def create_run(project_dir: Path, task: str) -> RunResult:
         run_json_path=run_dir / "run.json",
         config=updated_config,
         run=run_data,
+    )
+
+
+def continue_run(project_dir: Path) -> ContinueResult:
+    status = current_status(project_dir)
+    if not status.initialized:
+        return ContinueResult(
+            project_dir=status.project_dir,
+            run_dir=None,
+            run=None,
+            contract=None,
+            ok=False,
+            message="Initialize LoopForge before continuing.",
+            blockers=[status.next_step],
+        )
+    if status.run is None or status.run_dir is None:
+        return ContinueResult(
+            project_dir=status.project_dir,
+            run_dir=status.run_dir,
+            run=None,
+            contract=status.loop_contract,
+            ok=False,
+            message="No current run is ready to continue.",
+            blockers=status.blockers or [status.next_step],
+        )
+
+    contract = status.loop_contract or loop_contract_state(status.run_dir / "loop.md")
+    blockers = list(status.blockers)
+    if contract["status"] != "valid":
+        for error in contract.get("errors", []):
+            append_unique(blockers, str(error))
+    if not contract.get("success_checks"):
+        append_unique(
+            blockers,
+            "loop contract has no success checks; add at least one under # Success Checks."
+        )
+    profile = str(status.run.get("profile", ""))
+    if profile == "autonomous" and contract.get("subjective") and not contract.get("rubric"):
+        append_unique(
+            blockers,
+            "subjective work needs a rubric before autonomous attempts; "
+            "add it under # Subjective Rubric."
+        )
+    if blockers:
+        return ContinueResult(
+            project_dir=status.project_dir,
+            run_dir=status.run_dir,
+            run=status.run,
+            contract=contract,
+            ok=False,
+            message="LoopForge continue refused by the loop contract.",
+            blockers=blockers,
+        )
+
+    return ContinueResult(
+        project_dir=status.project_dir,
+        run_dir=status.run_dir,
+        run=status.run,
+        contract=contract,
+        ok=True,
+        message="Loop contract accepted; adapter execution is scheduled for Phase 4.",
+        blockers=[],
     )

@@ -174,6 +174,8 @@ Implementation notes:
 
 ## Phase 3: Loop Design Contract
 
+Status: completed on 2026-07-07.
+
 Implement `loop.md` as the central work contract.
 
 Required fields:
@@ -193,9 +195,30 @@ Required fields:
 
 Done when:
 
-- every `run` creates a loop contract;
-- `continue` refuses to run without success checks;
-- subjective work asks for a rubric before autonomous attempts.
+- [x] every `run` creates a loop contract;
+- [x] `continue` refuses to run without success checks;
+- [x] subjective work asks for a rubric before autonomous attempts.
+
+Implementation notes:
+
+- `loopforge run` now renders a structured `loop.md` contract with objective,
+  scope, inputs, selected pack, selected skills, allowed tools, success checks,
+  limits, stagnation rule, rollback strategy, and human-review conditions.
+- `run.json` stores only the indexable contract summary: contract path, version,
+  status, subjective-work detection, rubric requirement, and success checks.
+- `loopforge run` accepts `--success-check`, `--skill`, `--allow-tool`,
+  `--max-attempts`, `--timeout`, and `--rubric` so a run can be designed at
+  creation without adding a larger planning framework.
+- `loopforge status` reports loop-contract validity, success-check count,
+  subjective-work detection, and rubric presence alongside native and legacy
+  artifact state.
+- `loopforge continue` is a Phase 3 pre-execution gate: it validates the
+  current `loop.md`, refuses missing success checks, and refuses autonomous
+  subjective work without a rubric. Successful validation stops at the Phase 4
+  adapter boundary.
+- Current validation: `PYTHONPATH=src python -m unittest discover -s tests`
+  passes with tests for generated contracts, missing success checks, and
+  autonomous subjective rubric handling.
 
 ## Phase 4: Adapter Execution
 
