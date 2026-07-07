@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,6 +15,8 @@ from typing import Any
 CONFIG_DIR = ".loopforge"
 CONFIG_FILE = "config.json"
 DEFAULT_PROFILE = "supervised"
+DEFAULT_PACK = "generic-code"
+READY_FOR_VERIFICATION = "ready_for_verification"
 
 CONFIG_KEYS = (
     "project_name",
@@ -134,6 +138,16 @@ class InitResult:
     repaired: bool
 
 
+@dataclass(frozen=True)
+class RunResult:
+    project_dir: Path
+    config_path: Path
+    run_dir: Path
+    run_json_path: Path
+    config: dict[str, Any]
+    run: dict[str, Any]
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -150,9 +164,17 @@ def project_name(project_dir: Path) -> str:
     return project_dir.resolve().name or "project"
 
 
+def loopforge_home(home: Path | None = None) -> Path:
+    if home is not None:
+        return home / "LoopForge"
+    configured_home = os.environ.get("LOOPFORGE_HOME")
+    if configured_home:
+        return Path(configured_home).expanduser()
+    return Path.home() / "LoopForge"
+
+
 def default_run_root(project_dir: Path, home: Path | None = None) -> Path:
-    base_home = home if home is not None else Path.home()
-    return base_home / "LoopForge" / "runs" / project_name(project_dir)
+    return loopforge_home(home=home) / "runs" / project_name(project_dir)
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -195,6 +217,16 @@ def ensure_templates(project_dir: Path) -> None:
         if not destination.exists():
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_text(contents, encoding="utf-8")
+
+
+def read_project_template(project_dir: Path, relative_name: str) -> str:
+    template_path = project_config_dir(project_dir) / "templates" / relative_name
+    if template_path.exists():
+        return template_path.read_text(encoding="utf-8")
+    fallback = TEMPLATES.get(f"templates/{relative_name}")
+    if fallback is None:
+        raise KeyError(f"unknown template: {relative_name}")
+    return fallback
 
 
 def new_config(
@@ -275,4 +307,125 @@ def initialize_project(
         config=config,
         created=True,
         repaired=False,
+    )
+
+
+def detect_git_base_commit(project_dir: Path) -> str | None:
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=project_dir,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    commit = result.stdout.strip()
+    return commit or None
+
+
+def new_run_id() -> str:
+    timestamp = utc_now().replace("-", "").replace(":", "").replace("Z", "Z")
+    return f"run-{timestamp}-{uuid.uuid4().hex[:8]}"
+
+
+def create_run(project_dir: Path, task: str) -> RunResult:
+    if not task.strip():
+        raise ValueError("task must not be empty")
+
+    project_dir = project_dir.resolve()
+    config_path = project_config_path(project_dir)
+    if not config_path.exists():
+        raise FileNotFoundError(f"{config_path} does not exist; run `loopforge init` first")
+
+    config = normalize_config(project_dir, read_json(config_path))[0]
+    run_root = Path(str(config["run_root"])).expanduser()
+    run_id = new_run_id()
+    run_dir = run_root / run_id
+    while run_dir.exists():
+        run_id = new_run_id()
+        run_dir = run_root / run_id
+
+    attempts_dir = run_dir / "attempts"
+    artifacts_dir = run_dir / "artifacts"
+    metrics_dir = run_dir / "metrics"
+    for directory in (attempts_dir, artifacts_dir, metrics_dir):
+        directory.mkdir(parents=True, exist_ok=False)
+
+    now = utc_now()
+    base_commit = detect_git_base_commit(project_dir)
+    task_id = run_id
+    run_data: dict[str, Any] = {
+        "run_id": run_id,
+        "task_id": task_id,
+        "task": task.strip(),
+        "project_root": str(project_dir),
+        "base_commit": base_commit,
+        "profile": config["profile"],
+        "pack": DEFAULT_PACK,
+        "status": READY_FOR_VERIFICATION,
+        "created_at": now,
+        "success_checks": [],
+        "blockers": [],
+        "artifacts": {
+            "task": str(run_dir / "task.md"),
+            "loop": str(run_dir / "loop.md"),
+            "plan": str(run_dir / "plan.md"),
+            "progress": str(run_dir / "progress.md"),
+            "verification": str(run_dir / "verification.md"),
+            "memory": str(run_dir / "memory.md"),
+            "scratch": str(run_dir / "scratch.md"),
+            "exchange": str(run_dir / "exchange.json"),
+            "attempts": str(attempts_dir),
+            "artifacts": str(artifacts_dir),
+            "metrics": str(metrics_dir),
+        },
+        "legacy": {
+            "issue": None,
+        },
+    }
+
+    write_json_atomic(run_dir / "run.json", run_data)
+    (run_dir / "task.md").write_text(f"# Task\n\n{task.strip()}\n", encoding="utf-8")
+    (run_dir / "loop.md").write_text(read_project_template(project_dir, "loop.md"), encoding="utf-8")
+    (run_dir / "plan.md").write_text("# Plan\n\nNo plan recorded yet.\n", encoding="utf-8")
+    (run_dir / "progress.md").write_text("# Progress\n\nNo attempts recorded yet.\n", encoding="utf-8")
+    (run_dir / "verification.md").write_text(
+        "# Verification\n\nVerification has not run yet.\n",
+        encoding="utf-8",
+    )
+    (run_dir / "memory.md").write_text(
+        read_project_template(project_dir, "memory.md"),
+        encoding="utf-8",
+    )
+    (run_dir / "scratch.md").write_text(
+        read_project_template(project_dir, "scratch.md"),
+        encoding="utf-8",
+    )
+    write_json_atomic(
+        run_dir / "exchange.json",
+        {
+            "exchange_version": 1,
+            "run_id": run_id,
+            "producer": "",
+            "consumer": "",
+            "messages": [],
+            "artifacts": [],
+            "open_questions": [],
+        },
+    )
+
+    updated_config = dict(config)
+    updated_config["current_run_id"] = run_id
+    updated_config["updated_at"] = now
+    write_json_atomic(config_path, updated_config)
+
+    return RunResult(
+        project_dir=project_dir,
+        config_path=config_path,
+        run_dir=run_dir,
+        run_json_path=run_dir / "run.json",
+        config=updated_config,
+        run=run_data,
     )

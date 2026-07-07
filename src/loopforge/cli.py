@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
-from loopforge.engine import DEFAULT_PROFILE, initialize_project
+from loopforge.engine import DEFAULT_PROFILE, create_run, initialize_project
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -21,6 +22,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_PROFILE,
         choices=("assist", "supervised", "autonomous", "strict"),
         help="Autonomy profile to store in .loopforge/config.json.",
+    )
+
+    run_parser = subcommands.add_parser(
+        "run",
+        help="Create a LoopForge run for a task.",
+    )
+    run_parser.add_argument(
+        "--task",
+        required=True,
+        help="Task description for the run.",
     )
 
     return parser
@@ -41,6 +52,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"project: {result.config['project_name']}")
         print(f"profile: {result.config['profile']}")
         print(f"run root: {result.config['run_root']}")
+        return 0
+    if args.command == "run":
+        try:
+            result = create_run(Path.cwd(), task=args.task)
+        except (FileNotFoundError, ValueError) as error:
+            print(f"LoopForge run failed: {error}", file=sys.stderr)
+            return 1
+        print(f"LoopForge run created: {result.run_dir}")
+        print(f"run id: {result.run['run_id']}")
+        print(f"task id: {result.run['task_id']}")
+        print(f"base commit: {result.run['base_commit'] or 'none'}")
+        print(f"status: {result.run['status']}")
         return 0
     parser.error(f"unknown command: {args.command}")
     return 2
