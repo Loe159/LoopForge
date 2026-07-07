@@ -7,6 +7,9 @@ import os
 import subprocess
 import sys
 import uuid
+import hashlib
+import importlib.util
+import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,9 +21,27 @@ CONFIG_FILE = "config.json"
 DEFAULT_PROFILE = "supervised"
 DEFAULT_PACK = "generic-code"
 READY_FOR_VERIFICATION = "ready_for_verification"
+ADAPTER_BLOCKED = "adapter_blocked"
 LOOP_CONTRACT_DRAFT = "loop_contract_draft"
 LOOP_CONTRACT_READY = "loop_contract_ready"
 SYNTHETIC_LEGACY_BASE_COMMIT = "0" * 40
+
+SUPPORTED_ADAPTERS = (
+    "codex",
+    "claude-code",
+    "aider",
+    "opencode",
+    "mini-swe-agent",
+    "local-adapter-fixture",
+)
+
+AGENT_COMMANDS = {
+    "codex": "codex",
+    "claude-code": "claude",
+    "aider": "aider",
+    "opencode": "opencode",
+    "mini-swe-agent": "mini-swe-agent",
+}
 
 CONFIG_KEYS = (
     "project_name",
@@ -238,6 +259,7 @@ class ContinueResult:
     ok: bool
     message: str
     blockers: list[str]
+    attempt: dict[str, Any] | None = None
 
 
 def utc_now() -> str:
@@ -331,6 +353,60 @@ def legacy_templates_dir() -> Path:
 
 def legacy_artifact_validator() -> Path:
     return repository_root() / ".agent" / "checks" / "validate_artifacts.py"
+
+
+def local_implementation_adapter() -> Path:
+    return repository_root() / ".agent" / "adapters" / "local_implementation_adapter.py"
+
+
+def isolated_process_module() -> Any:
+    path = repository_root() / ".agent" / "checks" / "isolated_process.py"
+    spec = importlib.util.spec_from_file_location("loopforge_imported_isolated_process", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"could not load isolated process helper: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def is_windows_app_execution_alias(path: Path) -> bool:
+    normalized = str(path).replace("/", "\\").upper()
+    return "\\APPDATA\\LOCAL\\MICROSOFT\\WINDOWSAPPS\\" in normalized
+
+
+def usable_python_executable() -> str:
+    candidates: list[str | None] = [
+        os.environ.get("LOOPFORGE_PYTHON"),
+        getattr(sys, "_base_executable", None),
+        sys.executable,
+        shutil.which("python"),
+        shutil.which("python3"),
+        shutil.which("py"),
+        str(
+            Path.home()
+            / ".cache"
+            / "codex-runtimes"
+            / "codex-primary-runtime"
+            / "dependencies"
+            / "python"
+            / "python.exe"
+        ),
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = Path(candidate)
+        if not path.is_absolute():
+            resolved = shutil.which(candidate)
+            if resolved is None:
+                continue
+            path = Path(resolved)
+        if path.is_file() and not is_windows_app_execution_alias(path):
+            return str(path)
+    raise RuntimeError(
+        "no usable Python executable found for isolated adapter execution; "
+        "set LOOPFORGE_PYTHON to a real python.exe outside WindowsApps."
+    )
 
 
 def legacy_issue_for_task(task_id: str) -> int:
@@ -506,6 +582,7 @@ def loop_contract_state(loop_path: Path) -> dict[str, Any]:
     rubric = section_text(sections, "Subjective Rubric")
     if rubric.lower().startswith("none recorded"):
         rubric = ""
+    limits = parse_loop_limits(section_text(sections, "Limits"))
     subjective = frontmatter.get("subjective", "false").lower() == "true"
     status = "valid"
     errors: list[str] = []
@@ -519,8 +596,35 @@ def loop_contract_state(loop_path: Path) -> dict[str, Any]:
         "success_checks": success_checks,
         "subjective": subjective,
         "rubric": rubric,
+        "limits": limits,
         "errors": errors,
     }
+
+
+def parse_loop_limits(text: str) -> dict[str, int | None]:
+    limits: dict[str, int | None] = {
+        "max_attempts": None,
+        "timeout_seconds": None,
+    }
+    for line in text.splitlines():
+        stripped = line.strip()
+        lowered = stripped.lower()
+        if lowered.startswith("- max attempts:"):
+            limits["max_attempts"] = positive_int_after_colon(stripped)
+        elif lowered.startswith("- timeout seconds:"):
+            limits["timeout_seconds"] = positive_int_after_colon(stripped)
+    return limits
+
+
+def positive_int_after_colon(text: str) -> int | None:
+    _, _, value = text.partition(":")
+    value = value.strip()
+    if not value.isdigit():
+        return None
+    parsed = int(value)
+    if parsed < 1:
+        return None
+    return parsed
 
 
 def legacy_artifact_state(run: dict[str, Any]) -> dict[str, Any]:
@@ -841,7 +945,9 @@ def describe_next_step(run: dict[str, Any]) -> str:
     if status == LOOP_CONTRACT_DRAFT:
         return "Complete the loop contract, especially success checks, before continuing."
     if status == LOOP_CONTRACT_READY:
-        return "Run `loopforge continue` to validate the contract before adapter execution."
+        return "Run `loopforge continue --adapter <adapter>` to execute a bounded attempt."
+    if status == ADAPTER_BLOCKED:
+        return "Inspect the latest attempt artifacts, resolve blockers, then continue again."
     if status == READY_FOR_VERIFICATION:
         return "Review the run artifacts, then add verification in the next implementation phase."
     return "Inspect the run artifacts and decide the next bounded action."
@@ -997,6 +1103,12 @@ def create_run(
         "status": contract_status,
         "created_at": now,
         "success_checks": normalized_success_checks,
+        "limits": {
+            "max_attempts": max_attempts,
+            "timeout_seconds": timeout_seconds,
+        },
+        "attempt_count": 0,
+        "attempts": [],
         "blockers": [],
         "loop_contract": {
             "path": str(run_dir / "loop.md"),
@@ -1100,7 +1212,453 @@ def create_run(
     )
 
 
-def continue_run(project_dir: Path) -> ContinueResult:
+def attempt_limit(run: dict[str, Any], contract: dict[str, Any]) -> int:
+    run_limits = run.get("limits", {})
+    if isinstance(run_limits, dict):
+        value = run_limits.get("max_attempts")
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 1:
+            return value
+    contract_limits = contract.get("limits", {})
+    if isinstance(contract_limits, dict):
+        value = contract_limits.get("max_attempts")
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 1:
+            return value
+    return 1
+
+
+def attempt_timeout(run: dict[str, Any], contract: dict[str, Any]) -> int:
+    run_limits = run.get("limits", {})
+    if isinstance(run_limits, dict):
+        value = run_limits.get("timeout_seconds")
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 1:
+            return value
+    contract_limits = contract.get("limits", {})
+    if isinstance(contract_limits, dict):
+        value = contract_limits.get("timeout_seconds")
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 1:
+            return value
+    return 540
+
+
+def attempt_records(run: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_attempts = run.get("attempts", [])
+    if not isinstance(raw_attempts, list):
+        return []
+    return [attempt for attempt in raw_attempts if isinstance(attempt, dict)]
+
+
+def command_for_adapter(adapter: str, adapter_args: list[str]) -> list[str]:
+    if adapter == "local-adapter-fixture":
+        if not adapter_args:
+            raise ValueError("local-adapter-fixture requires a command after --")
+        return adapter_args
+    command = AGENT_COMMANDS.get(adapter)
+    if command is None:
+        raise ValueError(f"unsupported adapter: {adapter}")
+    return [command, *adapter_args]
+
+
+def session_hash(seed: dict[str, Any], label: str) -> str:
+    encoded = json.dumps({"label": label, **seed}, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def expected_session_for(run: dict[str, Any], adapter: str, project_dir: Path) -> dict[str, Any]:
+    legacy = run.get("legacy", {})
+    if not isinstance(legacy, dict):
+        legacy = {}
+    issue = legacy.get("issue")
+    if not isinstance(issue, int) or isinstance(issue, bool) or issue < 1:
+        issue = legacy_issue_for_task(str(run.get("task_id") or run.get("run_id") or "1"))
+    base_commit = legacy.get("base_commit")
+    if not isinstance(base_commit, str) or len(base_commit) != 40:
+        base_commit = run.get("base_commit") or SYNTHETIC_LEGACY_BASE_COMMIT
+    seed = {
+        "issue": issue,
+        "base_commit": base_commit,
+        "run_id": run.get("run_id"),
+        "task_id": run.get("task_id"),
+        "adapter": adapter,
+        "workspace": str(project_dir.resolve()),
+    }
+    return {
+        "issue": issue,
+        "risk": "low",
+        "base_commit": base_commit,
+        "workspace": str(project_dir.resolve()),
+        "runner_id": adapter,
+        "preflight_sha256": session_hash(seed, "preflight"),
+        "start_authorization_receipt_sha256": session_hash(seed, "start-authorization"),
+    }
+
+
+def decode_output(value: bytes) -> str:
+    return value.decode("utf-8", errors="replace")
+
+
+def write_bytes(path: Path, value: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(value)
+
+
+def relative_to_run(run_dir: Path, path: Path) -> str:
+    try:
+        return path.relative_to(run_dir).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def workspace_snapshot(project_dir: Path) -> dict[str, tuple[int, int]]:
+    snapshot: dict[str, tuple[int, int]] = {}
+    for path in project_dir.rglob("*"):
+        if ".git" in path.parts:
+            continue
+        if not path.is_file():
+            continue
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        try:
+            relative = path.relative_to(project_dir).as_posix()
+        except ValueError:
+            relative = str(path)
+        snapshot[relative] = (stat.st_size, stat.st_mtime_ns)
+    return snapshot
+
+
+def workspace_snapshot_changes(
+    before: dict[str, tuple[int, int]],
+    after: dict[str, tuple[int, int]],
+) -> list[str]:
+    changes: list[str] = []
+    for name in sorted(set(before) | set(after)):
+        if name not in before:
+            changes.append(f"A {name}")
+        elif name not in after:
+            changes.append(f"D {name}")
+        elif before[name] != after[name]:
+            changes.append(f"M {name}")
+    return changes
+
+
+def git_status_entries(project_dir: Path) -> list[str] | None:
+    result = subprocess.run(
+        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+        cwd=project_dir,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    return [line for line in result.stdout.splitlines() if line.strip()]
+
+
+def append_progress(run_dir: Path, attempt: dict[str, Any]) -> None:
+    progress_path = run_dir / "progress.md"
+    lines = [
+        "",
+        f"## Attempt {attempt['number']}: {attempt['adapter']}",
+        "",
+        f"- Started: {attempt['started_at']}",
+        f"- Finished: {attempt['finished_at']}",
+        f"- Status: {attempt['status']}",
+        f"- Summary: {attempt['summary']}",
+        f"- Workspace changed: {'yes' if attempt['workspace_changed'] else 'no'}",
+        f"- Stdout: {attempt['stdout_path']}",
+        f"- Stderr: {attempt['stderr_path']}",
+        f"- Result: {attempt['result_path']}",
+    ]
+    changes = attempt.get("workspace_changes", [])
+    if changes:
+        lines.append("- Workspace changes:")
+        for change in changes[:20]:
+            lines.append(f"  - {change}")
+    if len(changes) > 20:
+        lines.append(f"  - ... {len(changes) - 20} more")
+    lines.append("")
+    progress_path.write_text(
+        progress_path.read_text(encoding="utf-8") + "\n".join(lines),
+        encoding="utf-8",
+    )
+
+
+def synthetic_adapter_result(
+    *,
+    session: dict[str, Any],
+    status: str,
+    summary: str,
+    workspace_changed: bool,
+) -> dict[str, Any]:
+    return {
+        "result_version": 1,
+        "purpose": "implementation_session_result",
+        "mode": "untrusted-runner-output",
+        "status": status,
+        **session,
+        "summary": summary[:1000] or "Adapter execution did not produce a summary.",
+        "workspace_changed": workspace_changed,
+        "patch_generated": False,
+        "deterministic_checks_run": False,
+        "publication_requested": False,
+        "network_requested": False,
+        "next_action": "deterministic_patch_generation"
+        if status == "completed"
+        else "human_review",
+    }
+
+
+def run_with_isolated_process(command: list[str], cwd: Path, timeout_seconds: int) -> dict[str, Any]:
+    isolated_process = isolated_process_module()
+    policy = isolated_process.load_policy()
+    bounded_timeout = min(float(timeout_seconds), float(policy["max_timeout_seconds"]))
+    return isolated_process.run(
+        command,
+        cwd,
+        os.environ,
+        policy,
+        timeout_seconds=bounded_timeout,
+    )
+
+
+def adapter_protocol_command(
+    *,
+    adapter: str,
+    command: list[str],
+    expected_session_path: Path,
+    project_dir: Path,
+) -> list[str]:
+    adapter_path = local_implementation_adapter()
+    if not adapter_path.exists():
+        raise FileNotFoundError(f"local implementation adapter not found: {adapter_path}")
+    return [
+        usable_python_executable(),
+        str(adapter_path),
+        "--expected-session",
+        str(expected_session_path),
+        "--workspace",
+        str(project_dir),
+        "--",
+        *command,
+    ]
+
+
+def execute_fixture_command(
+    *,
+    command: list[str],
+    project_dir: Path,
+    timeout_seconds: int,
+) -> tuple[dict[str, Any], bytes, bytes]:
+    resolved_command = list(command)
+    executable = Path(resolved_command[0])
+    if not executable.is_absolute():
+        found = shutil.which(resolved_command[0])
+        if found:
+            resolved_command[0] = found
+    child = run_with_isolated_process(resolved_command, project_dir, timeout_seconds)
+    stdout = child["stdout"] if isinstance(child.get("stdout"), bytes) else b""
+    stderr = child["stderr"] if isinstance(child.get("stderr"), bytes) else b""
+    return child, stdout, stderr
+
+
+def execute_adapter_command(
+    *,
+    adapter: str,
+    command: list[str],
+    expected_session_path: Path,
+    project_dir: Path,
+    timeout_seconds: int,
+) -> tuple[dict[str, Any], bytes, bytes]:
+    protocol_command = adapter_protocol_command(
+        adapter=adapter,
+        command=command,
+        expected_session_path=expected_session_path,
+        project_dir=project_dir,
+    )
+    child = run_with_isolated_process(
+        protocol_command,
+        repository_root(),
+        min(timeout_seconds + 5, 600),
+    )
+    stdout = child["stdout"] if isinstance(child.get("stdout"), bytes) else b""
+    stderr = child["stderr"] if isinstance(child.get("stderr"), bytes) else b""
+    return child, stdout, stderr
+
+
+def parse_adapter_result(stdout: bytes) -> dict[str, Any] | None:
+    if not stdout.strip():
+        return None
+    try:
+        parsed = json.loads(decode_output(stdout))
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def execute_attempt(
+    *,
+    project_dir: Path,
+    run_dir: Path,
+    run: dict[str, Any],
+    contract: dict[str, Any],
+    adapter: str,
+    adapter_args: list[str],
+) -> dict[str, Any]:
+    if adapter not in SUPPORTED_ADAPTERS:
+        raise ValueError(f"unsupported adapter: {adapter}")
+    command = command_for_adapter(adapter, adapter_args)
+    attempts = attempt_records(run)
+    number = len(attempts) + 1
+    attempt_id = f"attempt-{number:03d}"
+    attempt_dir = run_dir / "attempts" / attempt_id
+    attempt_dir.mkdir(parents=True, exist_ok=False)
+
+    started = utc_now()
+    session = expected_session_for(run, adapter, project_dir)
+    expected_session_path = attempt_dir / "expected-session.json"
+    write_json_atomic(expected_session_path, session)
+    before_snapshot = workspace_snapshot(project_dir)
+    before_git = git_status_entries(project_dir)
+    timeout_seconds = attempt_timeout(run, contract)
+
+    if adapter == "local-adapter-fixture":
+        child, stdout, stderr = execute_fixture_command(
+            command=command,
+            project_dir=project_dir,
+            timeout_seconds=timeout_seconds,
+        )
+        result = None
+    else:
+        child, stdout, stderr = execute_adapter_command(
+            adapter=adapter,
+            command=command,
+            expected_session_path=expected_session_path,
+            project_dir=project_dir,
+            timeout_seconds=timeout_seconds,
+        )
+        result = parse_adapter_result(stdout)
+
+    finished = utc_now()
+    after_snapshot = workspace_snapshot(project_dir)
+    after_git = git_status_entries(project_dir)
+    workspace_changes = (
+        after_git
+        if after_git is not None
+        else workspace_snapshot_changes(before_snapshot, after_snapshot)
+    )
+    snapshot_changed = before_snapshot != after_snapshot
+    returncode = child.get("returncode")
+    completed = bool(child.get("completed")) and returncode == 0
+    timed_out = bool(child.get("timed_out"))
+    output_limit_exceeded = bool(child.get("output_limit_exceeded"))
+
+    if adapter == "local-adapter-fixture":
+        status = "completed" if completed and snapshot_changed else "blocked"
+        if timed_out:
+            status = "failed"
+            summary = "Fixture command timed out."
+        elif output_limit_exceeded:
+            status = "failed"
+            summary = "Fixture command exceeded the output limit."
+        elif not completed:
+            status = "failed"
+            summary = f"Fixture command failed with return code {returncode}."
+        elif snapshot_changed:
+            summary = "Fixture command completed and changed the workspace."
+        else:
+            summary = "Fixture command completed without workspace changes."
+        result = synthetic_adapter_result(
+            session=session,
+            status=status,
+            summary=summary,
+            workspace_changed=snapshot_changed,
+        )
+    elif result is None:
+        status = "failed"
+        stderr_text = decode_output(stderr).strip()
+        stdout_text = decode_output(stdout).strip()
+        detail = stderr_text or stdout_text or "adapter produced no protocol result"
+        result = synthetic_adapter_result(
+            session=session,
+            status=status,
+            summary=f"Adapter failed before producing a result: {detail}"[:1000],
+            workspace_changed=snapshot_changed,
+        )
+    else:
+        status = str(result.get("status", "failed"))
+        if "workspace_changed" not in result:
+            result["workspace_changed"] = snapshot_changed
+        if "summary" not in result:
+            result["summary"] = f"Adapter reported {status}."
+
+    stdout_path = attempt_dir / "adapter.stdout"
+    stderr_path = attempt_dir / "adapter.stderr"
+    result_path = attempt_dir / "result.json"
+    write_bytes(stdout_path, stdout)
+    write_bytes(stderr_path, stderr)
+    write_json_atomic(result_path, result)
+
+    attempt = {
+        "id": attempt_id,
+        "number": number,
+        "adapter": adapter,
+        "command": command,
+        "started_at": started,
+        "finished_at": finished,
+        "status": status,
+        "summary": str(result.get("summary", "")),
+        "workspace_changed": bool(result.get("workspace_changed", snapshot_changed)),
+        "workspace_changes": workspace_changes,
+        "returncode": returncode,
+        "timed_out": timed_out,
+        "output_limit_exceeded": output_limit_exceeded,
+        "attempt_dir": str(attempt_dir),
+        "expected_session_path": relative_to_run(run_dir, expected_session_path),
+        "stdout_path": relative_to_run(run_dir, stdout_path),
+        "stderr_path": relative_to_run(run_dir, stderr_path),
+        "result_path": relative_to_run(run_dir, result_path),
+        "before_git_status": before_git,
+        "after_git_status": after_git,
+    }
+    write_json_atomic(attempt_dir / "attempt.json", attempt)
+    append_progress(run_dir, attempt)
+    return attempt
+
+
+def update_run_after_attempt(
+    *,
+    run_json_path: Path,
+    run: dict[str, Any],
+    attempt: dict[str, Any],
+) -> dict[str, Any]:
+    updated = dict(run)
+    attempts = attempt_records(updated)
+    attempts.append(attempt)
+    updated["attempts"] = attempts
+    updated["attempt_count"] = len(attempts)
+    updated["last_attempt"] = attempt
+    updated["updated_at"] = utc_now()
+    if attempt["status"] == "completed":
+        updated["status"] = READY_FOR_VERIFICATION
+        updated["blockers"] = []
+    else:
+        updated["status"] = ADAPTER_BLOCKED
+        updated["blockers"] = [
+            f"attempt {attempt['id']} with adapter {attempt['adapter']} "
+            f"reported {attempt['status']}: {attempt['summary']}"
+        ]
+    write_json_atomic(run_json_path, updated)
+    return updated
+
+
+def continue_run(
+    project_dir: Path,
+    *,
+    adapter: str | None = None,
+    adapter_args: list[str] | None = None,
+) -> ContinueResult:
     status = current_status(project_dir)
     if not status.initialized:
         return ContinueResult(
@@ -1140,6 +1698,13 @@ def continue_run(project_dir: Path) -> ContinueResult:
             "subjective work needs a rubric before autonomous attempts; "
             "add it under # Subjective Rubric."
         )
+    attempts = attempt_records(status.run)
+    max_attempts = attempt_limit(status.run, contract)
+    if len(attempts) >= max_attempts:
+        append_unique(
+            blockers,
+            f"max attempts reached ({len(attempts)}/{max_attempts}); human review is required.",
+        )
     if blockers:
         return ContinueResult(
             project_dir=status.project_dir,
@@ -1151,12 +1716,70 @@ def continue_run(project_dir: Path) -> ContinueResult:
             blockers=blockers,
         )
 
+    if adapter is None:
+        return ContinueResult(
+            project_dir=status.project_dir,
+            run_dir=status.run_dir,
+            run=status.run,
+            contract=contract,
+            ok=True,
+            message=(
+                "Loop contract accepted; Phase 4 adapter execution is available "
+                "with `loopforge continue --adapter <adapter>`."
+            ),
+            blockers=[],
+        )
+
+    try:
+        attempt = execute_attempt(
+            project_dir=status.project_dir,
+            run_dir=status.run_dir,
+            run=status.run,
+            contract=contract,
+            adapter=adapter,
+            adapter_args=adapter_args or [],
+        )
+        updated_run = update_run_after_attempt(
+            run_json_path=status.run_json_path or (status.run_dir / "run.json"),
+            run=status.run,
+            attempt=attempt,
+        )
+    except (OSError, RuntimeError, ValueError) as error:
+        blocker = f"adapter execution could not start: {error}"
+        updated_run = dict(status.run)
+        updated_run["status"] = ADAPTER_BLOCKED
+        updated_run["blockers"] = [blocker]
+        if status.run_json_path is not None:
+            write_json_atomic(status.run_json_path, updated_run)
+        return ContinueResult(
+            project_dir=status.project_dir,
+            run_dir=status.run_dir,
+            run=updated_run,
+            contract=contract,
+            ok=False,
+            message="LoopForge adapter execution is blocked.",
+            blockers=[blocker],
+        )
+
+    if attempt["status"] == "completed":
+        return ContinueResult(
+            project_dir=status.project_dir,
+            run_dir=status.run_dir,
+            run=updated_run,
+            contract=contract,
+            ok=True,
+            message="LoopForge adapter attempt completed; run is ready for verification.",
+            blockers=[],
+            attempt=attempt,
+        )
+
     return ContinueResult(
         project_dir=status.project_dir,
         run_dir=status.run_dir,
-        run=status.run,
+        run=updated_run,
         contract=contract,
-        ok=True,
-        message="Loop contract accepted; adapter execution is scheduled for Phase 4.",
-        blockers=[],
+        ok=False,
+        message="LoopForge adapter attempt ended in a blocked state.",
+        blockers=updated_run.get("blockers", []),
+        attempt=attempt,
     )

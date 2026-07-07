@@ -222,6 +222,8 @@ Implementation notes:
 
 ## Phase 4: Adapter Execution
 
+Status: completed on 2026-07-07.
+
 Reuse the imported local adapter and isolated process as the first execution
 path.
 
@@ -236,11 +238,39 @@ Initial adapters:
 
 Done when:
 
-- `loopforge continue --adapter codex` can execute a bounded attempt;
-- stdout/stderr are captured;
-- workspace changes are detected;
-- the attempt summary is appended to `progress.md`;
-- failures produce a readable blocked state.
+- [x] `loopforge continue --adapter codex` can execute a bounded attempt;
+- [x] stdout/stderr are captured;
+- [x] workspace changes are detected;
+- [x] the attempt summary is appended to `progress.md`;
+- [x] failures produce a readable blocked state.
+
+Implementation notes:
+
+- `loopforge continue` still supports a validation-only mode when no adapter is
+  passed, preserving the Phase 3 contract gate.
+- `loopforge continue --adapter <adapter> -- <args...>` now creates a bounded
+  attempt under `RUN/attempts/attempt-NNN/` with `expected-session.json`,
+  `attempt.json`, `adapter.stdout`, `adapter.stderr`, and `result.json`.
+- Real agent adapters (`codex`, `claude-code`, `aider`, `opencode`, and
+  `mini-swe-agent`) are routed through the imported
+  `.agent/adapters/local_implementation_adapter.py`, which uses the imported
+  isolated child environment policy.
+- The `local-adapter-fixture` adapter executes a shell-free command through the
+  imported isolated process helper so tests can deterministically exercise
+  output capture, workspace-change detection, and blocked states without
+  requiring an installed agent CLI.
+- The missing imported result validator has been restored at
+  `.agent/checks/validate_implementation_result.py`, keeping the imported local
+  adapter runnable.
+- The imported local adapter's clean-workspace check ignores LoopForge runtime
+  metadata under `.loopforge/`, so `loopforge init` and `loopforge run` do not
+  block the first adapter attempt while unrelated workspace changes still do.
+- Successful attempts update `run.json` to `ready_for_verification`; blocked or
+  failed attempts update `run.json` to `adapter_blocked` with a readable blocker
+  and append the attempt summary to `progress.md`.
+- Current validation: `PYTHONPATH=src python -m unittest discover -s tests`
+  passes, including fixture tests for completed and failed adapter attempts and
+  imported-adapter clean-workspace handling.
 
 ## Phase 5: Verification And Patch Flow
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -12,6 +13,7 @@ from pathlib import Path
 from unittest import mock
 
 from loopforge.cli import main
+from loopforge.engine import usable_python_executable
 
 
 @contextlib.contextmanager
@@ -22,6 +24,24 @@ def working_directory(path: Path):
         yield
     finally:
         os.chdir(previous)
+
+
+def fixture_python() -> str:
+    executable = Path(sys.executable)
+    if "WindowsApps" not in str(executable):
+        return str(executable)
+    bundled = (
+        Path.home()
+        / ".cache"
+        / "codex-runtimes"
+        / "codex-primary-runtime"
+        / "dependencies"
+        / "python"
+        / "python.exe"
+    )
+    if bundled.exists():
+        return str(bundled)
+    return str(executable)
 
 
 class CliTests(unittest.TestCase):
@@ -399,6 +419,221 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(main(["continue"]), 0)
 
             self.assertIn("Loop contract accepted", output.getvalue())
+
+    def test_continue_fixture_adapter_records_completed_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+            fixture_code = (
+                "from pathlib import Path\n"
+                "import sys\n"
+                "Path('adapter-output.txt').write_text('changed\\n', encoding='utf-8')\n"
+                "print('fixture stdout')\n"
+                "print('fixture stderr', file=sys.stderr)\n"
+            )
+
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(
+                        [
+                            "run",
+                            "--task",
+                            "Create fixture output",
+                            "--success-check",
+                            "adapter-output.txt exists",
+                        ]
+                    ),
+                    0,
+                )
+                self.assertEqual(
+                    main(
+                        [
+                            "continue",
+                            "--adapter",
+                            "local-adapter-fixture",
+                            "--",
+                            fixture_python(),
+                            "-c",
+                            fixture_code,
+                        ]
+                    ),
+                    0,
+                )
+
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+            run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            attempt = run_json["last_attempt"]
+            attempt_dir = run_dir / "attempts" / "attempt-001"
+
+            self.assertEqual(run_json["status"], "ready_for_verification")
+            self.assertEqual(run_json["attempt_count"], 1)
+            self.assertEqual(attempt["status"], "completed")
+            self.assertTrue(attempt["workspace_changed"])
+            self.assertEqual((repo / "adapter-output.txt").read_text(encoding="utf-8"), "changed\n")
+            self.assertIn("fixture stdout", (attempt_dir / "adapter.stdout").read_text())
+            self.assertIn("fixture stderr", (attempt_dir / "adapter.stderr").read_text())
+            result = json.loads((attempt_dir / "result.json").read_text(encoding="utf-8"))
+            self.assertEqual(result["status"], "completed")
+            self.assertTrue(result["workspace_changed"])
+            progress = (run_dir / "progress.md").read_text(encoding="utf-8")
+            self.assertIn("## Attempt 1: local-adapter-fixture", progress)
+            self.assertIn("Fixture command completed and changed the workspace.", progress)
+            self.assertIn("LoopForge adapter attempt completed", output.getvalue())
+
+    def test_continue_fixture_adapter_failure_blocks_readably(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            error = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(
+                        [
+                            "run",
+                            "--task",
+                            "Fail fixture output",
+                            "--success-check",
+                            "adapter succeeds",
+                        ]
+                    ),
+                    0,
+                )
+                with contextlib.redirect_stderr(error):
+                    self.assertEqual(
+                        main(
+                            [
+                                "continue",
+                                "--adapter",
+                                "local-adapter-fixture",
+                                "--",
+                                fixture_python(),
+                                "-c",
+                                "import sys; print('bad fixture', file=sys.stderr); sys.exit(3)",
+                            ]
+                        ),
+                        1,
+                    )
+
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+            run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            attempt_dir = run_dir / "attempts" / "attempt-001"
+
+            self.assertEqual(run_json["status"], "adapter_blocked")
+            self.assertEqual(run_json["attempt_count"], 1)
+            self.assertIn("reported failed", run_json["blockers"][0])
+            self.assertIn("bad fixture", (attempt_dir / "adapter.stderr").read_text())
+            self.assertIn("blocked state", error.getvalue())
+            self.assertIn("Fixture command failed with return code 3.", error.getvalue())
+
+    def test_adapter_python_resolution_skips_windows_app_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            windows_apps = workspace / "AppData" / "Local" / "Microsoft" / "WindowsApps"
+            windows_apps.mkdir(parents=True)
+            alias = windows_apps / "python.exe"
+            alias.write_text("", encoding="utf-8")
+            real_python = workspace / "Python" / "python.exe"
+            real_python.parent.mkdir()
+            real_python.write_text("", encoding="utf-8")
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_PYTHON": str(real_python)}),
+                mock.patch("loopforge.engine.sys.executable", str(alias)),
+                mock.patch("loopforge.engine.shutil.which", return_value=str(alias)),
+            ):
+                self.assertEqual(usable_python_executable(), str(real_python))
+
+    def test_imported_adapter_ignores_loopforge_runtime_metadata_for_clean_check(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True, text=True)
+            (repo / "README.md").write_text("# Project\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=repo, check=True, capture_output=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=LoopForge Tests",
+                    "-c",
+                    "user.email=loopforge@example.invalid",
+                    "commit",
+                    "-m",
+                    "initial",
+                ],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            base_commit = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            (repo / ".loopforge").mkdir()
+            (repo / ".loopforge" / "config.json").write_text("{}\n", encoding="utf-8")
+
+            session = {
+                "issue": 1,
+                "risk": "low",
+                "base_commit": base_commit,
+                "workspace": str(repo.resolve()),
+                "runner_id": "local-adapter-fixture",
+                "preflight_sha256": hashlib.sha256(b"preflight").hexdigest(),
+                "start_authorization_receipt_sha256": hashlib.sha256(b"start").hexdigest(),
+            }
+            session_path = workspace / "expected-session.json"
+            session_path.write_text(json.dumps(session), encoding="utf-8")
+            adapter = Path(__file__).resolve().parents[1] / ".agent" / "adapters" / "local_implementation_adapter.py"
+
+            result = subprocess.run(
+                [
+                    fixture_python(),
+                    str(adapter),
+                    "--expected-session",
+                    str(session_path),
+                    "--workspace",
+                    str(repo),
+                    "--",
+                    fixture_python(),
+                    "-c",
+                    "print('no workspace change')",
+                ],
+                cwd=Path(__file__).resolve().parents[1],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["status"], "blocked")
+            self.assertEqual(
+                payload["summary"],
+                "Implementation command completed without workspace changes.",
+            )
 
     def test_run_without_git_uses_native_task_id_and_legacy_sentinel(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

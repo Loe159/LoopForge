@@ -8,6 +8,7 @@ from pathlib import Path
 
 from loopforge.engine import (
     DEFAULT_PROFILE,
+    SUPPORTED_ADAPTERS,
     continue_run,
     create_run,
     current_status,
@@ -126,9 +127,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Show the current LoopForge loop state.",
     )
 
-    subcommands.add_parser(
+    continue_parser = subcommands.add_parser(
         "continue",
-        help="Validate the current loop contract before the next bounded action.",
+        help="Validate the current loop contract and optionally execute an adapter attempt.",
+    )
+    continue_parser.add_argument(
+        "--adapter",
+        choices=SUPPORTED_ADAPTERS,
+        help="Adapter to use for a bounded Phase 4 attempt.",
+    )
+    continue_parser.add_argument(
+        "adapter_args",
+        nargs=argparse.REMAINDER,
+        help="Arguments passed to the adapter command after --.",
     )
 
     return parser
@@ -206,6 +217,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"current run: {run['run_id']}")
         print(f"task: {run['task']}")
         print(f"loop status: {run['status']}")
+        print(f"attempts: {run.get('attempt_count', len(run.get('attempts', [])))}")
         print(f"pack: {run['pack']}")
         print(f"base commit: {run.get('base_commit') or 'none'}")
         print(f"run directory: {result.run_dir}")
@@ -221,7 +233,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"next step: {result.next_step}")
         return 0
     if args.command == "continue":
-        result = continue_run(Path.cwd())
+        adapter_args = args.adapter_args
+        if adapter_args and adapter_args[0] == "--":
+            adapter_args = adapter_args[1:]
+        result = continue_run(Path.cwd(), adapter=args.adapter, adapter_args=adapter_args)
         output = sys.stdout if result.ok else sys.stderr
         print(result.message, file=output)
         if result.run_dir is not None:
@@ -229,6 +244,13 @@ def main(argv: list[str] | None = None) -> int:
         if result.contract is not None:
             print(f"loop contract: {result.contract['status']}", file=output)
             print(f"success checks: {len(result.contract.get('success_checks', []))}", file=output)
+        if result.attempt is not None:
+            print(f"attempt: {result.attempt['id']}", file=output)
+            print(f"adapter: {result.attempt['adapter']}", file=output)
+            print(f"attempt status: {result.attempt['status']}", file=output)
+            print(f"workspace changed: {result.attempt['workspace_changed']}", file=output)
+            print(f"stdout: {result.attempt['stdout_path']}", file=output)
+            print(f"stderr: {result.attempt['stderr_path']}", file=output)
         if result.blockers:
             print("blockers:", file=output)
             for blocker in result.blockers:

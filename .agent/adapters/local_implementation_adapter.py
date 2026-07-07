@@ -32,6 +32,7 @@ EXPECTED_POLICY: dict[str, Any] = {
     "max_summary_chars": 240,
     "require_clean_workspace_at_start": True,
     "require_expected_session_workspace_match": True,
+    "ignored_workspace_status_prefixes": [".loopforge/"],
     "allowed_command_basenames": [
         "aider",
         "aider.exe",
@@ -87,8 +88,25 @@ def run_git(workspace: Path, *args: str) -> bytes:
     return completed.stdout
 
 
-def workspace_dirty(workspace: Path) -> bool:
-    return bool(run_git(workspace, "status", "--porcelain=v1", "--untracked-files=all"))
+def git_status_paths(workspace: Path) -> list[str]:
+    output = run_git(workspace, "status", "--porcelain=v1", "--untracked-files=all")
+    paths: list[str] = []
+    for raw_line in output.decode("utf-8", errors="replace").splitlines():
+        if not raw_line:
+            continue
+        path = raw_line[3:].strip()
+        if " -> " in path:
+            path = path.rsplit(" -> ", 1)[1].strip()
+        paths.append(path.replace("\\", "/"))
+    return paths
+
+
+def workspace_dirty(workspace: Path, policy: dict[str, Any]) -> bool:
+    ignored_prefixes = tuple(policy["ignored_workspace_status_prefixes"])
+    return any(
+        not any(path == prefix.rstrip("/") or path.startswith(prefix) for prefix in ignored_prefixes)
+        for path in git_status_paths(workspace)
+    )
 
 
 def command_basename(command: Sequence[str]) -> str:
@@ -183,7 +201,7 @@ def run_adapter(
     if policy["require_expected_session_workspace_match"] and str(workspace) != session["workspace"]:
         raise ValueError("Adapter workspace does not match expected session")
     validate_command_allowed(command, session, policy)
-    if policy["require_clean_workspace_at_start"] and workspace_dirty(workspace):
+    if policy["require_clean_workspace_at_start"] and workspace_dirty(workspace, policy):
         value = result_value(
             session,
             "failed",
@@ -217,7 +235,7 @@ def run_adapter(
         )
 
     output_size = len(completed.stdout or b"") + len(completed.stderr or b"")
-    changed = workspace_dirty(workspace)
+    changed = workspace_dirty(workspace, policy)
     if timed_out or completed.returncode != 0 or output_size > policy["max_child_output_bytes"]:
         status = "failed"
     elif changed:
