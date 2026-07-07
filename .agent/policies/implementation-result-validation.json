@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "purpose": "implementation_result_contract_validation",
+  "mode": "validation-only",
+  "max_result_bytes": 16384,
+  "max_summary_chars": 1000,
+  "allowed_statuses": [
+    "completed",
+    "blocked",
+    "failed"
+  ],
+  "candidate_ready_status": "completed",
+  "status_next_actions": {
+    "completed": "deterministic_patch_generation",
+    "blocked": "human_review",
+    "failed": "human_review"
+  },
+  "require_complete_capture": true,
+  "require_completed_execution": true,
+  "require_direct_child_reaped": true,
+  "require_no_kill_requested": true,
+  "require_zero_protocol_exit": true,
+  "require_empty_stderr": true,
+  "require_exact_capture_byte_counts": true,
+  "require_workspace_change_for_candidate": true,
+  "required_false_fields": [
+    "patch_generated",
+    "deterministic_checks_run",
+    "publication_requested",
+    "network_requested"
+  ],
+  "bindings": [
+    ".agent/checks/validate_implementation_result.py",
+    ".agent/policies/implementation-result-validation.json",
+    ".agent/schemas/implementation-result.schema.json"
+  ]
+}

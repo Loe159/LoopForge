@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.invalid/agent/research.schema.json",
+  "title": "Research Markdown Artifact Metadata",
+  "description": "Compatibility JSON schema for the frontmatter and required section names of research.md. The canonical validator remains validate_artifacts.py with artifact-contract.json.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "frontmatter",
+    "required_sections"
+  ],
+  "properties": {
+    "frontmatter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_version",
+        "artifact",
+        "issue",
+        "base_commit",
+        "status"
+      ],
+      "properties": {
+        "artifact_version": {
+          "const": 1
+        },
+        "artifact": {
+          "const": "research"
+        },
+        "issue": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "base_commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "status": {
+          "enum": [
+            "pending",
+            "not_required",
+            "complete",
+            "blocked"
+          ]
+        }
+      }
+    },
+    "required_sections": {
+      "const": [
+        "Scope",
+        "Current State",
+        "Evidence",
+        "Risks And Unknowns",
+        "Rejected Approaches",
+        "Suggested Verification"
+      ]
+    }
+  }
+}

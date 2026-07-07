@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.invalid/agent/implementation-result.schema.json",
+  "title": "Implementation Session Result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "result_version",
+    "purpose",
+    "mode",
+    "status",
+    "issue",
+    "risk",
+    "base_commit",
+    "workspace",
+    "runner_id",
+    "preflight_sha256",
+    "start_authorization_receipt_sha256",
+    "summary",
+    "workspace_changed",
+    "patch_generated",
+    "deterministic_checks_run",
+    "publication_requested",
+    "network_requested",
+    "next_action"
+  ],
+  "properties": {
+    "result_version": {
+      "const": 1
+    },
+    "purpose": {
+      "const": "implementation_session_result"
+    },
+    "mode": {
+      "const": "untrusted-runner-output"
+    },
+    "status": {
+      "enum": [
+        "completed",
+        "blocked",
+        "failed"
+      ]
+    },
+    "issue": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "risk": {
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    "base_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "workspace": {
+      "type": "string",
+      "minLength": 1
+    },
+    "runner_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+    },
+    "preflight_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "start_authorization_receipt_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000
+    },
+    "workspace_changed": {
+      "type": "boolean"
+    },
+    "patch_generated": {
+      "const": false
+    },
+    "deterministic_checks_run": {
+      "const": false
+    },
+    "publication_requested": {
+      "const": false
+    },
+    "network_requested": {
+      "const": false
+    },
+    "next_action": {
+      "enum": [
+        "deterministic_patch_generation",
+        "human_review"
+      ]
+    }
+  }
+}

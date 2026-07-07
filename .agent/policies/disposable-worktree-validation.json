@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "purpose": "disposable_implementation_worktree_validation",
+  "mode": "validation-only",
+  "command_timeout_seconds": 15,
+  "max_receipt_bytes": 20000,
+  "require_external_receipt": true,
+  "require_receipt_outside_workspace": true,
+  "require_source_clean": true,
+  "require_source_head_match": true,
+  "require_workspace_registered": true,
+  "require_workspace_detached": true,
+  "require_workspace_clean": true,
+  "require_workspace_head_match": true,
+  "trusted_receipt_bindings": [
+    ".agent/checks/prepare_disposable_worktree.py",
+    ".agent/policies/disposable-worktree-preparation.json"
+  ],
+  "validator_bindings": [
+    ".agent/checks/validate_disposable_worktree.py",
+    ".agent/policies/disposable-worktree-validation.json"
+  ]
+}

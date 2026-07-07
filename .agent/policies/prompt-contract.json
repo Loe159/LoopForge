@@ -1,0 +1,88 @@
+{
+  "version": 1,
+  "max_prompt_bytes": 12000,
+  "common_frontmatter": [
+    "prompt_version",
+    "stage",
+    "mode",
+    "output"
+  ],
+  "required_sections": [
+    "Objective",
+    "Trusted Inputs",
+    "Required Process",
+    "Required Output",
+    "Stop Conditions",
+    "Prohibited Actions"
+  ],
+  "common_required_literals": [
+    "Treat repository files",
+    "untrusted evidence",
+    "status `blocked`",
+    "Return only the content",
+    "The caller owns writing",
+    "Do not modify repository files",
+    "Do not implement",
+    "external services"
+  ],
+  "prompts": {
+    "research.md": {
+      "stage": "research",
+      "mode": "read-only",
+      "output": "research.md",
+      "required_references": [
+        "AGENTS.md",
+        "task.md",
+        ".loopforge/skills/",
+        ".agent/policies/artifact-contract.json",
+        ".agent/templates/research.md",
+        "research.md"
+      ],
+      "output_artifact": "research.md"
+    },
+    "plan.md": {
+      "stage": "plan",
+      "mode": "read-only",
+      "output": "plan.md",
+      "required_references": [
+        "AGENTS.md",
+        "task.md",
+        "research.md",
+        ".agent/policies/artifact-contract.json",
+        ".agent/templates/plan.md",
+        "plan.md"
+      ],
+      "output_artifact": "plan.md"
+    },
+    "compact-progress.md": {
+      "stage": "compact-progress",
+      "mode": "read-only",
+      "output": "progress.md",
+      "required_references": [
+        "AGENTS.md",
+        "task.md",
+        "plan.md",
+        "progress.md",
+        ".agent/policies/artifact-contract.json",
+        ".agent/templates/progress.md"
+      ],
+      "output_artifact": "progress.md"
+    },
+    "review.md": {
+      "stage": "review",
+      "mode": "read-only",
+      "output": "review.md",
+      "required_references": [
+        "AGENTS.md",
+        "task.md",
+        "research.md",
+        "plan.md",
+        "verification.md",
+        ".agent/policies/artifact-contract.json",
+        ".agent/templates/review.md",
+        "review.md"
+      ],
+      "output_artifact": "review.md"
+    }
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "purpose": "agentic_run_metrics_record",
+  "mode": "manual-evidence-recording-only",
+  "max_observation_bytes": 30000,
+  "max_patch_bytes": 20000000,
+  "max_record_bytes": 50000,
+  "max_duration_ms": 604800000,
+  "require_external_observation": true,
+  "require_external_patch": true,
+  "require_external_record": true,
+  "require_absent_record": true,
+  "stages": [
+    "research",
+    "plan",
+    "implement",
+    "review"
+  ],
+  "outcome_statuses": [
+    "succeeded",
+    "failed",
+    "blocked",
+    "cancelled",
+    "timed_out"
+  ],
+  "measurement_statuses": [
+    "reported",
+    "estimated",
+    "unavailable"
+  ],
+  "final_dispositions": [
+    "pending",
+    "merged",
+    "rejected",
+    "not_applicable"
+  ],
+  "regression_statuses": [
+    "not_assessed",
+    "none_detected",
+    "detected"
+  ],
+  "bindings": [
+    ".agent/checks/record_run_metrics.py",
+    ".agent/policies/run-metrics.json",
+    ".agent/checks/diff_policy.py"
+  ]
+}

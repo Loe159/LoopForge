@@ -1,0 +1,92 @@
+{
+  "version": 1,
+  "max_artifact_bytes": 20000,
+  "common_frontmatter": [
+    "artifact_version",
+    "artifact",
+    "issue",
+    "base_commit",
+    "status"
+  ],
+  "artifacts": {
+    "task.md": {
+      "artifact": "task",
+      "allowed_statuses": ["awaiting_approval", "approved", "blocked"],
+      "required_frontmatter": ["risk"],
+      "required_sections": [
+        "Goal",
+        "Expected Behavior",
+        "Acceptance Criteria",
+        "Constraints",
+        "Out Of Scope"
+      ]
+    },
+    "research.md": {
+      "artifact": "research",
+      "allowed_statuses": ["pending", "not_required", "complete", "blocked"],
+      "required_frontmatter": [],
+      "required_sections": [
+        "Scope",
+        "Current State",
+        "Evidence",
+        "Risks And Unknowns",
+        "Rejected Approaches",
+        "Suggested Verification"
+      ]
+    },
+    "plan.md": {
+      "artifact": "plan",
+      "allowed_statuses": ["awaiting_approval", "approved", "blocked"],
+      "required_frontmatter": [],
+      "required_sections": [
+        "Overview",
+        "Preconditions",
+        "Implementation Steps",
+        "Files In Scope",
+        "Out Of Scope",
+        "Verification",
+        "Stop Conditions"
+      ]
+    },
+    "progress.md": {
+      "artifact": "progress",
+      "allowed_statuses": ["not_started", "in_progress", "blocked", "complete"],
+      "required_frontmatter": [],
+      "required_sections": [
+        "Current State",
+        "Completed",
+        "Remaining",
+        "Decisions",
+        "Rejected Approaches",
+        "Blockers",
+        "Next Step"
+      ]
+    },
+    "verification.md": {
+      "artifact": "verification",
+      "allowed_statuses": ["pending", "passed", "failed", "blocked"],
+      "required_frontmatter": [],
+      "required_sections": [
+        "Candidate",
+        "Deterministic Checks",
+        "Policy Result",
+        "Risk Classification",
+        "Acceptance Criteria",
+        "Residual Risks"
+      ]
+    },
+    "review.md": {
+      "artifact": "review",
+      "allowed_statuses": ["pending", "complete", "blocked"],
+      "required_frontmatter": [],
+      "required_sections": [
+        "Scope",
+        "Findings",
+        "Plan Conformance",
+        "Test Coverage",
+        "Risks And Unknowns",
+        "Recommendation"
+      ]
+    }
+  }
+}

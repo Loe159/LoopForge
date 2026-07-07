@@ -1,0 +1,117 @@
+{
+  "version": 1,
+  "blocked_status": "blocked",
+  "stages": {
+    "research": {
+      "low": {
+        "task.md": ["approved"]
+      },
+      "medium": {
+        "task.md": ["approved"]
+      },
+      "high": {
+        "task.md": ["approved"]
+      }
+    },
+    "plan": {
+      "low": {
+        "task.md": ["approved"]
+      },
+      "medium": {
+        "task.md": ["approved"],
+        "research.md": ["complete"]
+      },
+      "high": {
+        "task.md": ["approved"],
+        "research.md": ["complete"]
+      }
+    },
+    "compact-progress": {
+      "low": {
+        "task.md": ["approved"]
+      },
+      "medium": {
+        "task.md": ["approved"]
+      },
+      "high": {
+        "task.md": ["approved"]
+      }
+    },
+    "review": {
+      "low": {
+        "task.md": ["approved"],
+        "plan.md": ["awaiting_approval", "approved"],
+        "verification.md": ["passed", "failed"]
+      },
+      "medium": {
+        "task.md": ["approved"],
+        "research.md": ["complete"],
+        "plan.md": ["approved"],
+        "verification.md": ["passed", "failed"]
+      },
+      "high": {
+        "task.md": ["approved"],
+        "research.md": ["complete"],
+        "plan.md": ["approved"],
+        "verification.md": ["passed", "failed"]
+      }
+    },
+    "implement": {
+      "low": {
+        "task.md": ["approved"],
+        "plan.md": ["awaiting_approval", "approved"]
+      },
+      "medium": {
+        "task.md": ["approved"],
+        "research.md": ["complete"],
+        "plan.md": ["approved"]
+      },
+      "high": {
+        "task.md": ["approved"],
+        "research.md": ["complete"],
+        "plan.md": ["approved"]
+      }
+    },
+    "verify": {
+      "low": {
+        "task.md": ["approved"],
+        "plan.md": ["awaiting_approval", "approved"],
+        "progress.md": ["complete"]
+      },
+      "medium": {
+        "task.md": ["approved"],
+        "research.md": ["complete"],
+        "plan.md": ["approved"],
+        "progress.md": ["complete"]
+      },
+      "high": {
+        "task.md": ["approved"],
+        "research.md": ["complete"],
+        "plan.md": ["approved"],
+        "progress.md": ["complete"]
+      }
+    },
+    "complete": {
+      "low": {
+        "task.md": ["approved"],
+        "plan.md": ["awaiting_approval", "approved"],
+        "progress.md": ["complete"],
+        "verification.md": ["passed"]
+      },
+      "medium": {
+        "task.md": ["approved"],
+        "research.md": ["complete"],
+        "plan.md": ["approved"],
+        "progress.md": ["complete"],
+        "verification.md": ["passed"]
+      },
+      "high": {
+        "task.md": ["approved"],
+        "research.md": ["complete"],
+        "plan.md": ["approved"],
+        "progress.md": ["complete"],
+        "verification.md": ["passed"]
+      }
+    }
+  }
+}

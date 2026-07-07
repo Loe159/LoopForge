@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "purpose": "parent_environment_credential_isolation_enforcement",
+  "mode": "bounded-runtime-enforcement",
+  "allowed_parent_variables": [
+    "ALLUSERSPROFILE",
+    "COMSPEC",
+    "PATH",
+    "PATHEXT",
+    "PROGRAMDATA",
+    "SYSTEMDRIVE",
+    "SYSTEMROOT",
+    "TEMP",
+    "TMP",
+    "WINDIR"
+  ],
+  "fixed_child_environment": {
+    "AGENT_RUNNER_ENVIRONMENT_MODE": "isolated",
+    "PYTHONIOENCODING": "utf-8",
+    "PYTHONUTF8": "1"
+  },
+  "max_timeout_seconds": 600.0,
+  "max_captured_output_bytes": 131072,
+  "capture_chunk_bytes": 4096,
+  "max_pending_capture_chunks": 4,
+  "cleanup_timeout_seconds": 2.0,
+  "require_absolute_executable": true,
+  "require_existing_working_directory": true,
+  "forbid_windows_app_execution_alias": true,
+  "forbid_shell": true,
+  "forbid_stdin": true
+}

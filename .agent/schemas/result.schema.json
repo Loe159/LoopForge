@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.invalid/agent/result.schema.json",
+  "title": "Compatibility Alias For Implementation Result",
+  "description": "Compatibility schema name from the original handoff. The canonical checked schema remains .agent/schemas/implementation-result.schema.json.",
+  "$ref": "implementation-result.schema.json"
+}
