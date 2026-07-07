@@ -321,6 +321,8 @@ Implementation notes:
 
 ## Phase 6: Memory
 
+Status: completed on 2026-07-07.
+
 Implement three memory layers:
 
 - durable project memory: stable facts and decisions;
@@ -336,9 +338,25 @@ Promotion rules:
 
 Done when:
 
-- `loopforge learn` proposes memory updates;
-- durable memory changes are reviewable;
-- a new run can load compact durable memory without loading old transcripts.
+- [x] `loopforge learn` proposes memory updates;
+- [x] durable memory changes are reviewable;
+- [x] a new run can load compact durable memory without loading old transcripts.
+
+Implementation notes:
+
+- `loopforge init` creates durable project memory at `.loopforge/memory.md`.
+- New runs render `RUN/memory.md` as a compact snapshot of durable memory
+  sections and intentionally omit promotion logs and old transcripts.
+- `loopforge learn` writes reviewable proposals to
+  `RUN/artifacts/memory/proposals.json` and `proposals.md`.
+- Promotion requires `loopforge learn --approve` or a pack-defined
+  `memory-rules.json` auto-promotion rule; secrets and raw untrusted
+  issue/comment/body text are rejected before promotion.
+- Durable promotions append both the selected memory item and a Promotion Log
+  entry with source and approval/rule evidence.
+- Current validation: `PYTHONPATH=src python -m unittest discover -s tests`
+  passes with tests for durable memory initialization, compact run snapshots,
+  scratch/exchange proposals, approved promotion, and secret rejection.
 
 ## Phase 7: Project Packs
 

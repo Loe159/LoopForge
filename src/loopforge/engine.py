@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import uuid
@@ -18,6 +19,7 @@ from typing import Any
 
 CONFIG_DIR = ".loopforge"
 CONFIG_FILE = "config.json"
+PROJECT_MEMORY_FILE = "memory.md"
 DEFAULT_PROFILE = "supervised"
 DEFAULT_PACK = "generic-code"
 READY_FOR_VERIFICATION = "ready_for_verification"
@@ -113,6 +115,48 @@ SUBJECTIVE_TASK_MARKERS = (
     "review",
     "summarize",
     "ux",
+)
+
+DURABLE_MEMORY_SECTIONS = (
+    "Stable Project Facts",
+    "User Preferences",
+    "Verification Patterns",
+    "Reusable Decisions",
+    "Known Pitfalls",
+)
+
+MEMORY_CATEGORY_ALIASES = {
+    "fact": "Stable Project Facts",
+    "facts": "Stable Project Facts",
+    "preference": "User Preferences",
+    "preferences": "User Preferences",
+    "verify": "Verification Patterns",
+    "verification": "Verification Patterns",
+    "decision": "Reusable Decisions",
+    "decisions": "Reusable Decisions",
+    "pitfall": "Known Pitfalls",
+    "pitfalls": "Known Pitfalls",
+}
+
+SECRET_MARKERS = (
+    "api key",
+    "apikey",
+    "authorization:",
+    "bearer ",
+    "client secret",
+    "password",
+    "private key",
+    "secret",
+    "ssh-rsa",
+    "token",
+)
+
+UNTRUSTED_TEXT_MARKERS = (
+    "raw issue",
+    "issue body",
+    "raw comment",
+    "comment body",
+    "untrusted body",
 )
 
 TEMPLATES: dict[str, str] = {
@@ -249,6 +293,7 @@ class StatusResult:
     legacy_artifacts: dict[str, Any] | None
     loop_contract: dict[str, Any] | None
     verification: dict[str, Any] | None
+    memory: dict[str, Any] | None
     next_step: str
     blockers: list[str]
 
@@ -274,6 +319,20 @@ class VerifyResult:
     message: str
     blockers: list[str]
     verification: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class LearnResult:
+    project_dir: Path
+    run_dir: Path | None
+    run: dict[str, Any] | None
+    ok: bool
+    message: str
+    proposals: list[dict[str, Any]]
+    promoted: list[dict[str, Any]]
+    rejected: list[dict[str, Any]]
+    proposal_path: Path | None
+    blockers: list[str]
 
 
 def utc_now() -> str:
@@ -355,6 +414,71 @@ def read_project_template(project_dir: Path, relative_name: str) -> str:
     if fallback is None:
         raise KeyError(f"unknown template: {relative_name}")
     return fallback
+
+
+def durable_memory_path(project_dir: Path) -> Path:
+    return project_config_dir(project_dir) / PROJECT_MEMORY_FILE
+
+
+def ensure_project_memory(project_dir: Path) -> Path:
+    path = durable_memory_path(project_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        path.write_text(read_project_template(project_dir, "memory.md"), encoding="utf-8")
+    return path
+
+
+def durable_memory_items(project_dir: Path) -> dict[str, list[str]]:
+    path = durable_memory_path(project_dir)
+    if not path.exists():
+        return {section: [] for section in DURABLE_MEMORY_SECTIONS}
+    sections = markdown_sections(path.read_text(encoding="utf-8"))
+    return {
+        section: bullet_items(section_text(sections, section))
+        for section in DURABLE_MEMORY_SECTIONS
+    }
+
+
+def memory_item_count(items: dict[str, list[str]]) -> int:
+    return sum(len(values) for values in items.values())
+
+
+def render_run_memory_snapshot(project_dir: Path, run_id: str) -> str:
+    source = ensure_project_memory(project_dir)
+    items = durable_memory_items(project_dir)
+    lines = [
+        "---",
+        "memory_version: 1",
+        "scope: run",
+        "status: active",
+        f"source: {source}",
+        f"captured_at: {utc_now()}",
+        "---",
+        "",
+        "# Durable Project Memory Snapshot",
+        "",
+        "Compact project memory loaded for this run. Promotion logs and old run",
+        "transcripts are intentionally omitted.",
+        "",
+    ]
+    for section in DURABLE_MEMORY_SECTIONS:
+        lines.extend([f"# {section}", ""])
+        values = items.get(section, [])
+        if values:
+            lines.extend(f"- {value}" for value in values)
+        else:
+            lines.append("- None recorded.")
+        lines.append("")
+    lines.extend(
+        [
+            "# Run Memory Notes",
+            "",
+            "Use `scratch.md` for temporary context and `loopforge learn` to propose",
+            "durable updates.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def repository_root() -> Path:
@@ -777,6 +901,7 @@ def initialize_project(
     config_path = project_config_path(project_dir)
     config_path.parent.mkdir(parents=True, exist_ok=True)
     ensure_templates(project_dir)
+    ensure_project_memory(project_dir)
 
     if config_path.exists():
         config, repaired = normalize_config(
@@ -968,6 +1093,483 @@ No autonomous attempt has run yet.
 """
 
 
+def memory_artifact_dir(run_dir: Path) -> Path:
+    return run_dir / "artifacts" / "memory"
+
+
+def memory_proposal_path(run_dir: Path) -> Path:
+    return memory_artifact_dir(run_dir) / "proposals.json"
+
+
+def memory_proposal_markdown_path(run_dir: Path) -> Path:
+    return memory_artifact_dir(run_dir) / "proposals.md"
+
+
+def memory_status_from_proposals(run_dir: Path) -> dict[str, int | str | None]:
+    path = memory_proposal_path(run_dir)
+    if not path.exists():
+        return {
+            "proposal_path": None,
+            "pending": 0,
+            "promoted": 0,
+            "rejected": 0,
+        }
+    try:
+        data = read_json(path)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {
+            "proposal_path": str(path),
+            "pending": 0,
+            "promoted": 0,
+            "rejected": 0,
+        }
+    proposals = data.get("proposals", [])
+    if not isinstance(proposals, list):
+        proposals = []
+    normalized = [item for item in proposals if isinstance(item, dict)]
+    return {
+        "proposal_path": str(path),
+        "pending": sum(1 for item in normalized if item.get("status") == "pending"),
+        "promoted": sum(1 for item in normalized if item.get("status") == "promoted"),
+        "rejected": sum(1 for item in normalized if item.get("status") == "rejected"),
+    }
+
+
+def memory_state(project_dir: Path, run_dir: Path | None) -> dict[str, Any]:
+    ensure_project_memory(project_dir)
+    items = durable_memory_items(project_dir)
+    state: dict[str, Any] = {
+        "durable_path": str(durable_memory_path(project_dir)),
+        "durable_items": memory_item_count(items),
+        "sections": {section: len(values) for section, values in items.items()},
+        "run_snapshot": str(run_dir / "memory.md") if run_dir is not None else None,
+        "proposal_path": None,
+        "pending": 0,
+        "promoted": 0,
+        "rejected": 0,
+    }
+    if run_dir is not None:
+        state.update(memory_status_from_proposals(run_dir))
+    return state
+
+
+def parse_memory_candidate_text(text: str, *, source: str) -> tuple[str, str] | None:
+    candidate = " ".join(text.strip().split())
+    if not candidate:
+        return None
+    explicit = source == "cli-note"
+    lowered = candidate.lower()
+    if lowered.startswith("memory:"):
+        explicit = True
+        candidate = candidate.split(":", 1)[1].strip()
+    match = re.match(r"^([A-Za-z][A-Za-z -]{1,30})\s*:\s*(.+)$", candidate)
+    category = "Stable Project Facts"
+    if match:
+        alias = match.group(1).strip().lower().replace(" ", "-")
+        alias = alias.replace("-", "_")
+        normalized_alias = alias.replace("_", " ")
+        category = (
+            MEMORY_CATEGORY_ALIASES.get(alias)
+            or MEMORY_CATEGORY_ALIASES.get(normalized_alias)
+            or category
+        )
+        if alias in MEMORY_CATEGORY_ALIASES or normalized_alias in MEMORY_CATEGORY_ALIASES:
+            explicit = True
+            candidate = match.group(2).strip()
+    if not explicit:
+        return None
+    if not candidate:
+        return None
+    return category, candidate
+
+
+def memory_rejection_reason(text: str, *, trusted: bool) -> str | None:
+    lowered = text.lower()
+    if any(marker in lowered for marker in SECRET_MARKERS):
+        return "candidate appears to contain a secret or credential marker"
+    if any(marker in lowered for marker in UNTRUSTED_TEXT_MARKERS):
+        return "candidate appears to contain raw untrusted issue/comment/body text"
+    if not trusted:
+        return "candidate came from an untrusted exchange message"
+    return None
+
+
+def memory_candidate(
+    text: str,
+    *,
+    source: str,
+    source_path: Path | None,
+    trusted: bool = True,
+) -> dict[str, Any] | None:
+    parsed = parse_memory_candidate_text(text, source=source)
+    if parsed is None:
+        return None
+    category, value = parsed
+    candidate_id = hashlib.sha256(
+        json.dumps(
+            {
+                "category": category,
+                "source": source,
+                "text": value,
+            },
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()[:16]
+    reason = memory_rejection_reason(value, trusted=trusted)
+    return {
+        "id": candidate_id,
+        "category": category,
+        "text": value,
+        "source": source,
+        "source_path": str(source_path) if source_path is not None else None,
+        "trusted": trusted,
+        "status": "rejected" if reason else "pending",
+        "rejection_reason": reason,
+    }
+
+
+def scratch_memory_candidates(run_dir: Path) -> list[dict[str, Any]]:
+    scratch_path = run_dir / "scratch.md"
+    if not scratch_path.exists():
+        return []
+    markdown = scratch_path.read_text(encoding="utf-8")
+    sections = markdown_sections(markdown)
+    candidates: list[dict[str, Any]] = []
+    for section, lines in sections.items():
+        if section == "Discard Candidates":
+            continue
+        for item in bullet_items("\n".join(lines)):
+            candidate = memory_candidate(
+                item,
+                source=f"scratch:{section}",
+                source_path=scratch_path,
+                trusted=True,
+            )
+            if candidate is not None:
+                candidates.append(candidate)
+    return candidates
+
+
+def exchange_memory_candidates(run_dir: Path) -> list[dict[str, Any]]:
+    exchange_path = run_dir / "exchange.json"
+    if not exchange_path.exists():
+        return []
+    try:
+        data = read_json(exchange_path)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return []
+    raw_messages = data.get("messages", [])
+    if not isinstance(raw_messages, list):
+        return []
+    candidates: list[dict[str, Any]] = []
+    for message in raw_messages:
+        if not isinstance(message, dict):
+            continue
+        value = message.get("memory_candidate", message.get("promote_to_memory"))
+        if not isinstance(value, str):
+            continue
+        candidate = memory_candidate(
+            value,
+            source="exchange:messages",
+            source_path=exchange_path,
+            trusted=message.get("trusted") is True,
+        )
+        if candidate is not None:
+            candidates.append(candidate)
+    return candidates
+
+
+def pack_memory_rule_paths(project_dir: Path, pack: str) -> list[Path]:
+    return [
+        project_dir / CONFIG_DIR / "packs" / pack / "memory-rules.json",
+        project_dir / CONFIG_DIR / "packs" / f"{pack}.memory-rules.json",
+        repository_root() / CONFIG_DIR / "packs" / pack / "memory-rules.json",
+        repository_root() / CONFIG_DIR / "packs" / f"{pack}.memory-rules.json",
+    ]
+
+
+def load_pack_memory_rules(project_dir: Path, pack: str) -> dict[str, Any]:
+    for path in pack_memory_rule_paths(project_dir, pack):
+        if not path.exists():
+            continue
+        data = read_json(path)
+        rules = data.get("auto_promote", [])
+        if not isinstance(rules, list):
+            raise ValueError(f"{path} auto_promote must be a list")
+        return {"source": str(path), "auto_promote": rules}
+    return {"source": None, "auto_promote": []}
+
+
+def pack_rule_allows_promotion(rules: dict[str, Any], proposal: dict[str, Any]) -> bool:
+    raw_rules = rules.get("auto_promote", [])
+    if not isinstance(raw_rules, list):
+        return False
+    for rule in raw_rules:
+        if isinstance(rule, str):
+            pattern = rule
+            category = None
+        elif isinstance(rule, dict):
+            pattern = rule.get("pattern")
+            category = rule.get("category")
+        else:
+            continue
+        if category is not None and str(category) != proposal["category"]:
+            continue
+        if not isinstance(pattern, str) or not pattern:
+            continue
+        try:
+            if re.search(pattern, proposal["text"]):
+                return True
+        except re.error:
+            if pattern in proposal["text"]:
+                return True
+    return False
+
+
+def remove_placeholder_item(lines: list[str], start: int, end: int) -> list[str]:
+    cleaned = list(lines)
+    for index in range(end - 1, start, -1):
+        if cleaned[index].strip().lower() == "- none recorded.":
+            del cleaned[index]
+    return cleaned
+
+
+def append_markdown_bullet(path: Path, section: str, item: str) -> bool:
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    lines = text.splitlines()
+    header = f"# {section}"
+    try:
+        header_index = next(index for index, line in enumerate(lines) if line.strip() == header)
+    except StopIteration:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.extend([header, "", f"- {item}", ""])
+        path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+        return True
+
+    next_header = len(lines)
+    for index in range(header_index + 1, len(lines)):
+        if lines[index].startswith("# "):
+            next_header = index
+            break
+    existing = bullet_items("\n".join(lines[header_index + 1 : next_header]))
+    if item in existing:
+        return False
+    lines = remove_placeholder_item(lines, header_index + 1, next_header)
+    next_header = len(lines)
+    for index in range(header_index + 1, len(lines)):
+        if lines[index].startswith("# "):
+            next_header = index
+            break
+    insert_at = next_header
+    while insert_at > header_index + 1 and not lines[insert_at - 1].strip():
+        insert_at -= 1
+    lines.insert(insert_at, f"- {item}")
+    path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    return True
+
+
+def promote_memory_candidate(
+    project_dir: Path,
+    proposal: dict[str, Any],
+    *,
+    reason: str,
+    run_id: str | None,
+) -> bool:
+    path = ensure_project_memory(project_dir)
+    item = str(proposal["text"])
+    category = str(proposal["category"])
+    changed = append_markdown_bullet(path, category, item)
+    if changed:
+        source = proposal.get("source_path") or proposal.get("source") or "unknown"
+        log_item = (
+            f"{utc_now()} | {reason} | run={run_id or 'none'} | "
+            f"{category}: {item} | source={source}"
+        )
+        append_markdown_bullet(path, "Promotion Log", log_item)
+    return changed
+
+
+def render_memory_proposals_markdown(data: dict[str, Any]) -> str:
+    lines = [
+        "# Memory Proposals",
+        "",
+        f"- Created: {data['created_at']}",
+        f"- Approved: {'yes' if data['approval'] else 'no'}",
+        f"- Pack rule source: {data.get('pack_rule_source') or 'none'}",
+        "",
+    ]
+    proposals = data.get("proposals", [])
+    if not proposals:
+        lines.append("No memory proposals found.")
+        lines.append("")
+        return "\n".join(lines)
+    for proposal in proposals:
+        lines.extend(
+            [
+                f"## {proposal['id']}",
+                "",
+                f"- Status: {proposal['status']}",
+                f"- Category: {proposal['category']}",
+                f"- Source: {proposal.get('source_path') or proposal['source']}",
+                f"- Text: {proposal['text']}",
+            ]
+        )
+        if proposal.get("rejection_reason"):
+            lines.append(f"- Rejection: {proposal['rejection_reason']}")
+        if proposal.get("promotion_reason"):
+            lines.append(f"- Promotion: {proposal['promotion_reason']}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def unique_memory_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    unique: list[dict[str, Any]] = []
+    for candidate in candidates:
+        candidate_id = str(candidate["id"])
+        if candidate_id in seen:
+            continue
+        seen.add(candidate_id)
+        unique.append(candidate)
+    return unique
+
+
+def learn_run(
+    project_dir: Path,
+    *,
+    approve: bool = False,
+    notes: list[str] | None = None,
+) -> LearnResult:
+    status = current_status(project_dir)
+    if not status.initialized:
+        return LearnResult(
+            project_dir=status.project_dir,
+            run_dir=None,
+            run=None,
+            ok=False,
+            message="Initialize LoopForge before learning.",
+            proposals=[],
+            promoted=[],
+            rejected=[],
+            proposal_path=None,
+            blockers=[status.next_step],
+        )
+    if status.run is None or status.run_dir is None:
+        return LearnResult(
+            project_dir=status.project_dir,
+            run_dir=status.run_dir,
+            run=None,
+            ok=False,
+            message="Create a run before proposing memory updates.",
+            proposals=[],
+            promoted=[],
+            rejected=[],
+            proposal_path=None,
+            blockers=[status.next_step],
+        )
+
+    raw_candidates: list[dict[str, Any]] = []
+    for note in normalize_nonempty_strings(notes):
+        candidate = memory_candidate(
+            note,
+            source="cli-note",
+            source_path=None,
+            trusted=True,
+        )
+        if candidate is not None:
+            raw_candidates.append(candidate)
+    raw_candidates.extend(scratch_memory_candidates(status.run_dir))
+    raw_candidates.extend(exchange_memory_candidates(status.run_dir))
+    proposals = unique_memory_candidates(raw_candidates)
+
+    pack = str(status.run.get("pack") or DEFAULT_PACK)
+    try:
+        rules = load_pack_memory_rules(status.project_dir, pack)
+    except ValueError as error:
+        rules = {"source": None, "auto_promote": []}
+        rule_error = str(error)
+    else:
+        rule_error = ""
+
+    promoted: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    for proposal in proposals:
+        if proposal["status"] == "rejected":
+            rejected.append(proposal)
+            continue
+        promotion_reason = ""
+        if approve:
+            promotion_reason = "human_approved"
+        elif pack_rule_allows_promotion(rules, proposal):
+            promotion_reason = f"pack_rule:{rules.get('source') or 'unknown'}"
+        if not promotion_reason:
+            continue
+        changed = promote_memory_candidate(
+            status.project_dir,
+            proposal,
+            reason=promotion_reason,
+            run_id=str(status.run.get("run_id") or ""),
+        )
+        proposal["status"] = "promoted" if changed else "already_present"
+        proposal["promotion_reason"] = promotion_reason
+        if changed:
+            promoted.append(proposal)
+
+    created = utc_now()
+    proposal_data = {
+        "version": 1,
+        "created_at": created,
+        "run_id": status.run.get("run_id"),
+        "approval": approve,
+        "pack": pack,
+        "pack_rule_source": rules.get("source"),
+        "proposals": proposals,
+    }
+    if rule_error:
+        proposal_data["rule_error"] = rule_error
+    proposal_path = memory_proposal_path(status.run_dir)
+    proposal_path.parent.mkdir(parents=True, exist_ok=True)
+    write_json_atomic(proposal_path, proposal_data)
+    memory_proposal_markdown_path(status.run_dir).write_text(
+        render_memory_proposals_markdown(proposal_data),
+        encoding="utf-8",
+    )
+
+    updated_run = dict(status.run)
+    updated_run["memory"] = {
+        "durable_project_memory": str(durable_memory_path(status.project_dir)),
+        "run_snapshot": str(status.run_dir / "memory.md"),
+        "last_proposal": relative_to_run(status.run_dir, proposal_path),
+        "pending_proposals": sum(
+            1 for proposal in proposals if proposal.get("status") == "pending"
+        ),
+        "promoted": len(promoted),
+        "rejected": len(rejected),
+        "updated_at": created,
+    }
+    updated_run["updated_at"] = created
+    if status.run_json_path is not None:
+        write_json_atomic(status.run_json_path, updated_run)
+
+    blockers = [rule_error] if rule_error else []
+    message = "LoopForge memory proposals written."
+    if promoted:
+        message = "LoopForge memory updated."
+    return LearnResult(
+        project_dir=status.project_dir,
+        run_dir=status.run_dir,
+        run=updated_run,
+        ok=not blockers,
+        message=message,
+        proposals=proposals,
+        promoted=promoted,
+        rejected=rejected,
+        proposal_path=proposal_path,
+        blockers=blockers,
+    )
+
+
 def describe_next_step(run: dict[str, Any]) -> str:
     status = str(run.get("status", "unknown"))
     blockers = run.get("blockers", [])
@@ -1004,6 +1606,7 @@ def current_status(project_dir: Path) -> StatusResult:
             legacy_artifacts=None,
             loop_contract=None,
             verification=None,
+            memory=None,
             next_step="Initialize LoopForge with `loopforge init`.",
             blockers=[],
         )
@@ -1023,6 +1626,7 @@ def current_status(project_dir: Path) -> StatusResult:
             legacy_artifacts=None,
             loop_contract=None,
             verification=None,
+            memory=memory_state(project_dir, None),
             next_step='Create a run with `loopforge run --task "..."`.',
             blockers=[],
         )
@@ -1042,6 +1646,7 @@ def current_status(project_dir: Path) -> StatusResult:
             legacy_artifacts=None,
             loop_contract=loop_contract_state(run_dir / "loop.md") if run_dir.exists() else None,
             verification=None,
+            memory=memory_state(project_dir, run_dir) if run_dir.exists() else None,
             next_step="Restore the missing run artifacts or create a new run.",
             blockers=[f"current run metadata not found: {run_json_path}"],
         )
@@ -1065,6 +1670,7 @@ def current_status(project_dir: Path) -> StatusResult:
         legacy_artifacts=legacy_artifact_state(run),
         loop_contract=contract,
         verification=verification_state(run),
+        memory=memory_state(project_dir, run_dir),
         next_step=describe_next_step(run),
         blockers=blockers,
     )
@@ -1099,6 +1705,7 @@ def create_run(
         raise FileNotFoundError(f"{config_path} does not exist; run `loopforge init` first")
 
     config = normalize_config(project_dir, read_json(config_path))[0]
+    project_memory = ensure_project_memory(project_dir)
     run_root = Path(str(config["run_root"])).expanduser()
     run_id = new_run_id()
     run_dir = run_root / run_id
@@ -1156,6 +1763,13 @@ def create_run(
             "subjective": subjective,
             "requires_rubric": str(config["profile"]) == "autonomous" and subjective,
         },
+        "memory": {
+            "durable_project_memory": str(project_memory),
+            "run_snapshot": str(run_dir / "memory.md"),
+            "pending_proposals": 0,
+            "promoted": 0,
+            "rejected": 0,
+        },
         "artifacts": {
             "task": str(run_dir / "task.md"),
             "loop": str(run_dir / "loop.md"),
@@ -1210,7 +1824,7 @@ def create_run(
         encoding="utf-8",
     )
     (run_dir / "memory.md").write_text(
-        read_project_template(project_dir, "memory.md"),
+        render_run_memory_snapshot(project_dir, run_id),
         encoding="utf-8",
     )
     (run_dir / "scratch.md").write_text(

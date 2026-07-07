@@ -13,6 +13,7 @@ from loopforge.engine import (
     create_run,
     current_status,
     initialize_project,
+    learn_run,
     verify_run,
 )
 
@@ -80,6 +81,22 @@ def print_verification(state: dict[str, object] | None) -> None:
     print(f"pack checks: {state.get('checks_passed', 0)}/{state.get('checks_total', 0)}")
     if state.get("stagnated"):
         print("stagnation: yes")
+
+
+def print_memory(state: dict[str, object] | None) -> None:
+    if state is None:
+        return
+    print(f"durable memory: {state.get('durable_items', 0)} items")
+    print(f"durable memory path: {state.get('durable_path') or 'none'}")
+    print(f"run memory snapshot: {state.get('run_snapshot') or 'none'}")
+    print(
+        "memory proposals: "
+        f"{state.get('pending', 0)} pending, "
+        f"{state.get('promoted', 0)} promoted, "
+        f"{state.get('rejected', 0)} rejected"
+    )
+    if state.get("proposal_path"):
+        print(f"memory proposal path: {state['proposal_path']}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -167,6 +184,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="Generate a complete patch and run deterministic pack verification.",
     )
 
+    learn_parser = subcommands.add_parser(
+        "learn",
+        help="Propose or approve durable project memory updates for the current run.",
+    )
+    learn_parser.add_argument(
+        "--approve",
+        action="store_true",
+        help="Promote safe proposals to durable project memory with human approval.",
+    )
+    learn_parser.add_argument(
+        "--note",
+        action="append",
+        default=[],
+        help=(
+            "Explicit memory candidate, such as "
+            "'Fact: this repo uses unittest'. Can be passed more than once."
+        ),
+    )
+
     return parser
 
 
@@ -229,6 +265,7 @@ def main(argv: list[str] | None = None) -> int:
             if result.run_dir is not None:
                 print(f"run directory: {result.run_dir}")
                 print_native_artifacts(result.native_artifacts)
+            print_memory(result.memory)
             print("blockers:")
             if result.blockers:
                 for blocker in result.blockers:
@@ -250,6 +287,7 @@ def main(argv: list[str] | None = None) -> int:
         print_loop_contract(result.loop_contract)
         print_legacy_artifacts(result.legacy_artifacts)
         print_verification(result.verification)
+        print_memory(result.memory)
         print("blockers:")
         if result.blockers:
             for blocker in result.blockers:
@@ -306,6 +344,24 @@ def main(argv: list[str] | None = None) -> int:
                 f"{result.verification.get('checks_total', 0)}",
                 file=output,
             )
+        if result.blockers:
+            print("blockers:", file=output)
+            for blocker in result.blockers:
+                print(f"- {blocker}", file=output)
+        return 0 if result.ok else 1
+    if args.command == "learn":
+        result = learn_run(Path.cwd(), approve=args.approve, notes=args.note)
+        output = sys.stdout if result.ok else sys.stderr
+        print(result.message, file=output)
+        if result.run_dir is not None:
+            print(f"run directory: {result.run_dir}", file=output)
+        if result.proposal_path is not None:
+            print(f"proposal path: {result.proposal_path}", file=output)
+        print(f"proposals: {len(result.proposals)}", file=output)
+        print(f"promoted: {len(result.promoted)}", file=output)
+        print(f"rejected: {len(result.rejected)}", file=output)
+        pending = sum(1 for proposal in result.proposals if proposal.get("status") == "pending")
+        print(f"pending: {pending}", file=output)
         if result.blockers:
             print("blockers:", file=output)
             for blocker in result.blockers:

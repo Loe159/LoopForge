@@ -78,6 +78,7 @@ class CliTests(unittest.TestCase):
             self.assertTrue((repo / ".loopforge" / "templates" / "memory.md").exists())
             self.assertTrue((repo / ".loopforge" / "templates" / "scratch.md").exists())
             self.assertTrue((repo / ".loopforge" / "templates" / "exchange.json").exists())
+            self.assertTrue((repo / ".loopforge" / "memory.md").exists())
             self.assertIn("LoopForge initialized", output.getvalue())
 
     def test_init_is_idempotent(self) -> None:
@@ -214,6 +215,9 @@ class CliTests(unittest.TestCase):
 
             exchange = json.loads((run_dir / "exchange.json").read_text(encoding="utf-8"))
             self.assertEqual(exchange["run_id"], run_id)
+            run_memory = (run_dir / "memory.md").read_text(encoding="utf-8")
+            self.assertIn("# Durable Project Memory Snapshot", run_memory)
+            self.assertIn("transcripts are intentionally omitted", run_memory)
             self.assertIn("Add a useful command", (run_dir / "task.md").read_text(encoding="utf-8"))
             loop_contract = (run_dir / "loop.md").read_text(encoding="utf-8")
             self.assertIn("# Objective", loop_contract)
@@ -226,6 +230,220 @@ class CliTests(unittest.TestCase):
             self.assertFalse((repo / "attempts").exists())
             self.assertFalse((repo / "artifacts").exists())
             self.assertFalse((repo / "metrics").exists())
+
+    def test_run_loads_compact_durable_project_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                (repo / ".loopforge" / "memory.md").write_text(
+                    (
+                        "---\n"
+                        "memory_version: 1\n"
+                        "scope: project\n"
+                        "status: active\n"
+                        "---\n\n"
+                        "# Stable Project Facts\n\n"
+                        "- Tests use unittest discovery.\n\n"
+                        "# User Preferences\n\n"
+                        "- Prefer small CLI changes.\n\n"
+                        "# Verification Patterns\n\n"
+                        "# Reusable Decisions\n\n"
+                        "# Known Pitfalls\n\n"
+                        "# Promotion Log\n\n"
+                        "- old run transcript should stay out of snapshots\n"
+                    ),
+                    encoding="utf-8",
+                )
+                self.assertEqual(main(["run", "--task", "Use memory"]), 0)
+
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+            run_memory = (run_dir / "memory.md").read_text(encoding="utf-8")
+
+            self.assertIn("- Tests use unittest discovery.", run_memory)
+            self.assertIn("- Prefer small CLI changes.", run_memory)
+            self.assertNotIn("old run transcript", run_memory)
+
+    def test_learn_proposes_memory_without_promoting_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(main(["run", "--task", "Learn a fact"]), 0)
+                self.assertEqual(
+                    main(["learn", "--note", "Fact: Tests use unittest discovery."]),
+                    0,
+                )
+
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+            proposals = json.loads(
+                (run_dir / "artifacts" / "memory" / "proposals.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            durable = (repo / ".loopforge" / "memory.md").read_text(encoding="utf-8")
+
+            self.assertEqual(proposals["proposals"][0]["status"], "pending")
+            self.assertIn("pending: 1", output.getvalue())
+            self.assertNotIn("- Tests use unittest discovery.", durable)
+
+    def test_learn_reads_scratch_and_exchange_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(main(["run", "--task", "Learn from run artifacts"]), 0)
+
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+            (run_dir / "scratch.md").write_text(
+                (
+                    "# Working Notes\n\n"
+                    "- Memory: Preference: Prefer deterministic local checks.\n"
+                    "- This ordinary note is temporary only.\n"
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "exchange.json").write_text(
+                json.dumps(
+                    {
+                        "exchange_version": 1,
+                        "run_id": config["current_run_id"],
+                        "messages": [
+                            {
+                                "trusted": True,
+                                "memory_candidate": (
+                                    "Verification: Use unittest discovery for this package."
+                                ),
+                            },
+                            {
+                                "trusted": False,
+                                "memory_candidate": "Fact: temporary handoff says remember this",
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["learn"]), 0)
+
+            proposals = json.loads(
+                (run_dir / "artifacts" / "memory" / "proposals.json").read_text(
+                    encoding="utf-8"
+                )
+            )["proposals"]
+            pending = [proposal for proposal in proposals if proposal["status"] == "pending"]
+            rejected = [proposal for proposal in proposals if proposal["status"] == "rejected"]
+
+            self.assertEqual(len(pending), 2)
+            self.assertEqual(len(rejected), 1)
+            self.assertIn("untrusted", rejected[0]["rejection_reason"])
+            self.assertIn("proposals: 3", output.getvalue())
+
+    def test_learn_approve_promotes_safe_memory_and_records_log(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(main(["run", "--task", "Learn a decision"]), 0)
+                self.assertEqual(
+                    main(
+                        [
+                            "learn",
+                            "--approve",
+                            "--note",
+                            "Decision: Keep generated run artifacts outside repositories.",
+                        ]
+                    ),
+                    0,
+                )
+                self.assertEqual(main(["status"]), 0)
+
+            durable = (repo / ".loopforge" / "memory.md").read_text(encoding="utf-8")
+            self.assertIn(
+                "- Keep generated run artifacts outside repositories.",
+                durable,
+            )
+            self.assertIn("human_approved", durable)
+            self.assertIn("promoted: 1", output.getvalue())
+            self.assertIn("durable memory: 1 items", output.getvalue())
+
+    def test_learn_rejects_secret_candidates_even_when_approved(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(main(["run", "--task", "Reject unsafe memory"]), 0)
+                self.assertEqual(
+                    main(["learn", "--approve", "--note", "Fact: API token is abc123"]),
+                    0,
+                )
+
+            durable = (repo / ".loopforge" / "memory.md").read_text(encoding="utf-8")
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+            proposals = json.loads(
+                (run_dir / "artifacts" / "memory" / "proposals.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+
+            self.assertEqual(proposals["proposals"][0]["status"], "rejected")
+            self.assertIn("secret", proposals["proposals"][0]["rejection_reason"])
+            self.assertNotIn("abc123", durable)
+            self.assertIn("rejected: 1", output.getvalue())
 
     def test_run_requires_init(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
