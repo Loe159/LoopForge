@@ -84,6 +84,8 @@ Validation:
 
 ## Phase 1: Minimal CLI
 
+Status: completed on 2026-07-07.
+
 Create a Python package with a console command:
 
 ```text
@@ -103,9 +105,22 @@ Implementation notes:
 
 Done when:
 
-- `loopforge init` creates local config/templates.
-- `loopforge run --task` creates a run directory.
-- `loopforge status` prints current loop, profile, next step, and blockers.
+- [x] `loopforge init` creates local config/templates.
+- [x] `loopforge run --task` creates a run directory.
+- [x] `loopforge status` prints current loop, profile, next step, and blockers.
+
+Implementation notes:
+
+- The package exposes the `loopforge` console script through `pyproject.toml`.
+- `init` is idempotent and stores project config in `.loopforge/config.json`.
+- `run --task` creates external run artifacts under
+  `~/LoopForge/runs/<project-name>/<run-id>/`, with `LOOPFORGE_HOME` available
+  for isolated tests.
+- `status` handles not-initialized, initialized-without-run, current-run, and
+  missing-run-metadata states.
+- Current validation: `PYTHONPATH=src python -m unittest discover -s tests`
+  passes; editable install plus `loopforge status` also works in a temporary
+  virtual environment. `pytest` was not available in the local environment.
 
 ## Phase 2: Universal Run Model
 
@@ -321,169 +336,3 @@ Done when:
 - claims about full sandbox or network isolation.
 
 These can return later as optional packs or enterprise controls.
-
-## First Working Milestone
-
-Milestone name: `mvp-local-loop`.
-
-Goal:
-
-Build the MVP as a sequence of vertical CLI increments. Each increment must be
-observable through a user command and testable in a temporary repository in a
-few minutes or less. The workflow is:
-
-```text
-init -> run -> status -> verify -> learn
-```
-
-This milestone does not include autonomous agent execution.
-
-Starting point:
-
-- `pyproject.toml` already exposes the `loopforge` command.
-- `src/loopforge/cli.py` is still a placeholder.
-- `.loopforge/templates/` contains the loop, memory, scratch, and exchange
-  templates.
-- `.agent/checks/generate_complete_patch.py`, `.agent/checks/diff_policy.py`,
-  and `.agent/checks/classify_patch_risk.py` are available as bootstrap
-  primitives.
-
-Vertical increments:
-
-1. Real CLI and `init`
-   - User result: `loopforge init` creates usable project configuration.
-   - Implementation: add a small engine layer for config, paths, and atomic
-     JSON writes. Write `.loopforge/config.json` with `project_name`,
-     `profile`, `run_root`, and `current_run_id: null`. Keep the command
-     idempotent.
-   - Quick test: in a temporary repository, run `main(["init"])`, verify the
-     config, run it again, and verify it does not destructively overwrite
-     existing configuration.
-
-2. External run creation
-   - User result: `loopforge run --task "..."` creates a run outside the
-     target repository.
-   - Implementation: use `~/LoopForge/runs/<project>/<run-id>/` by default,
-     with `LOOPFORGE_HOME` as a test override. Create `run.json`, `task.md`,
-     `loop.md`, `memory.md`, `scratch.md`, `exchange.json`, `attempts/`,
-     `artifacts/`, and `metrics/`. Detect `git rev-parse HEAD` when possible
-     and store `current_run_id` in config.
-   - Quick test: in a temporary Git repository with `LOOPFORGE_HOME` set, run
-     `init` and `run`, then verify the run is external and the target
-     repository only receives `.loopforge/config.json`.
-
-3. Filled loop contract
-   - User result: the run contains a readable `loop.md`, not an empty
-     template.
-   - Implementation: fill objective, inputs, repository, base commit, default
-     pack `generic-code`, profile `supervised`, default limits, and rollback
-     guidance. Add repeatable `run --success-check "..."`. Without success
-     checks, mark the run as blocked for clarification in `run.json`.
-   - Quick test: `run --task ... --success-check ...` produces a `loop.md`
-     without critical placeholders; running without success checks makes
-     `status` report the blocker.
-
-4. Useful `status`
-   - User result: `loopforge status` explains the current run and next action.
-   - Implementation: discover the current run from `.loopforge/config.json`,
-     read `run.json` and artifacts, and print run id, task, profile, loop
-     status, base commit, next step, blockers, and patch/verification/memory
-     proposal presence. Handle not initialized and no current run states.
-   - Quick test: assert stdout for not initialized, initialized without run,
-     run with success checks, and run without success checks.
-
-5. Patch and policy verification
-   - User result: `loopforge verify` produces local evidence for a modified
-     repository.
-   - Implementation: add `verify` to the CLI. Generate
-     `artifacts/changes.patch` through
-     `.agent/checks/generate_complete_patch.py --repo <repo> --base <base>`.
-     Run `diff_policy.py` and `classify_patch_risk.py` in JSON mode. Write
-     `verification.md` with the result, risk, artifact paths, and readable
-     errors. Do not stage Git changes or mutate source files.
-   - Quick test: in a temporary Git repository, make an initial commit, modify
-     a file, run `run` then `verify`, and verify the external patch,
-     `verification.md`, and zero exit code. The no-change case must report a
-     clear status instead of an opaque failure.
-
-6. Manual memory proposal
-   - User result: `loopforge learn --proposal "..."` records a proposed memory
-     item without durable promotion.
-   - Implementation: add
-     `learn --proposal TEXT --category stable-fact|preference|verification-pattern|decision|pitfall`.
-     Append an entry to the run `memory.md` under `Proposed Durable Memory`
-     with timestamp, category, text, and status `proposed`. Do not write to
-     project durable memory in this milestone.
-   - Quick test: run `learn`, verify the entry in `RUN/memory.md`, and verify
-     `.loopforge/config.json` and templates are not polluted.
-
-7. Full MVP smoke test
-   - User result: the full local flow completes quickly.
-   - Implementation: add an integration test that runs
-     `init -> run -> status -> verify -> learn -> status` against a temporary
-     repository. Keep tests offline and isolate the external run root with
-     `LOOPFORGE_HOME`.
-   - Quick test: `python -m pytest` should complete in a few seconds.
-
-Interfaces:
-
-- `loopforge init`
-- `loopforge run --task TEXT [--success-check TEXT ...]`
-- `loopforge status`
-- `loopforge verify`
-- `loopforge learn --proposal TEXT --category CATEGORY`
-- `LOOPFORGE_HOME`: override for the external run root during tests.
-
-Minimal `run.json` fields:
-
-- `run_id`
-- `task_id`
-- `task`
-- `project_root`
-- `base_commit`
-- `profile`
-- `pack`
-- `status`
-- `created_at`
-- `success_checks`
-- `blockers`
-- `artifacts`
-
-MVP statuses:
-
-- `ready_for_verification`
-- `blocked_missing_success_checks`
-- `verified`
-- `verification_failed`
-- `memory_proposed`
-
-Acceptance criteria:
-
-- Tests use temporary directories and do not touch the real `~/LoopForge`.
-- Commands do not require GitHub, network access, autonomous agents,
-  publication, Git staging, or destructive mutation.
-- Run artifacts are created outside the target repository by default.
-- Bootstrap scripts remain callable as external processes; `.agent/**` is not
-  moved or deleted.
-- `status` always explains the next step in plain language, including
-  incomplete states.
-
-Defaults and assumptions:
-
-- The default MVP pack is `generic-code`.
-- MVP memory is only a proposal in the current run; no durable memory promotion
-  happens automatically.
-- `verify` is limited to patch generation, diff policy, and risk
-  classification. Pack checks are not required for `mvp-local-loop`.
-- `continue` and agent adapter invocation are out of scope for this milestone.
-
-Compact scope:
-
-1. Package skeleton and `loopforge` command.
-2. External run creation.
-3. Loop contract generation.
-4. Status command.
-5. Patch generation and diff policy over a sample repo.
-6. Manual memory proposal.
-
-This milestone should be useful before any autonomous agent execution exists.

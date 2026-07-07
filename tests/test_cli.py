@@ -178,11 +178,90 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(main(["run", "--task", "Do the thing"]), 1)
             self.assertIn("run `loopforge init` first", output.getvalue())
 
-    def test_status_is_not_implemented_in_increment_one(self) -> None:
+    def test_status_reports_not_initialized(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = io.StringIO()
+            with working_directory(Path(temp_dir)), contextlib.redirect_stdout(output):
+                self.assertEqual(main(["status"]), 0)
+
+            text = output.getvalue()
+            self.assertIn("state: not initialized", text)
+            self.assertIn("next step: Initialize LoopForge with `loopforge init`.", text)
+
+    def test_status_reports_initialized_without_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            output = io.StringIO()
+
+            with working_directory(repo), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(main(["init", "--profile", "strict"]), 0)
+            with working_directory(repo), contextlib.redirect_stdout(output):
+                self.assertEqual(main(["status"]), 0)
+
+            text = output.getvalue()
+            self.assertIn("state: initialized", text)
+            self.assertIn("profile: strict", text)
+            self.assertIn("current run: none", text)
+            self.assertIn('next step: Create a run with `loopforge run --task "..."`.', text)
+
+    def test_status_reports_current_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(main(["run", "--task", "Add status output"]), 0)
+                self.assertEqual(main(["status"]), 0)
+
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            text = output.getvalue()
+            self.assertIn(f"current run: {config['current_run_id']}", text)
+            self.assertIn("task: Add status output", text)
+            self.assertIn("profile: supervised", text)
+            self.assertIn("loop status: ready_for_verification", text)
+            self.assertIn("blockers:\n- none", text)
+            self.assertIn("next step: Review the run artifacts", text)
+
+    def test_status_reports_missing_current_run_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(main(["run", "--task", "Lose metadata carefully"]), 0)
+
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            (loopforge_home / "runs" / repo.name / config["current_run_id"] / "run.json").unlink()
+
+            output = io.StringIO()
+            with working_directory(repo), contextlib.redirect_stdout(output):
+                self.assertEqual(main(["status"]), 0)
+
+            text = output.getvalue()
+            self.assertIn(f"current run: {config['current_run_id']}", text)
+            self.assertIn("current run metadata not found", text)
+            self.assertIn("next step: Restore the missing run artifacts or create a new run.", text)
+
+    def test_unknown_command_still_exits_with_parser_error(self) -> None:
         output = io.StringIO()
         with contextlib.redirect_stderr(output):
             with self.assertRaises(SystemExit) as raised:
-                main(["status"])
+                main(["unknown"])
         self.assertEqual(raised.exception.code, 2)
         self.assertIn("invalid choice", output.getvalue())
 

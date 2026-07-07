@@ -148,6 +148,19 @@ class RunResult:
     run: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class StatusResult:
+    project_dir: Path
+    config_path: Path
+    initialized: bool
+    config: dict[str, Any] | None
+    run_dir: Path | None
+    run_json_path: Path | None
+    run: dict[str, Any] | None
+    next_step: str
+    blockers: list[str]
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -323,6 +336,78 @@ def detect_git_base_commit(project_dir: Path) -> str | None:
         return None
     commit = result.stdout.strip()
     return commit or None
+
+
+def describe_next_step(run: dict[str, Any]) -> str:
+    status = str(run.get("status", "unknown"))
+    blockers = run.get("blockers", [])
+    if isinstance(blockers, list) and blockers:
+        return "Resolve the listed blockers before continuing the loop."
+    if status == READY_FOR_VERIFICATION:
+        return "Review the run artifacts, then add verification in the next implementation phase."
+    return "Inspect the run artifacts and decide the next bounded action."
+
+
+def current_status(project_dir: Path) -> StatusResult:
+    project_dir = project_dir.resolve()
+    config_path = project_config_path(project_dir)
+    if not config_path.exists():
+        return StatusResult(
+            project_dir=project_dir,
+            config_path=config_path,
+            initialized=False,
+            config=None,
+            run_dir=None,
+            run_json_path=None,
+            run=None,
+            next_step="Initialize LoopForge with `loopforge init`.",
+            blockers=[],
+        )
+
+    config = normalize_config(project_dir, read_json(config_path))[0]
+    current_run_id = config.get("current_run_id")
+    if not current_run_id:
+        return StatusResult(
+            project_dir=project_dir,
+            config_path=config_path,
+            initialized=True,
+            config=config,
+            run_dir=None,
+            run_json_path=None,
+            run=None,
+            next_step='Create a run with `loopforge run --task "..."`.',
+            blockers=[],
+        )
+
+    run_dir = Path(str(config["run_root"])).expanduser() / str(current_run_id)
+    run_json_path = run_dir / "run.json"
+    if not run_json_path.exists():
+        return StatusResult(
+            project_dir=project_dir,
+            config_path=config_path,
+            initialized=True,
+            config=config,
+            run_dir=run_dir,
+            run_json_path=run_json_path,
+            run=None,
+            next_step="Restore the missing run artifacts or create a new run.",
+            blockers=[f"current run metadata not found: {run_json_path}"],
+        )
+
+    run = read_json(run_json_path)
+    raw_blockers = run.get("blockers", [])
+    blockers = [str(blocker) for blocker in raw_blockers] if isinstance(raw_blockers, list) else []
+    return StatusResult(
+        project_dir=project_dir,
+        config_path=config_path,
+        initialized=True,
+        config=config,
+        run_dir=run_dir,
+        run_json_path=run_json_path,
+        run=run,
+        next_step=describe_next_step(run),
+        blockers=blockers,
+    )
 
 
 def new_run_id() -> str:

@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from loopforge.engine import DEFAULT_PROFILE, create_run, initialize_project
+from loopforge.engine import DEFAULT_PROFILE, create_run, current_status, initialize_project
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -32,6 +32,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--task",
         required=True,
         help="Task description for the run.",
+    )
+
+    subcommands.add_parser(
+        "status",
+        help="Show the current LoopForge loop state.",
     )
 
     return parser
@@ -64,6 +69,48 @@ def main(argv: list[str] | None = None) -> int:
         print(f"task id: {result.run['task_id']}")
         print(f"base commit: {result.run['base_commit'] or 'none'}")
         print(f"status: {result.run['status']}")
+        return 0
+    if args.command == "status":
+        result = current_status(Path.cwd())
+        print(f"project: {result.project_dir.name}")
+        if not result.initialized:
+            print("state: not initialized")
+            print(f"config: {result.config_path}")
+            print(f"next step: {result.next_step}")
+            return 0
+
+        assert result.config is not None
+        print("state: initialized")
+        print(f"profile: {result.config['profile']}")
+        print(f"run root: {result.config['run_root']}")
+
+        if result.run is None:
+            print(f"current run: {result.config.get('current_run_id') or 'none'}")
+            if result.run_dir is not None:
+                print(f"run directory: {result.run_dir}")
+            print("blockers:")
+            if result.blockers:
+                for blocker in result.blockers:
+                    print(f"- {blocker}")
+            else:
+                print("- none")
+            print(f"next step: {result.next_step}")
+            return 0
+
+        run = result.run
+        print(f"current run: {run['run_id']}")
+        print(f"task: {run['task']}")
+        print(f"loop status: {run['status']}")
+        print(f"pack: {run['pack']}")
+        print(f"base commit: {run.get('base_commit') or 'none'}")
+        print(f"run directory: {result.run_dir}")
+        print("blockers:")
+        if result.blockers:
+            for blocker in result.blockers:
+                print(f"- {blocker}")
+        else:
+            print("- none")
+        print(f"next step: {result.next_step}")
         return 0
     parser.error(f"unknown command: {args.command}")
     return 2
