@@ -360,6 +360,8 @@ Implementation notes:
 
 ## Phase 7: Project Packs
 
+Status: completed on 2026-07-07.
+
 Create pack contract:
 
 ```text
@@ -381,9 +383,33 @@ Initial packs:
 
 Done when:
 
-- project detection selects a pack;
-- packs contribute checks and risk rules;
-- packs can add skills without changing the engine.
+- [x] project detection selects a pack;
+- [x] packs contribute checks and risk rules;
+- [x] packs can add skills without changing the engine.
+
+Implementation notes:
+
+- Packs now use a product contract made of `pack.json`, `SKILL.md`,
+  `checks.json`, `protected-paths.json`, and `memory-rules.md`.
+- The bundled initial packs are `generic-code`, `python`, `node`,
+  `documentation`, and `intellij-plugin`; project-local packs under
+  `.loopforge/packs/<pack-name>/` override bundled packs with the same name.
+- `loopforge run` auto-detects the pack from repository markers, records the
+  resolved pack contract in `run.json`, and supports `--pack` for an explicit
+  override.
+- `loopforge pack list` and `loopforge pack detect` expose available packs and
+  the selected pack without requiring a run.
+- Pack skills are added to `loop.md` from `pack.json` and `SKILL.md`, so new
+  packs can contribute skills without engine changes.
+- Pack checks continue to come from `checks.json`, while
+  `protected-paths.json` is merged with the imported risk policy into
+  `RUN/artifacts/policies/risk-rules.merged.json` during verification.
+- Pack memory rules preserve `memory-rules.json` compatibility and can also be
+  provided through `pack.json` while `memory-rules.md` documents human-facing
+  promotion guidance.
+- Current validation: `PYTHONPATH=src python -m unittest discover -s tests`
+  passes with tests for auto-detection, project-local pack skills, pack CLI
+  listing/detection, pack risk-rule contribution, and existing check loading.
 
 ## Phase 8: Autonomy Profiles
 

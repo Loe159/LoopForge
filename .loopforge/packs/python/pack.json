@@ -1,0 +1,18 @@
+{
+  "name": "python",
+  "version": 1,
+  "description": "Pack for Python packages, scripts, and test suites.",
+  "priority": 20,
+  "detection": {
+    "files_any": ["pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "Pipfile"],
+    "paths_any": ["**/*.py"]
+  },
+  "skills": ["python-testing", "python-packaging"],
+  "skill_file": "SKILL.md",
+  "checks_file": "checks.json",
+  "protected_paths_file": "protected-paths.json",
+  "memory_rules_file": "memory-rules.md",
+  "memory": {
+    "auto_promote": []
+  }
+}

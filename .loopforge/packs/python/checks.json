@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "checks": [
+    {
+      "name": "git-diff-check",
+      "command": ["git", "diff", "--check"],
+      "timeout_seconds": 60
+    },
+    {
+      "name": "python-compileall",
+      "command": ["{python}", "-m", "compileall", "-q", "."],
+      "timeout_seconds": 120
+    }
+  ]
+}

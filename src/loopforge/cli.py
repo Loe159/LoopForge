@@ -12,6 +12,8 @@ from loopforge.engine import (
     continue_run,
     create_run,
     current_status,
+    detect_project_pack,
+    discover_pack_contracts,
     initialize_project,
     learn_run,
     verify_run,
@@ -78,6 +80,8 @@ def print_verification(state: dict[str, object] | None) -> None:
     risk = state.get("risk", {})
     if isinstance(risk, dict):
         print(f"risk: {risk.get('risk') or 'unknown'}")
+        if risk.get("policy"):
+            print(f"risk policy: {risk['policy']}")
     print(f"pack checks: {state.get('checks_passed', 0)}/{state.get('checks_total', 0)}")
     if state.get("stagnated"):
         print("stagnation: yes")
@@ -97,6 +101,21 @@ def print_memory(state: dict[str, object] | None) -> None:
     )
     if state.get("proposal_path"):
         print(f"memory proposal path: {state['proposal_path']}")
+
+
+def print_pack_contract(run: dict[str, object]) -> None:
+    contract = run.get("pack_contract", {})
+    if not isinstance(contract, dict):
+        return
+    if contract.get("source"):
+        print(f"pack source: {contract['source']}")
+    if contract.get("detection"):
+        print(f"pack selection: {contract['detection']}")
+    skills = contract.get("skills", [])
+    if isinstance(skills, list):
+        print(f"pack skills: {len(skills)}")
+        for skill in skills:
+            print(f"- {skill}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -122,6 +141,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--task",
         required=True,
         help="Task description for the run.",
+    )
+    run_parser.add_argument(
+        "--pack",
+        help="Project pack to use. Defaults to automatic project detection.",
     )
     run_parser.add_argument(
         "--success-check",
@@ -163,6 +186,14 @@ def build_parser() -> argparse.ArgumentParser:
         "status",
         help="Show the current LoopForge loop state.",
     )
+
+    pack_parser = subcommands.add_parser(
+        "pack",
+        help="List or detect LoopForge project packs.",
+    )
+    pack_subcommands = pack_parser.add_subparsers(dest="pack_command", required=True)
+    pack_subcommands.add_parser("list", help="List available project packs.")
+    pack_subcommands.add_parser("detect", help="Show the pack selected for this project.")
 
     continue_parser = subcommands.add_parser(
         "continue",
@@ -227,6 +258,7 @@ def main(argv: list[str] | None = None) -> int:
             result = create_run(
                 Path.cwd(),
                 task=args.task,
+                pack=args.pack,
                 success_checks=args.success_check,
                 selected_skills=args.skill,
                 allowed_tools=args.allow_tool,
@@ -242,10 +274,28 @@ def main(argv: list[str] | None = None) -> int:
         print(f"task id: {result.run['task_id']}")
         print(f"base commit: {result.run['base_commit'] or 'none'}")
         print(f"status: {result.run['status']}")
+        print(f"pack: {result.run['pack']}")
         print(f"loop contract: {result.run['loop_contract']['path']}")
         if result.run["loop_contract"]["subjective"] and not args.rubric:
             print("rubric: needed before autonomous attempts")
         return 0
+    if args.command == "pack":
+        if args.pack_command == "list":
+            packs = discover_pack_contracts(Path.cwd())
+            if not packs:
+                print("No project packs found.")
+                return 0
+            for pack in packs:
+                description = pack.get("description") or ""
+                print(f"{pack['name']}: {description}".rstrip())
+                print(f"  source: {pack.get('source') or 'none'}")
+            return 0
+        if args.pack_command == "detect":
+            pack = detect_project_pack(Path.cwd())
+            print(f"pack: {pack['name']}")
+            print(f"source: {pack.get('source') or 'none'}")
+            print(f"score: {pack.get('detection_score', 0)}")
+            return 0
     if args.command == "status":
         result = current_status(Path.cwd())
         print(f"project: {result.project_dir.name}")
@@ -281,6 +331,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"loop status: {run['status']}")
         print(f"attempts: {run.get('attempt_count', len(run.get('attempts', [])))}")
         print(f"pack: {run['pack']}")
+        print_pack_contract(run)
         print(f"base commit: {run.get('base_commit') or 'none'}")
         print(f"run directory: {result.run_dir}")
         print_native_artifacts(result.native_artifacts)
@@ -338,6 +389,8 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"diff policy allowed: {diff_policy.get('allowed')}", file=output)
             if isinstance(risk, dict):
                 print(f"risk: {risk.get('risk') or 'unknown'}", file=output)
+                if risk.get("policy"):
+                    print(f"risk policy: {risk['policy']}", file=output)
             print(
                 "pack checks: "
                 f"{result.verification.get('checks_passed', 0)}/"

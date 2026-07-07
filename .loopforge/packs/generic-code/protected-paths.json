@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "high_path_patterns": [
+    ".github/**",
+    ".agent/**",
+    ".loopforge/**",
+    "infra/**",
+    "deploy/**",
+    "scripts/release/**"
+  ],
+  "medium_path_patterns": [
+    "src/**",
+    "lib/**",
+    "app/**",
+    "packages/**",
+    "services/**",
+    "tests/**"
+  ]
+}

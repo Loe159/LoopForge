@@ -1,0 +1,18 @@
+{
+  "name": "intellij-plugin",
+  "version": 1,
+  "description": "Pack for IntelliJ Platform plugin projects.",
+  "priority": 30,
+  "detection": {
+    "files_any": ["gradle.properties", "settings.gradle", "settings.gradle.kts", "build.gradle", "build.gradle.kts"],
+    "paths_any": ["src/main/resources/META-INF/plugin.xml", ".idea/**"]
+  },
+  "skills": ["intellij-plugin-development", "gradle-verification"],
+  "skill_file": "SKILL.md",
+  "checks_file": "checks.json",
+  "protected_paths_file": "protected-paths.json",
+  "memory_rules_file": "memory-rules.md",
+  "memory": {
+    "auto_promote": []
+  }
+}

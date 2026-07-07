@@ -404,6 +404,8 @@ def ensure_templates(project_dir: Path) -> None:
         if not destination.exists():
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_text(contents, encoding="utf-8")
+    for directory_name in ("packs", "skills"):
+        (root / directory_name).mkdir(parents=True, exist_ok=True)
 
 
 def read_project_template(project_dir: Path, relative_name: str) -> str:
@@ -507,6 +509,188 @@ def default_diff_policy() -> Path:
 
 def default_risk_policy() -> Path:
     return repository_root() / ".agent" / "policies" / "risk-rules.json"
+
+
+def pack_roots(project_dir: Path) -> list[Path]:
+    return [
+        project_dir / CONFIG_DIR / "packs",
+        repository_root() / CONFIG_DIR / "packs",
+    ]
+
+
+def pack_file_candidates(project_dir: Path, pack: str, file_name: str) -> list[Path]:
+    return [
+        project_dir / CONFIG_DIR / "packs" / pack / file_name,
+        project_dir / CONFIG_DIR / "packs" / f"{pack}.{file_name}",
+        repository_root() / CONFIG_DIR / "packs" / pack / file_name,
+        repository_root() / CONFIG_DIR / "packs" / f"{pack}.{file_name}",
+    ]
+
+
+def normalize_unique_strings(values: list[str]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        stripped = value.strip()
+        if not stripped or stripped in seen:
+            continue
+        seen.add(stripped)
+        normalized.append(stripped)
+    return normalized
+
+
+def discover_pack_contracts(project_dir: Path) -> list[dict[str, Any]]:
+    contracts_by_name: dict[str, dict[str, Any]] = {}
+    for root in reversed(pack_roots(project_dir)):
+        if not root.exists():
+            continue
+        for path in sorted(root.glob("*/pack.json")):
+            try:
+                contract = load_pack_contract_from_path(path)
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+            contracts_by_name[str(contract["name"])] = contract
+    return sorted(contracts_by_name.values(), key=lambda item: str(item["name"]))
+
+
+def load_pack_contract_from_path(path: Path) -> dict[str, Any]:
+    data = read_json(path)
+    name = str(data.get("name") or path.parent.name).strip()
+    if not name:
+        raise ValueError(f"{path} must define a pack name")
+    version = data.get("version", 1)
+    if not isinstance(version, int) or isinstance(version, bool) or version < 1:
+        raise ValueError(f"{path} version must be a positive integer")
+    detection = data.get("detection", {})
+    if not isinstance(detection, dict):
+        raise ValueError(f"{path} detection must be an object")
+    skills = data.get("skills", [])
+    if not isinstance(skills, list) or not all(isinstance(skill, str) for skill in skills):
+        raise ValueError(f"{path} skills must be a list of strings")
+    priority = data.get("priority", 0)
+    if not isinstance(priority, int) or isinstance(priority, bool):
+        raise ValueError(f"{path} priority must be an integer")
+    return {
+        "name": name,
+        "version": version,
+        "description": str(data.get("description") or "").strip(),
+        "priority": priority,
+        "source": str(path),
+        "root": str(path.parent),
+        "detection": detection,
+        "skills": normalize_unique_strings(skills),
+        "skill_file": str(path.parent / str(data.get("skill_file") or "SKILL.md")),
+        "checks_file": str(path.parent / str(data.get("checks_file") or "checks.json")),
+        "protected_paths_file": str(
+            path.parent / str(data.get("protected_paths_file") or "protected-paths.json")
+        ),
+        "memory_rules_file": str(
+            path.parent / str(data.get("memory_rules_file") or "memory-rules.md")
+        ),
+        "memory": data.get("memory", {}) if isinstance(data.get("memory", {}), dict) else {},
+    }
+
+
+def load_pack_contract(project_dir: Path, pack: str) -> dict[str, Any]:
+    for path in pack_file_candidates(project_dir, pack, "pack.json"):
+        if path.exists():
+            return load_pack_contract_from_path(path)
+    raise ValueError(f"project pack not found: {pack}")
+
+
+def detection_string_list(detection: dict[str, Any], key: str) -> list[str]:
+    value = detection.get(key, [])
+    if isinstance(value, str):
+        return [value]
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str) and item.strip()]
+
+
+def project_path_exists(project_dir: Path, relative_name: str) -> bool:
+    candidate = project_dir / relative_name
+    return candidate.exists()
+
+
+def project_glob_matches(project_dir: Path, pattern: str) -> bool:
+    if not any(character in pattern for character in "*?["):
+        return project_path_exists(project_dir, pattern)
+    try:
+        return any(path.exists() for path in project_dir.glob(pattern))
+    except ValueError:
+        return False
+
+
+def pack_detection_score(project_dir: Path, contract: dict[str, Any]) -> int:
+    detection = contract.get("detection", {})
+    if not isinstance(detection, dict):
+        return 0
+    all_files = detection_string_list(detection, "all_files")
+    if all_files and not all(project_path_exists(project_dir, name) for name in all_files):
+        return 0
+    all_dirs = detection_string_list(detection, "all_dirs")
+    if all_dirs and not all((project_dir / name).is_dir() for name in all_dirs):
+        return 0
+
+    score = 0
+    files_any = detection_string_list(detection, "files_any")
+    dirs_any = detection_string_list(detection, "dirs_any")
+    paths_any = detection_string_list(detection, "paths_any")
+    score += sum(20 for name in files_any if project_path_exists(project_dir, name))
+    score += sum(20 for name in dirs_any if (project_dir / name).is_dir())
+    score += sum(10 for pattern in paths_any if project_glob_matches(project_dir, pattern))
+    if score <= 0:
+        return 0
+    score += int(contract.get("priority", 0))
+    return score
+
+
+def detect_project_pack(project_dir: Path) -> dict[str, Any]:
+    contracts = discover_pack_contracts(project_dir)
+    best: tuple[int, dict[str, Any]] | None = None
+    for contract in contracts:
+        if contract["name"] == DEFAULT_PACK:
+            continue
+        score = pack_detection_score(project_dir, contract)
+        if score <= 0:
+            continue
+        if best is None or score > best[0]:
+            best = (score, contract)
+    if best is not None:
+        detected = dict(best[1])
+        detected["detection_score"] = best[0]
+        detected["detected"] = True
+        return detected
+    try:
+        fallback = load_pack_contract(project_dir, DEFAULT_PACK)
+    except ValueError:
+        fallback = {
+            "name": DEFAULT_PACK,
+            "version": 1,
+            "description": "Fallback generic code pack.",
+            "priority": 0,
+            "source": None,
+            "root": None,
+            "detection": {},
+            "skills": [],
+            "skill_file": None,
+            "checks_file": None,
+            "protected_paths_file": None,
+            "memory_rules_file": None,
+            "memory": {},
+        }
+    fallback["detection_score"] = 0
+    fallback["detected"] = True
+    return fallback
+
+
+def pack_skill_entries(contract: dict[str, Any]) -> list[str]:
+    skills = contract.get("skills", [])
+    values = skills if isinstance(skills, list) else []
+    skill_file = contract.get("skill_file")
+    if isinstance(skill_file, str) and Path(skill_file).exists():
+        values = [*values, f"pack:{contract['name']}:SKILL.md"]
+    return normalize_unique_strings([str(value) for value in values])
 
 
 def isolated_process_module() -> Any:
@@ -1280,12 +1464,7 @@ def exchange_memory_candidates(run_dir: Path) -> list[dict[str, Any]]:
 
 
 def pack_memory_rule_paths(project_dir: Path, pack: str) -> list[Path]:
-    return [
-        project_dir / CONFIG_DIR / "packs" / pack / "memory-rules.json",
-        project_dir / CONFIG_DIR / "packs" / f"{pack}.memory-rules.json",
-        repository_root() / CONFIG_DIR / "packs" / pack / "memory-rules.json",
-        repository_root() / CONFIG_DIR / "packs" / f"{pack}.memory-rules.json",
-    ]
+    return pack_file_candidates(project_dir, pack, "memory-rules.json")
 
 
 def load_pack_memory_rules(project_dir: Path, pack: str) -> dict[str, Any]:
@@ -1297,7 +1476,17 @@ def load_pack_memory_rules(project_dir: Path, pack: str) -> dict[str, Any]:
         if not isinstance(rules, list):
             raise ValueError(f"{path} auto_promote must be a list")
         return {"source": str(path), "auto_promote": rules}
-    return {"source": None, "auto_promote": []}
+    try:
+        contract = load_pack_contract(project_dir, pack)
+    except ValueError:
+        return {"source": None, "auto_promote": []}
+    memory = contract.get("memory", {})
+    if not isinstance(memory, dict):
+        return {"source": None, "auto_promote": []}
+    rules = memory.get("auto_promote", [])
+    if not isinstance(rules, list):
+        raise ValueError(f"{contract.get('source')} memory.auto_promote must be a list")
+    return {"source": contract.get("source"), "auto_promote": rules}
 
 
 def pack_rule_allows_promotion(rules: dict[str, Any], proposal: dict[str, Any]) -> bool:
@@ -1685,6 +1874,7 @@ def create_run(
     project_dir: Path,
     task: str,
     *,
+    pack: str | None = None,
     success_checks: list[str] | None = None,
     selected_skills: list[str] | None = None,
     allowed_tools: list[str] | None = None,
@@ -1726,7 +1916,20 @@ def create_run(
     legacy_issue = legacy_issue_for_task(task_id)
     legacy_base_commit = base_commit or SYNTHETIC_LEGACY_BASE_COMMIT
     normalized_success_checks = normalize_nonempty_strings(success_checks)
-    normalized_skills = normalize_nonempty_strings(selected_skills)
+    if pack is None:
+        pack_contract = detect_project_pack(project_dir)
+        selected_pack = str(pack_contract["name"])
+        pack_detection = "auto"
+    else:
+        selected_pack = pack.strip()
+        if not selected_pack:
+            raise ValueError("pack must not be empty")
+        pack_contract = load_pack_contract(project_dir, selected_pack)
+        pack_detection = "explicit"
+    pack_skills = pack_skill_entries(pack_contract)
+    normalized_skills = normalize_unique_strings(
+        [*pack_skills, *normalize_nonempty_strings(selected_skills)]
+    )
     normalized_allowed_tools = normalize_nonempty_strings(allowed_tools) or list(
         DEFAULT_ALLOWED_TOOLS
     )
@@ -1745,7 +1948,20 @@ def create_run(
         "project_root": str(project_dir),
         "base_commit": base_commit,
         "profile": config["profile"],
-        "pack": DEFAULT_PACK,
+        "pack": selected_pack,
+        "pack_contract": {
+            "name": selected_pack,
+            "version": pack_contract.get("version"),
+            "description": pack_contract.get("description"),
+            "source": pack_contract.get("source"),
+            "detection": pack_detection,
+            "detection_score": pack_contract.get("detection_score", 0),
+            "skills": pack_skills,
+            "skill_file": pack_contract.get("skill_file"),
+            "checks_file": pack_contract.get("checks_file"),
+            "protected_paths_file": pack_contract.get("protected_paths_file"),
+            "memory_rules_file": pack_contract.get("memory_rules_file"),
+        },
         "status": contract_status,
         "created_at": now,
         "success_checks": normalized_success_checks,
@@ -1803,7 +2019,7 @@ def create_run(
             project_dir=project_dir,
             base_commit=base_commit,
             profile=str(config["profile"]),
-            pack=DEFAULT_PACK,
+            pack=selected_pack,
             skills=normalized_skills,
             allowed_tools=normalized_allowed_tools,
             success_checks=normalized_success_checks,
@@ -2307,12 +2523,7 @@ def update_run_after_attempt(
 
 
 def pack_check_paths(project_dir: Path, pack: str) -> list[Path]:
-    return [
-        project_dir / CONFIG_DIR / "packs" / pack / "checks.json",
-        project_dir / CONFIG_DIR / "packs" / f"{pack}.checks.json",
-        repository_root() / CONFIG_DIR / "packs" / pack / "checks.json",
-        repository_root() / CONFIG_DIR / "packs" / f"{pack}.checks.json",
-    ]
+    return pack_file_candidates(project_dir, pack, "checks.json")
 
 
 def load_pack_checks(project_dir: Path, pack: str) -> dict[str, Any]:
@@ -2480,6 +2691,68 @@ def run_json_check(command: list[str], cwd: Path, timeout: int = 60) -> dict[str
     }
 
 
+def pack_protected_path_paths(project_dir: Path, pack: str) -> list[Path]:
+    return pack_file_candidates(project_dir, pack, "protected-paths.json")
+
+
+def load_pack_protected_paths(project_dir: Path, pack: str) -> dict[str, Any]:
+    for path in pack_protected_path_paths(project_dir, pack):
+        if not path.exists():
+            continue
+        data = read_json(path)
+        high = data.get("high_path_patterns", [])
+        medium = data.get("medium_path_patterns", [])
+        for field_name, value in (
+            ("high_path_patterns", high),
+            ("medium_path_patterns", medium),
+        ):
+            if not isinstance(value, list) or not all(
+                isinstance(pattern, str) for pattern in value
+            ):
+                raise ValueError(f"{path} {field_name} must be a list of strings")
+        return {
+            "source": str(path),
+            "high_path_patterns": high,
+            "medium_path_patterns": medium,
+        }
+    return {
+        "source": None,
+        "high_path_patterns": [],
+        "medium_path_patterns": [],
+    }
+
+
+def merged_risk_policy_path(
+    *,
+    project_dir: Path,
+    run_dir: Path,
+    pack: str,
+) -> tuple[Path, list[str]]:
+    base = read_json(default_risk_policy())
+    protected = load_pack_protected_paths(project_dir, pack)
+    sources = [str(default_risk_policy())]
+    if protected["source"]:
+        sources.append(str(protected["source"]))
+    high_patterns = normalize_unique_strings(
+        [
+            *[str(pattern) for pattern in base.get("high_path_patterns", [])],
+            *[str(pattern) for pattern in protected.get("high_path_patterns", [])],
+        ]
+    )
+    medium_patterns = normalize_unique_strings(
+        [
+            *[str(pattern) for pattern in base.get("medium_path_patterns", [])],
+            *[str(pattern) for pattern in protected.get("medium_path_patterns", [])],
+        ]
+    )
+    merged = dict(base)
+    merged["high_path_patterns"] = high_patterns
+    merged["medium_path_patterns"] = medium_patterns
+    policy_path = run_dir / "artifacts" / "policies" / "risk-rules.merged.json"
+    write_json_atomic(policy_path, merged)
+    return policy_path, sources
+
+
 def verification_failure_parts(verification: dict[str, Any]) -> list[Any]:
     parts: list[Any] = []
     patch = verification.get("patch", {})
@@ -2528,6 +2801,7 @@ def render_verification_markdown(verification: dict[str, Any]) -> str:
         f"- Patch size bytes: {verification['patch'].get('size_bytes', 0)}",
         f"- Diff policy allowed: {str(verification['diff_policy'].get('allowed')).lower()}",
         f"- Risk: {verification['risk'].get('risk') or 'unknown'}",
+        f"- Risk policy: {verification['risk'].get('policy') or 'none'}",
         f"- Pack checks: {verification['checks_passed']}/{verification['checks_total']}",
         "",
         "## Diff Policy",
@@ -2556,6 +2830,11 @@ def render_verification_markdown(verification: dict[str, Any]) -> str:
                 )
     else:
         lines.append("- No risk elevation reasons recorded.")
+    sources = verification["risk"].get("policy_sources", [])
+    if sources:
+        lines.extend(["", "## Risk Policy Sources", ""])
+        for source in sources:
+            lines.append(f"- {source}")
     lines.extend(["", "## Pack Checks", ""])
     if verification["pack_checks_source"]:
         lines.append(f"- Source: {verification['pack_checks_source']}")
@@ -2653,6 +2932,8 @@ def verify_run(project_dir: Path) -> VerifyResult:
     }
     checks: list[dict[str, Any]] = []
     pack_checks_source: str | None = None
+    risk_policy_sources: list[str] = []
+    risk_policy_path: Path | None = None
 
     base_commit = run.get("base_commit")
     if not isinstance(base_commit, str) or not base_commit:
@@ -2741,6 +3022,16 @@ def verify_run(project_dir: Path) -> VerifyResult:
             diff_summary.update({"status": "failed", "error": error})
             blockers.append(f"diff policy failed: {error or 'unknown error'}")
 
+        try:
+            risk_policy_path, risk_policy_sources = merged_risk_policy_path(
+                project_dir=status.project_dir,
+                run_dir=run_dir,
+                pack=str(run.get("pack") or DEFAULT_PACK),
+            )
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            risk_summary.update({"status": "failed", "error": str(error)})
+            blockers.append(f"risk policy could not be loaded: {error}")
+
         risk_result = run_json_check(
             [
                 usable_python_executable(),
@@ -2750,7 +3041,7 @@ def verify_run(project_dir: Path) -> VerifyResult:
                 "--diff-policy",
                 str(default_diff_policy()),
                 "--risk-policy",
-                str(default_risk_policy()),
+                str(risk_policy_path or default_risk_policy()),
                 "--repo",
                 str(status.project_dir),
                 "--base",
@@ -2770,6 +3061,12 @@ def verify_run(project_dir: Path) -> VerifyResult:
                     "reasons": risk_payload.get("reasons", []),
                     "facts": risk_payload.get("facts", {}),
                     "human_gates": risk_payload.get("human_gates", {}),
+                    "policy": (
+                        relative_to_run(run_dir, risk_policy_path)
+                        if risk_policy_path is not None
+                        else str(default_risk_policy())
+                    ),
+                    "policy_sources": risk_policy_sources,
                     "status": "completed",
                 }
             )

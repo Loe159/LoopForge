@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "high_path_patterns": [
+    "build.gradle",
+    "build.gradle.kts",
+    "settings.gradle",
+    "settings.gradle.kts",
+    "gradle.properties",
+    "src/main/resources/META-INF/plugin.xml"
+  ],
+  "medium_path_patterns": [
+    "src/main/java/**",
+    "src/main/kotlin/**",
+    "src/test/**"
+  ]
+}

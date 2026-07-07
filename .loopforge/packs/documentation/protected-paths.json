@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "high_path_patterns": [],
+  "medium_path_patterns": [
+    "docs/**",
+    "**/*.md",
+    "**/*.rst"
+  ]
+}

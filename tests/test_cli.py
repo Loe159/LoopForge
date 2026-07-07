@@ -273,6 +273,101 @@ class CliTests(unittest.TestCase):
             self.assertIn("- Prefer small CLI changes.", run_memory)
             self.assertNotIn("old run transcript", run_memory)
 
+    def test_run_detects_python_pack_and_adds_pack_skills(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+            (repo / "pyproject.toml").write_text(
+                "[project]\nname = \"sample\"\nversion = \"0.1.0\"\n",
+                encoding="utf-8",
+            )
+
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(["run", "--task", "Update Python package metadata"]),
+                    0,
+                )
+                self.assertEqual(main(["status"]), 0)
+
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+            run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            loop_contract = (run_dir / "loop.md").read_text(encoding="utf-8")
+
+            self.assertEqual(run_json["pack"], "python")
+            self.assertEqual(run_json["pack_contract"]["detection"], "auto")
+            self.assertIn("python-testing", run_json["pack_contract"]["skills"])
+            self.assertIn("pack:python:SKILL.md", loop_contract)
+            self.assertIn("pack: python", output.getvalue())
+            self.assertIn("pack skills: 3", output.getvalue())
+
+    def test_project_local_pack_can_add_skills_without_engine_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+            (repo / "loopforge.custom").write_text("yes\n", encoding="utf-8")
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                custom_pack = repo / ".loopforge" / "packs" / "custom"
+                custom_pack.mkdir(parents=True)
+                (custom_pack / "pack.json").write_text(
+                    json.dumps(
+                        {
+                            "name": "custom",
+                            "version": 1,
+                            "description": "Custom project pack.",
+                            "priority": 50,
+                            "detection": {"files_any": ["loopforge.custom"]},
+                            "skills": ["custom-skill"],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                (custom_pack / "SKILL.md").write_text(
+                    "# Custom Pack\n\nCustom guidance.\n",
+                    encoding="utf-8",
+                )
+                self.assertEqual(main(["run", "--task", "Use custom pack"]), 0)
+
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+            run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            loop_contract = (run_dir / "loop.md").read_text(encoding="utf-8")
+
+            self.assertEqual(run_json["pack"], "custom")
+            self.assertIn("custom-skill", run_json["pack_contract"]["skills"])
+            self.assertIn("pack:custom:SKILL.md", loop_contract)
+
+    def test_pack_cli_lists_and_detects_packs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            (repo / "package.json").write_text('{"name": "sample"}\n', encoding="utf-8")
+
+            output = io.StringIO()
+            with working_directory(repo), contextlib.redirect_stdout(output):
+                self.assertEqual(main(["pack", "list"]), 0)
+                self.assertEqual(main(["pack", "detect"]), 0)
+
+            text = output.getvalue()
+            self.assertIn("generic-code:", text)
+            self.assertIn("node:", text)
+            self.assertIn("pack: node", text)
+
     def test_learn_proposes_memory_without_promoting_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)
@@ -833,6 +928,80 @@ class CliTests(unittest.TestCase):
             self.assertIn("verification: passed", output.getvalue())
             self.assertIn("diff policy allowed: True", output.getvalue())
             self.assertIn("risk: low", output.getvalue())
+
+    def test_pack_protected_paths_contribute_risk_rules(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True, text=True)
+            (repo / ".gitignore").write_text(".loopforge/\n", encoding="utf-8")
+            (repo / "pyproject.toml").write_text(
+                "[project]\nname = \"sample\"\nversion = \"0.1.0\"\n",
+                encoding="utf-8",
+            )
+            (repo / "sample.py").write_text("VALUE = 1\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "add", ".gitignore", "pyproject.toml", "sample.py"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=LoopForge Tests",
+                    "-c",
+                    "user.email=loopforge@example.invalid",
+                    "commit",
+                    "-m",
+                    "initial",
+                ],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(
+                        [
+                            "run",
+                            "--task",
+                            "Update Python package metadata",
+                            "--success-check",
+                            "pyproject version is updated",
+                        ]
+                    ),
+                    0,
+                )
+                (repo / "pyproject.toml").write_text(
+                    "[project]\nname = \"sample\"\nversion = \"0.2.0\"\n",
+                    encoding="utf-8",
+                )
+                self.assertEqual(main(["verify"]), 0)
+
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+            run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            verification = run_json["verification"]
+
+            self.assertEqual(run_json["pack"], "python")
+            self.assertEqual(verification["risk"]["risk"], "high")
+            self.assertIn("protected-paths.json", "\n".join(verification["risk"]["policy_sources"]))
+            self.assertTrue((run_dir / "artifacts" / "policies" / "risk-rules.merged.json").exists())
+            self.assertIn("risk policy:", output.getvalue())
 
     def test_verify_repeated_equivalent_failure_marks_stagnation(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -1,0 +1,15 @@
+{
+  "name": "generic-code",
+  "version": 1,
+  "description": "Default pack for small code changes when no domain-specific pack matches.",
+  "priority": 0,
+  "detection": {},
+  "skills": ["general-code-loop"],
+  "skill_file": "SKILL.md",
+  "checks_file": "checks.json",
+  "protected_paths_file": "protected-paths.json",
+  "memory_rules_file": "memory-rules.md",
+  "memory": {
+    "auto_promote": []
+  }
+}
