@@ -124,6 +124,8 @@ Implementation notes:
 
 ## Phase 2: Universal Run Model
 
+Status: completed on 2026-07-07.
+
 Define a product-native run layout:
 
 ```text
@@ -148,9 +150,27 @@ task to be a numeric GitHub issue. Introduce `task_id` while mapping legacy
 
 Done when:
 
-- new runs do not require GitHub;
-- existing imported validators can still validate the legacy artifacts;
-- `loopforge status` explains both native and legacy artifact state.
+- [x] new runs do not require GitHub;
+- [x] existing imported validators can still validate the legacy artifacts;
+- [x] `loopforge status` explains both native and legacy artifact state.
+
+Implementation notes:
+
+- The native run model uses `task_id` as the stable product identifier and keeps
+  `base_commit` optional when the target project is not a Git checkout.
+- Native run files live at the run root, while compatibility artifacts for the
+  imported `.agent` validator live under `artifacts/legacy-agent/` so the legacy
+  contract does not reject LoopForge-native Markdown files.
+- `run.json` records the generated legacy numeric `issue`, its source, the
+  legacy base commit, the legacy artifact directory, and the validator path.
+- For non-Git projects, the legacy artifact mirror uses an explicit synthetic
+  zero SHA only to satisfy the imported validator's historical full-SHA rule;
+  the native `base_commit` remains `null`.
+- `loopforge status` now reports native artifact completeness separately from
+  legacy artifact validity.
+- Current validation: `PYTHONPATH=src python -m unittest discover -s tests`
+  passes, including a direct call to `.agent/checks/validate_artifacts.py`
+  against generated legacy artifacts.
 
 ## Phase 3: Loop Design Contract
 

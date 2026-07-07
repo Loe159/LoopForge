@@ -9,6 +9,37 @@ from pathlib import Path
 from loopforge.engine import DEFAULT_PROFILE, create_run, current_status, initialize_project
 
 
+def print_native_artifacts(state: dict[str, object] | None) -> None:
+    if state is None:
+        return
+    print(f"native artifacts: {state['status']} ({state['present']}/{state['total']})")
+    missing_files = state.get("missing_files", [])
+    missing_directories = state.get("missing_directories", [])
+    if missing_files:
+        print(f"native missing files: {', '.join(str(name) for name in missing_files)}")
+    if missing_directories:
+        print(f"native missing directories: {', '.join(str(name) for name in missing_directories)}")
+
+
+def print_legacy_artifacts(state: dict[str, object] | None) -> None:
+    if state is None:
+        return
+    print(f"legacy artifacts: {state['status']}")
+    print(f"legacy issue: {state.get('issue') or 'none'}")
+    print(f"legacy artifact directory: {state.get('artifact_dir') or 'none'}")
+    errors = state.get("errors", [])
+    if errors:
+        print("legacy artifact notes:")
+        for error in errors:
+            if isinstance(error, dict):
+                artifact = error.get("artifact", "*")
+                rule = error.get("rule", "note")
+                message = error.get("message", error)
+                print(f"- {artifact} {rule}: {message}")
+            else:
+                print(f"- {error}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="loopforge")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -88,6 +119,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"current run: {result.config.get('current_run_id') or 'none'}")
             if result.run_dir is not None:
                 print(f"run directory: {result.run_dir}")
+                print_native_artifacts(result.native_artifacts)
             print("blockers:")
             if result.blockers:
                 for blocker in result.blockers:
@@ -104,6 +136,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"pack: {run['pack']}")
         print(f"base commit: {run.get('base_commit') or 'none'}")
         print(f"run directory: {result.run_dir}")
+        print_native_artifacts(result.native_artifacts)
+        print_legacy_artifacts(result.legacy_artifacts)
         print("blockers:")
         if result.blockers:
             for blocker in result.blockers:

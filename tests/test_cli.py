@@ -5,6 +5,7 @@ import io
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -145,7 +146,11 @@ class CliTests(unittest.TestCase):
             self.assertEqual(run_json["status"], "ready_for_verification")
             self.assertEqual(run_json["success_checks"], [])
             self.assertEqual(run_json["blockers"], [])
-            self.assertEqual(run_json["legacy"]["issue"], None)
+            self.assertEqual(run_json["legacy"]["issue_source"], "generated_from_task_id")
+            self.assertIsInstance(run_json["legacy"]["issue"], int)
+            self.assertGreater(run_json["legacy"]["issue"], 0)
+            self.assertEqual(run_json["legacy"]["base_commit"], base_commit)
+            self.assertEqual(run_json["legacy"]["base_commit_source"], "git")
 
             for file_name in (
                 "task.md",
@@ -160,6 +165,30 @@ class CliTests(unittest.TestCase):
                 self.assertTrue((run_dir / file_name).exists(), file_name)
             for directory_name in ("attempts", "artifacts", "metrics"):
                 self.assertTrue((run_dir / directory_name).is_dir(), directory_name)
+
+            legacy_dir = Path(run_json["legacy"]["artifact_dir"])
+            self.assertEqual(legacy_dir, run_dir / "artifacts" / "legacy-agent")
+            for file_name in (
+                "task.md",
+                "research.md",
+                "plan.md",
+                "progress.md",
+                "verification.md",
+                "review.md",
+            ):
+                self.assertTrue((legacy_dir / file_name).exists(), file_name)
+            validation = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(run_json["legacy"]["validator"])),
+                    "--run",
+                    str(legacy_dir),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(validation.returncode, 0, validation.stdout + validation.stderr)
 
             exchange = json.loads((run_dir / "exchange.json").read_text(encoding="utf-8"))
             self.assertEqual(exchange["run_id"], run_id)
@@ -227,8 +256,66 @@ class CliTests(unittest.TestCase):
             self.assertIn("task: Add status output", text)
             self.assertIn("profile: supervised", text)
             self.assertIn("loop status: ready_for_verification", text)
+            self.assertIn("native artifacts: complete", text)
+            self.assertIn("legacy artifacts: valid", text)
+            self.assertIn("legacy issue:", text)
             self.assertIn("blockers:\n- none", text)
             self.assertIn("next step: Review the run artifacts", text)
+
+    def test_run_without_git_uses_native_task_id_and_legacy_sentinel(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(main(["run", "--task", "Write docs without GitHub"]), 0)
+                self.assertEqual(main(["status"]), 0)
+
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+            run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            self.assertEqual(run_json["task_id"], run_json["run_id"])
+            self.assertIsNone(run_json["base_commit"])
+            self.assertEqual(run_json["legacy"]["base_commit"], "0" * 40)
+            self.assertEqual(run_json["legacy"]["base_commit_source"], "synthetic_no_git_sentinel")
+            self.assertIn("legacy artifacts: valid", output.getvalue())
+
+    def test_status_reports_invalid_legacy_artifact_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(main(["run", "--task", "Notice missing legacy file"]), 0)
+
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+            run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            (Path(run_json["legacy"]["artifact_dir"]) / "review.md").unlink()
+
+            output = io.StringIO()
+            with working_directory(repo), contextlib.redirect_stdout(output):
+                self.assertEqual(main(["status"]), 0)
+
+            text = output.getvalue()
+            self.assertIn("native artifacts: complete", text)
+            self.assertIn("legacy artifacts: missing", text)
+            self.assertIn("missing legacy artifacts: review.md", text)
 
     def test_status_reports_missing_current_run_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
