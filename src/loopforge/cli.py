@@ -1,19 +1,27 @@
-"""Initial LoopForge CLI placeholder."""
+"""Command line interface for LoopForge."""
 
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
+
+from loopforge.engine import DEFAULT_PROFILE, initialize_project
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="loopforge")
     subcommands = parser.add_subparsers(dest="command", required=True)
 
-    subcommands.add_parser("init", help="Initialize LoopForge metadata for a project.")
-    subcommands.add_parser("status", help="Show the current LoopForge run state.")
-
-    run_parser = subcommands.add_parser("run", help="Create a run from a task.")
-    run_parser.add_argument("--task", required=True, help="Task description.")
+    init_parser = subcommands.add_parser(
+        "init",
+        help="Initialize LoopForge metadata for a project.",
+    )
+    init_parser.add_argument(
+        "--profile",
+        default=DEFAULT_PROFILE,
+        choices=("assist", "supervised", "autonomous", "strict"),
+        help="Autonomy profile to store in .loopforge/config.json.",
+    )
 
     return parser
 
@@ -22,13 +30,17 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command == "init":
-        print("LoopForge init is planned; see docs/implementation-plan.md.")
-        return 0
-    if args.command == "status":
-        print("LoopForge status is planned; see docs/implementation-plan.md.")
-        return 0
-    if args.command == "run":
-        print(f"LoopForge run is planned for task: {args.task}")
+        result = initialize_project(Path.cwd(), profile=args.profile)
+        if result.created:
+            action = "initialized"
+        elif result.repaired:
+            action = "repaired"
+        else:
+            action = "already initialized"
+        print(f"LoopForge {action}: {result.config_path}")
+        print(f"project: {result.config['project_name']}")
+        print(f"profile: {result.config['profile']}")
+        print(f"run root: {result.config['run_root']}")
         return 0
     parser.error(f"unknown command: {args.command}")
     return 2
