@@ -24,6 +24,8 @@ READY_FOR_VERIFICATION = "ready_for_verification"
 ADAPTER_BLOCKED = "adapter_blocked"
 LOOP_CONTRACT_DRAFT = "loop_contract_draft"
 LOOP_CONTRACT_READY = "loop_contract_ready"
+VERIFIED = "verified"
+VERIFICATION_FAILED = "verification_failed"
 SYNTHETIC_LEGACY_BASE_COMMIT = "0" * 40
 
 SUPPORTED_ADAPTERS = (
@@ -246,6 +248,7 @@ class StatusResult:
     native_artifacts: dict[str, Any] | None
     legacy_artifacts: dict[str, Any] | None
     loop_contract: dict[str, Any] | None
+    verification: dict[str, Any] | None
     next_step: str
     blockers: list[str]
 
@@ -260,6 +263,17 @@ class ContinueResult:
     message: str
     blockers: list[str]
     attempt: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class VerifyResult:
+    project_dir: Path
+    run_dir: Path | None
+    run: dict[str, Any] | None
+    ok: bool
+    message: str
+    blockers: list[str]
+    verification: dict[str, Any] | None = None
 
 
 def utc_now() -> str:
@@ -357,6 +371,18 @@ def legacy_artifact_validator() -> Path:
 
 def local_implementation_adapter() -> Path:
     return repository_root() / ".agent" / "adapters" / "local_implementation_adapter.py"
+
+
+def imported_check(name: str) -> Path:
+    return repository_root() / ".agent" / "checks" / name
+
+
+def default_diff_policy() -> Path:
+    return repository_root() / ".agent" / "policies" / "diff-policy.json"
+
+
+def default_risk_policy() -> Path:
+    return repository_root() / ".agent" / "policies" / "risk-rules.json"
 
 
 def isolated_process_module() -> Any:
@@ -694,6 +720,11 @@ def legacy_artifact_state(run: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def verification_state(run: dict[str, Any]) -> dict[str, Any] | None:
+    verification = run.get("verification")
+    return verification if isinstance(verification, dict) else None
+
+
 def new_config(
     project_dir: Path,
     profile: str = DEFAULT_PROFILE,
@@ -949,7 +980,11 @@ def describe_next_step(run: dict[str, Any]) -> str:
     if status == ADAPTER_BLOCKED:
         return "Inspect the latest attempt artifacts, resolve blockers, then continue again."
     if status == READY_FOR_VERIFICATION:
-        return "Review the run artifacts, then add verification in the next implementation phase."
+        return "Run `loopforge verify` to generate the patch and run pack checks."
+    if status == VERIFICATION_FAILED:
+        return "Inspect verification.md, fix the diagnostic, then run `loopforge verify` again."
+    if status == VERIFIED:
+        return "Review the verified patch and decide whether to continue, commit, or hand off."
     return "Inspect the run artifacts and decide the next bounded action."
 
 
@@ -968,6 +1003,7 @@ def current_status(project_dir: Path) -> StatusResult:
             native_artifacts=None,
             legacy_artifacts=None,
             loop_contract=None,
+            verification=None,
             next_step="Initialize LoopForge with `loopforge init`.",
             blockers=[],
         )
@@ -986,6 +1022,7 @@ def current_status(project_dir: Path) -> StatusResult:
             native_artifacts=None,
             legacy_artifacts=None,
             loop_contract=None,
+            verification=None,
             next_step='Create a run with `loopforge run --task "..."`.',
             blockers=[],
         )
@@ -1004,6 +1041,7 @@ def current_status(project_dir: Path) -> StatusResult:
             native_artifacts=native_artifact_state(run_dir) if run_dir.exists() else None,
             legacy_artifacts=None,
             loop_contract=loop_contract_state(run_dir / "loop.md") if run_dir.exists() else None,
+            verification=None,
             next_step="Restore the missing run artifacts or create a new run.",
             blockers=[f"current run metadata not found: {run_json_path}"],
         )
@@ -1026,6 +1064,7 @@ def current_status(project_dir: Path) -> StatusResult:
         native_artifacts=native_artifact_state(run_dir),
         legacy_artifacts=legacy_artifact_state(run),
         loop_contract=contract,
+        verification=verification_state(run),
         next_step=describe_next_step(run),
         blockers=blockers,
     )
@@ -1651,6 +1690,550 @@ def update_run_after_attempt(
         ]
     write_json_atomic(run_json_path, updated)
     return updated
+
+
+def pack_check_paths(project_dir: Path, pack: str) -> list[Path]:
+    return [
+        project_dir / CONFIG_DIR / "packs" / pack / "checks.json",
+        project_dir / CONFIG_DIR / "packs" / f"{pack}.checks.json",
+        repository_root() / CONFIG_DIR / "packs" / pack / "checks.json",
+        repository_root() / CONFIG_DIR / "packs" / f"{pack}.checks.json",
+    ]
+
+
+def load_pack_checks(project_dir: Path, pack: str) -> dict[str, Any]:
+    for path in pack_check_paths(project_dir, pack):
+        if not path.exists():
+            continue
+        data = read_json(path)
+        checks = data.get("checks", [])
+        if not isinstance(checks, list):
+            raise ValueError(f"{path} must contain a checks list")
+        normalized: list[dict[str, Any]] = []
+        for index, check in enumerate(checks, start=1):
+            if not isinstance(check, dict):
+                raise ValueError(f"{path} check {index} must be an object")
+            name = str(check.get("name") or f"check-{index}").strip()
+            command = check.get("command")
+            if not isinstance(command, list) or not command or not all(
+                isinstance(part, str) and part for part in command
+            ):
+                raise ValueError(f"{path} check {name} must define a non-empty command list")
+            env = check.get("env", {})
+            if not isinstance(env, dict) or not all(
+                isinstance(key, str) and isinstance(value, str)
+                for key, value in env.items()
+            ):
+                raise ValueError(f"{path} check {name} env must be an object of strings")
+            timeout = check.get("timeout_seconds", 300)
+            if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout < 1:
+                raise ValueError(f"{path} check {name} timeout_seconds must be positive")
+            normalized.append(
+                {
+                    "name": name,
+                    "command": command,
+                    "env": env,
+                    "timeout_seconds": timeout,
+                }
+            )
+        return {
+            "source": str(path),
+            "checks": normalized,
+        }
+    return {
+        "source": None,
+        "checks": [],
+    }
+
+
+def expand_check_value(
+    value: str,
+    *,
+    project_dir: Path,
+    run_dir: Path,
+    patch_path: Path | None,
+) -> str:
+    replacements = {
+        "{python}": usable_python_executable(),
+        "{repo}": str(project_dir),
+        "{run_dir}": str(run_dir),
+        "{patch}": str(patch_path or ""),
+    }
+    expanded = value
+    for token, replacement in replacements.items():
+        expanded = expanded.replace(token, replacement)
+    return expanded
+
+
+def run_pack_check(
+    check: dict[str, Any],
+    *,
+    project_dir: Path,
+    run_dir: Path,
+    patch_path: Path | None,
+) -> dict[str, Any]:
+    command = [
+        expand_check_value(
+            part,
+            project_dir=project_dir,
+            run_dir=run_dir,
+            patch_path=patch_path,
+        )
+        for part in check["command"]
+    ]
+    env = os.environ.copy()
+    for key, value in check.get("env", {}).items():
+        env[key] = expand_check_value(
+            value,
+            project_dir=project_dir,
+            run_dir=run_dir,
+            patch_path=patch_path,
+        )
+    started = utc_now()
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=project_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=int(check["timeout_seconds"]),
+            check=False,
+        )
+        return {
+            "name": check["name"],
+            "command": command,
+            "started_at": started,
+            "finished_at": utc_now(),
+            "status": "passed" if completed.returncode == 0 else "failed",
+            "returncode": completed.returncode,
+            "stdout": completed.stdout[-4000:],
+            "stderr": completed.stderr[-4000:],
+            "timed_out": False,
+        }
+    except subprocess.TimeoutExpired as error:
+        return {
+            "name": check["name"],
+            "command": command,
+            "started_at": started,
+            "finished_at": utc_now(),
+            "status": "timed_out",
+            "returncode": None,
+            "stdout": (error.stdout or "")[-4000:]
+            if isinstance(error.stdout, str)
+            else "",
+            "stderr": (error.stderr or "")[-4000:]
+            if isinstance(error.stderr, str)
+            else "",
+            "timed_out": True,
+        }
+    except OSError as error:
+        return {
+            "name": check["name"],
+            "command": command,
+            "started_at": started,
+            "finished_at": utc_now(),
+            "status": "failed",
+            "returncode": None,
+            "stdout": "",
+            "stderr": str(error),
+            "timed_out": False,
+        }
+
+
+def run_json_check(command: list[str], cwd: Path, timeout: int = 60) -> dict[str, Any]:
+    completed = subprocess.run(
+        command,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    payload: dict[str, Any] | None = None
+    if completed.stdout.strip():
+        try:
+            parsed = json.loads(completed.stdout)
+            if isinstance(parsed, dict):
+                payload = parsed
+        except json.JSONDecodeError:
+            payload = None
+    return {
+        "returncode": completed.returncode,
+        "stdout": completed.stdout,
+        "stderr": completed.stderr,
+        "json": payload,
+    }
+
+
+def verification_failure_parts(verification: dict[str, Any]) -> list[Any]:
+    parts: list[Any] = []
+    patch = verification.get("patch", {})
+    if isinstance(patch, dict) and patch.get("status") == "failed":
+        parts.append({"patch_error": patch.get("error")})
+    diff_policy = verification.get("diff_policy", {})
+    if isinstance(diff_policy, dict) and diff_policy.get("allowed") is False:
+        violations = diff_policy.get("violations", [])
+        rules = []
+        if isinstance(violations, list):
+            for violation in violations:
+                if isinstance(violation, dict):
+                    rules.append(violation.get("rule"))
+        parts.append({"policy_violations": sorted(str(rule) for rule in rules if rule)})
+    checks = verification.get("checks", [])
+    if isinstance(checks, list):
+        for check in checks:
+            if isinstance(check, dict) and check.get("status") != "passed":
+                parts.append(
+                    {
+                        "check": check.get("name"),
+                        "status": check.get("status"),
+                        "returncode": check.get("returncode"),
+                    }
+                )
+    return parts
+
+
+def failure_signature(verification: dict[str, Any]) -> str | None:
+    parts = verification_failure_parts(verification)
+    if not parts:
+        return None
+    encoded = json.dumps(parts, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def render_verification_markdown(verification: dict[str, Any]) -> str:
+    lines = [
+        "# Verification",
+        "",
+        f"- Started: {verification['started_at']}",
+        f"- Finished: {verification['finished_at']}",
+        f"- Status: {verification['status']}",
+        f"- Patch generated: {'yes' if verification['patch'].get('generated') else 'no'}",
+        f"- Patch: {verification['patch'].get('path') or 'none'}",
+        f"- Patch size bytes: {verification['patch'].get('size_bytes', 0)}",
+        f"- Diff policy allowed: {str(verification['diff_policy'].get('allowed')).lower()}",
+        f"- Risk: {verification['risk'].get('risk') or 'unknown'}",
+        f"- Pack checks: {verification['checks_passed']}/{verification['checks_total']}",
+        "",
+        "## Diff Policy",
+        "",
+    ]
+    violations = verification["diff_policy"].get("violations", [])
+    if violations:
+        for violation in violations:
+            if isinstance(violation, dict):
+                lines.append(
+                    f"- {violation.get('rule', 'violation')}: "
+                    f"{violation.get('message', '')}"
+                )
+            else:
+                lines.append(f"- {violation}")
+    else:
+        lines.append("- No deterministic policy violations recorded.")
+    lines.extend(["", "## Risk", ""])
+    reasons = verification["risk"].get("reasons", [])
+    if reasons:
+        for reason in reasons:
+            if isinstance(reason, dict):
+                lines.append(
+                    f"- {reason.get('level', 'unknown')} {reason.get('rule', 'reason')}: "
+                    f"{reason.get('message', '')}"
+                )
+    else:
+        lines.append("- No risk elevation reasons recorded.")
+    lines.extend(["", "## Pack Checks", ""])
+    if verification["pack_checks_source"]:
+        lines.append(f"- Source: {verification['pack_checks_source']}")
+    else:
+        lines.append("- Source: none")
+    if verification["checks"]:
+        for check in verification["checks"]:
+            lines.append(
+                f"- {check['name']}: {check['status']} "
+                f"(returncode: {check['returncode']})"
+            )
+    else:
+        lines.append("- No pack checks configured.")
+    if verification["blockers"]:
+        lines.extend(["", "## Diagnostics", ""])
+        for blocker in verification["blockers"]:
+            lines.append(f"- {blocker}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def update_loop_diagnostic(run_dir: Path, verification: dict[str, Any]) -> None:
+    loop_path = run_dir / "loop.md"
+    if not loop_path.exists():
+        return
+    text = loop_path.read_text(encoding="utf-8")
+    marker = "# Current Attempt"
+    diagnostic = (
+        "# Current Attempt\n\n"
+        f"Verification status: {verification['status']}.\n"
+        f"Patch: {verification['patch'].get('path') or 'none'}.\n"
+        f"Risk: {verification['risk'].get('risk') or 'unknown'}.\n"
+    )
+    if verification["blockers"]:
+        diagnostic += (
+            "Blockers:\n"
+            + "\n".join(f"- {item}" for item in verification["blockers"])
+            + "\n"
+        )
+    if marker not in text:
+        loop_path.write_text(text.rstrip() + "\n\n" + diagnostic, encoding="utf-8")
+        return
+    before = text.split(marker, 1)[0].rstrip()
+    loop_path.write_text(before + "\n\n" + diagnostic, encoding="utf-8")
+
+
+def verify_run(project_dir: Path) -> VerifyResult:
+    status = current_status(project_dir)
+    if not status.initialized:
+        return VerifyResult(
+            project_dir=status.project_dir,
+            run_dir=None,
+            run=None,
+            ok=False,
+            message="Initialize LoopForge before verification.",
+            blockers=[status.next_step],
+        )
+    if status.run is None or status.run_dir is None:
+        return VerifyResult(
+            project_dir=status.project_dir,
+            run_dir=status.run_dir,
+            run=None,
+            ok=False,
+            message="No current run is ready for verification.",
+            blockers=status.blockers or [status.next_step],
+        )
+
+    run = status.run
+    run_dir = status.run_dir
+    run_json_path = status.run_json_path or (run_dir / "run.json")
+    started = utc_now()
+    patch_dir = run_dir / "artifacts" / "patches"
+    patch_path = patch_dir / "complete.patch"
+    blockers: list[str] = []
+    patch_summary: dict[str, Any] = {
+        "generated": False,
+        "path": None,
+        "size_bytes": 0,
+        "sha256": None,
+        "status": "not_run",
+    }
+    diff_summary: dict[str, Any] = {
+        "allowed": None,
+        "facts": {},
+        "violations": [],
+        "status": "not_run",
+    }
+    risk_summary: dict[str, Any] = {
+        "risk": None,
+        "route": None,
+        "policy_allowed": None,
+        "reasons": [],
+        "facts": {},
+        "status": "not_run",
+    }
+    checks: list[dict[str, Any]] = []
+    pack_checks_source: str | None = None
+
+    base_commit = run.get("base_commit")
+    if not isinstance(base_commit, str) or not base_commit:
+        blockers.append("patch generation requires a Git base_commit recorded in run.json.")
+    else:
+        generator = imported_check("generate_complete_patch.py")
+        generated = run_json_check(
+            [
+                usable_python_executable(),
+                str(generator),
+                "--repo",
+                str(status.project_dir),
+                "--base",
+                base_commit,
+                "--output",
+                str(patch_path),
+                "--policy",
+                str(default_diff_policy()),
+                "--force",
+                "--format",
+                "json",
+            ],
+            cwd=repository_root(),
+        )
+        if generated["returncode"] != 0 or generated["json"] is None:
+            error = generated["stderr"].strip() or generated["stdout"].strip()
+            patch_summary.update({"status": "failed", "error": error})
+            blockers.append(f"patch generation failed: {error or 'unknown error'}")
+        else:
+            patch_result = generated["json"]
+            artifact = patch_result.get("artifact", {})
+            if not isinstance(artifact, dict):
+                artifact = {}
+            patch_summary.update(
+                {
+                    "generated": bool(artifact.get("retained", False)),
+                    "path": relative_to_run(run_dir, patch_path) if artifact.get("retained") else None,
+                    "size_bytes": artifact.get("size_bytes", 0),
+                    "sha256": artifact.get("sha256"),
+                    "status": "generated" if artifact.get("retained") else "not_retained",
+                }
+            )
+            diff_summary.update(
+                {
+                    "allowed": bool(patch_result.get("allowed", False)),
+                    "facts": patch_result.get("facts", {}),
+                    "violations": patch_result.get("violations", []),
+                    "status": "completed",
+                }
+            )
+            if not diff_summary["allowed"]:
+                blockers.append("diff policy blocked the generated patch.")
+
+    if patch_path.exists() and isinstance(base_commit, str) and base_commit:
+        diff_result = run_json_check(
+            [
+                usable_python_executable(),
+                str(imported_check("diff_policy.py")),
+                "--patch",
+                str(patch_path),
+                "--policy",
+                str(default_diff_policy()),
+                "--repo",
+                str(status.project_dir),
+                "--base",
+                str(base_commit),
+                "--format",
+                "json",
+            ],
+            cwd=repository_root(),
+        )
+        if diff_result["returncode"] == 0 and diff_result["json"] is not None:
+            diff_payload = diff_result["json"]
+            diff_summary.update(
+                {
+                    "allowed": bool(diff_payload.get("allowed", False)),
+                    "facts": diff_payload.get("facts", {}),
+                    "violations": diff_payload.get("violations", []),
+                    "status": "completed",
+                }
+            )
+            if not diff_summary["allowed"]:
+                append_unique(blockers, "diff policy blocked the generated patch.")
+        else:
+            error = diff_result["stderr"].strip() or diff_result["stdout"].strip()
+            diff_summary.update({"status": "failed", "error": error})
+            blockers.append(f"diff policy failed: {error or 'unknown error'}")
+
+        risk_result = run_json_check(
+            [
+                usable_python_executable(),
+                str(imported_check("classify_patch_risk.py")),
+                "--patch",
+                str(patch_path),
+                "--diff-policy",
+                str(default_diff_policy()),
+                "--risk-policy",
+                str(default_risk_policy()),
+                "--repo",
+                str(status.project_dir),
+                "--base",
+                str(base_commit),
+                "--format",
+                "json",
+            ],
+            cwd=repository_root(),
+        )
+        if risk_result["returncode"] == 0 and risk_result["json"] is not None:
+            risk_payload = risk_result["json"]
+            risk_summary.update(
+                {
+                    "risk": risk_payload.get("risk"),
+                    "route": risk_payload.get("route"),
+                    "policy_allowed": risk_payload.get("policy_allowed"),
+                    "reasons": risk_payload.get("reasons", []),
+                    "facts": risk_payload.get("facts", {}),
+                    "human_gates": risk_payload.get("human_gates", {}),
+                    "status": "completed",
+                }
+            )
+        else:
+            error = risk_result["stderr"].strip() or risk_result["stdout"].strip()
+            risk_summary.update({"status": "failed", "error": error})
+            blockers.append(f"risk classification failed: {error or 'unknown error'}")
+
+    try:
+        pack_config = load_pack_checks(status.project_dir, str(run.get("pack") or DEFAULT_PACK))
+        pack_checks_source = pack_config.get("source")
+        for check in pack_config["checks"]:
+            result = run_pack_check(
+                check,
+                project_dir=status.project_dir,
+                run_dir=run_dir,
+                patch_path=patch_path if patch_path.exists() else None,
+            )
+            checks.append(result)
+            if result["status"] != "passed":
+                blockers.append(f"pack check failed: {result['name']} ({result['status']}).")
+    except ValueError as error:
+        blockers.append(f"pack checks could not be loaded: {error}")
+
+    finished = utc_now()
+    checks_passed = sum(1 for check in checks if check.get("status") == "passed")
+    verification: dict[str, Any] = {
+        "version": 1,
+        "started_at": started,
+        "finished_at": finished,
+        "status": "failed" if blockers else "passed",
+        "patch": patch_summary,
+        "diff_policy": diff_summary,
+        "risk": risk_summary,
+        "pack": run.get("pack") or DEFAULT_PACK,
+        "pack_checks_source": pack_checks_source,
+        "checks": checks,
+        "checks_total": len(checks),
+        "checks_passed": checks_passed,
+        "blockers": blockers,
+    }
+    signature = failure_signature(verification)
+    if signature:
+        previous = verification_state(run)
+        if (
+            isinstance(previous, dict)
+            and previous.get("failure_signature") == signature
+            and previous.get("status") == "failed"
+        ):
+            verification["stagnated"] = True
+            append_unique(blockers, "stagnation: repeated equivalent verification failure.")
+        verification["failure_signature"] = signature
+    verification["blockers"] = blockers
+    if blockers:
+        verification["status"] = "failed"
+
+    (run_dir / "verification.md").write_text(
+        render_verification_markdown(verification),
+        encoding="utf-8",
+    )
+    update_loop_diagnostic(run_dir, verification)
+
+    updated_run = dict(run)
+    updated_run["verification"] = verification
+    updated_run["updated_at"] = utc_now()
+    updated_run["status"] = VERIFIED if not blockers else VERIFICATION_FAILED
+    updated_run["blockers"] = [] if not blockers else blockers
+    write_json_atomic(run_json_path, updated_run)
+
+    return VerifyResult(
+        project_dir=status.project_dir,
+        run_dir=run_dir,
+        run=updated_run,
+        ok=not blockers,
+        message="LoopForge verification passed." if not blockers else "LoopForge verification failed.",
+        blockers=blockers,
+        verification=verification,
+    )
 
 
 def continue_run(

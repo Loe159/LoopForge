@@ -13,6 +13,7 @@ from loopforge.engine import (
     create_run,
     current_status,
     initialize_project,
+    verify_run,
 )
 
 
@@ -60,6 +61,25 @@ def print_loop_contract(state: dict[str, object] | None) -> None:
         print("loop contract notes:")
         for error in errors:
             print(f"- {error}")
+
+
+def print_verification(state: dict[str, object] | None) -> None:
+    if state is None:
+        return
+    print(f"verification: {state.get('status', 'unknown')}")
+    patch = state.get("patch", {})
+    if isinstance(patch, dict):
+        print(f"patch: {patch.get('path') or 'none'}")
+        print(f"patch size bytes: {patch.get('size_bytes', 0)}")
+    diff_policy = state.get("diff_policy", {})
+    if isinstance(diff_policy, dict):
+        print(f"diff policy allowed: {diff_policy.get('allowed')}")
+    risk = state.get("risk", {})
+    if isinstance(risk, dict):
+        print(f"risk: {risk.get('risk') or 'unknown'}")
+    print(f"pack checks: {state.get('checks_passed', 0)}/{state.get('checks_total', 0)}")
+    if state.get("stagnated"):
+        print("stagnation: yes")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -140,6 +160,11 @@ def build_parser() -> argparse.ArgumentParser:
         "adapter_args",
         nargs=argparse.REMAINDER,
         help="Arguments passed to the adapter command after --.",
+    )
+
+    subcommands.add_parser(
+        "verify",
+        help="Generate a complete patch and run deterministic pack verification.",
     )
 
     return parser
@@ -224,6 +249,7 @@ def main(argv: list[str] | None = None) -> int:
         print_native_artifacts(result.native_artifacts)
         print_loop_contract(result.loop_contract)
         print_legacy_artifacts(result.legacy_artifacts)
+        print_verification(result.verification)
         print("blockers:")
         if result.blockers:
             for blocker in result.blockers:
@@ -251,6 +277,35 @@ def main(argv: list[str] | None = None) -> int:
             print(f"workspace changed: {result.attempt['workspace_changed']}", file=output)
             print(f"stdout: {result.attempt['stdout_path']}", file=output)
             print(f"stderr: {result.attempt['stderr_path']}", file=output)
+        if result.blockers:
+            print("blockers:", file=output)
+            for blocker in result.blockers:
+                print(f"- {blocker}", file=output)
+        return 0 if result.ok else 1
+    if args.command == "verify":
+        result = verify_run(Path.cwd())
+        output = sys.stdout if result.ok else sys.stderr
+        print(result.message, file=output)
+        if result.run_dir is not None:
+            print(f"run directory: {result.run_dir}", file=output)
+        if result.verification is not None:
+            patch = result.verification.get("patch", {})
+            diff_policy = result.verification.get("diff_policy", {})
+            risk = result.verification.get("risk", {})
+            print(f"verification: {result.verification['status']}", file=output)
+            if isinstance(patch, dict):
+                print(f"patch: {patch.get('path') or 'none'}", file=output)
+                print(f"patch size bytes: {patch.get('size_bytes', 0)}", file=output)
+            if isinstance(diff_policy, dict):
+                print(f"diff policy allowed: {diff_policy.get('allowed')}", file=output)
+            if isinstance(risk, dict):
+                print(f"risk: {risk.get('risk') or 'unknown'}", file=output)
+            print(
+                "pack checks: "
+                f"{result.verification.get('checks_passed', 0)}/"
+                f"{result.verification.get('checks_total', 0)}",
+                file=output,
+            )
         if result.blockers:
             print("blockers:", file=output)
             for blocker in result.blockers:

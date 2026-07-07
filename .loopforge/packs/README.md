@@ -12,6 +12,26 @@ A pack should define:
 - task-specific skills;
 - memory promotion rules.
 
+Verification commands can be configured without editing engine code by adding
+`checks.json` under `.loopforge/packs/<pack-name>/`.
+
+```json
+{
+  "version": 1,
+  "checks": [
+    {
+      "name": "git-diff-check",
+      "command": ["git", "diff", "--check"],
+      "timeout_seconds": 60
+    }
+  ]
+}
+```
+
+Commands are executed without a shell from the target repository. Command and
+environment string values can use `{python}`, `{repo}`, `{run_dir}`, and
+`{patch}` placeholders.
+
 Examples planned:
 
 - `generic-code`

@@ -543,6 +543,182 @@ class CliTests(unittest.TestCase):
             self.assertIn("blocked state", error.getvalue())
             self.assertIn("Fixture command failed with return code 3.", error.getvalue())
 
+    def test_verify_generates_patch_policy_risk_and_pack_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True, text=True)
+            (repo / ".gitignore").write_text(".loopforge/\n", encoding="utf-8")
+            (repo / "README.md").write_text("# Project\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "add", ".gitignore", "README.md"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=LoopForge Tests",
+                    "-c",
+                    "user.email=loopforge@example.invalid",
+                    "commit",
+                    "-m",
+                    "initial",
+                ],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(
+                        [
+                            "run",
+                            "--task",
+                            "Update README",
+                            "--success-check",
+                            "README contains the new line",
+                        ]
+                    ),
+                    0,
+                )
+                (repo / "README.md").write_text("# Project\n\nUpdated.\n", encoding="utf-8")
+                self.assertEqual(main(["verify"]), 0)
+                self.assertEqual(main(["status"]), 0)
+
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+            run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            verification = run_json["verification"]
+
+            self.assertEqual(run_json["status"], "verified")
+            self.assertEqual(verification["status"], "passed")
+            self.assertEqual(verification["diff_policy"]["allowed"], True)
+            self.assertEqual(verification["risk"]["risk"], "low")
+            self.assertEqual(verification["checks_passed"], 1)
+            self.assertTrue((run_dir / "artifacts" / "patches" / "complete.patch").exists())
+            self.assertIn("README.md", (run_dir / "artifacts" / "patches" / "complete.patch").read_text())
+            self.assertIn("verification: passed", output.getvalue())
+            self.assertIn("diff policy allowed: True", output.getvalue())
+            self.assertIn("risk: low", output.getvalue())
+
+    def test_verify_repeated_equivalent_failure_marks_stagnation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True, text=True)
+            (repo / ".gitignore").write_text(".loopforge/\n", encoding="utf-8")
+            (repo / "README.md").write_text("# Project\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "add", ".gitignore", "README.md"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=LoopForge Tests",
+                    "-c",
+                    "user.email=loopforge@example.invalid",
+                    "commit",
+                    "-m",
+                    "initial",
+                ],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                checks_dir = repo / ".loopforge" / "packs" / "generic-code"
+                checks_dir.mkdir(parents=True)
+                (checks_dir / "checks.json").write_text(
+                    json.dumps(
+                        {
+                            "version": 1,
+                            "checks": [
+                                {
+                                    "name": "always-fails",
+                                    "command": [
+                                        fixture_python(),
+                                        "-c",
+                                        "import sys; print('same failure'); sys.exit(7)",
+                                    ],
+                                }
+                            ],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                self.assertEqual(
+                    main(
+                        [
+                            "run",
+                            "--task",
+                            "Update README",
+                            "--success-check",
+                            "README contains the new line",
+                        ]
+                    ),
+                    0,
+                )
+                (repo / "README.md").write_text("# Project\n\nUpdated.\n", encoding="utf-8")
+
+            first_error = io.StringIO()
+            second_error = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stderr(first_error),
+            ):
+                self.assertEqual(main(["verify"]), 1)
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stderr(second_error),
+            ):
+                self.assertEqual(main(["verify"]), 1)
+
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+            run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            verification = run_json["verification"]
+
+            self.assertEqual(run_json["status"], "verification_failed")
+            self.assertEqual(verification["status"], "failed")
+            self.assertTrue(verification["stagnated"])
+            self.assertIn(
+                "stagnation: repeated equivalent verification failure",
+                "\n".join(run_json["blockers"]),
+            )
+            self.assertIn("pack check failed: always-fails", second_error.getvalue())
+
     def test_adapter_python_resolution_skips_windows_app_alias(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)

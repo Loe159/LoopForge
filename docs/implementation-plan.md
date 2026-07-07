@@ -274,6 +274,8 @@ Implementation notes:
 
 ## Phase 5: Verification And Patch Flow
 
+Status: completed on 2026-07-07.
+
 Reuse:
 
 - `generate_complete_patch.py`;
@@ -290,9 +292,32 @@ Product behavior:
 
 Done when:
 
-- `loopforge verify` generates a patch for changed workspaces;
-- diff policy and risk classification are shown in `status`;
-- pack verification commands can be configured without editing engine code.
+- [x] `loopforge verify` generates a patch for changed workspaces;
+- [x] diff policy and risk classification are shown in `status`;
+- [x] pack verification commands can be configured without editing engine code.
+
+Implementation notes:
+
+- `loopforge verify` now runs the imported complete-patch generator, diff
+  policy validator, and risk classifier against the current run's Git
+  `base_commit`, storing the patch under `RUN/artifacts/patches/complete.patch`.
+- Verification results are written to `run.json` and `verification.md`,
+  including patch path, patch size, diff-policy verdict, risk route, pack-check
+  results, blockers, and the latest loop diagnostic in `loop.md`.
+- `loopforge status` reports verification status, patch size, diff-policy
+  allowance, risk level, pack-check pass count, and stagnation state when
+  present.
+- Pack verification commands are loaded from
+  `.loopforge/packs/<pack-name>/checks.json` or
+  `.loopforge/packs/<pack-name>.checks.json`, with repository-local pack files
+  overriding bundled defaults.
+- The bundled `generic-code` pack starts with a shell-free `git diff --check`
+  verification command.
+- Repeated equivalent verification failures record a stable failure signature
+  and mark the run as stagnated on the next matching failure.
+- Current validation: `PYTHONPATH=src python -m unittest discover -s tests`
+  passes with tests for patch generation, diff policy/risk status, pack checks,
+  and repeated verification failure stagnation.
 
 ## Phase 6: Memory
 
