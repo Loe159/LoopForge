@@ -1378,6 +1378,283 @@ class CliTests(unittest.TestCase):
             self.assertEqual(summary["final_dispositions"]["pending"], 1)
             self.assertEqual(summary["final_dispositions"]["verified"], 1)
 
+    def test_dashboard_json_handles_project_states(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["dashboard", "--format", "json"]), 0)
+            payload = json.loads(output.getvalue())
+            dashboard = payload["dashboard"]
+            self.assertFalse(dashboard["project"]["initialized"])
+            self.assertEqual(dashboard["next_human_action"]["id"], "init")
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["dashboard", "--format", "json"]), 0)
+            payload = json.loads(output.getvalue())
+            dashboard = payload["dashboard"]
+            self.assertTrue(dashboard["project"]["initialized"])
+            self.assertFalse(dashboard["current_loop"]["available"])
+            self.assertEqual(dashboard["next_human_action"]["id"], "create-run")
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(
+                    main(["run", "--task", "Dashboard run", "--success-check", "state exists"]),
+                    0,
+                )
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["dashboard", "--format", "json"]), 0)
+            payload = json.loads(output.getvalue())
+            dashboard = payload["dashboard"]
+            run_id = dashboard["project"]["current_run_id"]
+            self.assertTrue(dashboard["current_loop"]["available"])
+            self.assertEqual(dashboard["current_loop"]["run_id"], run_id)
+            self.assertEqual(dashboard["current_loop"]["task"], "Dashboard run")
+
+            run_json_path = loopforge_home / "runs" / repo.name / run_id / "run.json"
+            run_json_path.unlink()
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["dashboard", "--format", "json"]), 0)
+            payload = json.loads(output.getvalue())
+            dashboard = payload["dashboard"]
+            self.assertFalse(dashboard["current_loop"]["available"])
+            self.assertTrue(
+                any(
+                    "current run metadata not found" in blocker
+                    for blocker in dashboard["blockers"]
+                )
+            )
+
+    def test_dashboard_text_shell_and_read_only_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(
+                        [
+                            "run",
+                            "--task",
+                            "Dashboard evidence",
+                            "--success-check",
+                            "dashboard prints evidence",
+                        ]
+                    ),
+                    0,
+                )
+
+            config_path = repo / ".loopforge" / "config.json"
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+            run_json_path = run_dir / "run.json"
+            proposal_path = run_dir / "artifacts" / "memory" / "proposals.json"
+            proposal_path.parent.mkdir(parents=True, exist_ok=True)
+            proposal_path.write_text(
+                json.dumps(
+                    {
+                        "proposals": [
+                            {
+                                "id": "p1",
+                                "status": "pending",
+                                "category": "Stable Project Facts",
+                                "source": "test",
+                                "text": "Tests use unittest discovery.",
+                            },
+                            {
+                                "id": "p2",
+                                "status": "rejected",
+                                "category": "Known Pitfalls",
+                                "source": "test",
+                                "text": "Do not remember secrets.",
+                                "rejection_reason": "secret-like content",
+                            },
+                            {
+                                "id": "p3",
+                                "status": "promoted",
+                                "category": "Verification Patterns",
+                                "source": "test",
+                                "text": "Run unittest discovery.",
+                                "promotion_reason": "human approval",
+                            },
+                        ]
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            record_path = run_dir / "metrics" / "record.json"
+            record_path.write_text(
+                json.dumps(
+                    {
+                        "run_id": config["current_run_id"],
+                        "timing": {"duration_seconds": 30},
+                        "adapter": {"id": "codex"},
+                        "attempts": {"count": 2},
+                        "tokens": {"total_tokens": 15},
+                        "cost": {"amount_microunits": 100, "currency": "USD"},
+                        "patch": {"size_bytes": 20},
+                        "verification": {"status": "passed"},
+                        "final_disposition": {"status": "verified"},
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            verification_path = run_dir / "verification.md"
+            watched_paths = [
+                config_path,
+                run_json_path,
+                proposal_path,
+                record_path,
+                verification_path,
+            ]
+            before = {path: path.read_text(encoding="utf-8") for path in watched_paths}
+
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["dashboard"]), 0)
+                self.assertEqual(main(["shell", "--command", "/dashboard"]), 0)
+
+            text = output.getvalue()
+            for label in (
+                "Run list",
+                "Current loop",
+                "Attempts",
+                "Verification",
+                "Memory proposals",
+                "Adapter comparison",
+                "Next human action",
+                "Blockers",
+            ):
+                self.assertIn(label, text)
+            self.assertIn("1 pending, 1 promoted, 1 rejected", text)
+            self.assertIn("Tests use unittest discovery.", text)
+            self.assertIn("codex", text)
+            self.assertIn("do command: loopforge shell --command", text)
+
+            after = {path: path.read_text(encoding="utf-8") for path in watched_paths}
+            self.assertEqual(after, before)
+
+    def test_dashboard_adapter_comparison_preserves_unknowns(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+
+            run_root = loopforge_home / "runs" / repo.name
+            known_record = run_root / "known" / "metrics" / "record.json"
+            unknown_record = run_root / "unknown" / "metrics" / "record.json"
+            known_record.parent.mkdir(parents=True)
+            unknown_record.parent.mkdir(parents=True)
+            known_record.write_text(
+                json.dumps(
+                    {
+                        "run_id": "known",
+                        "timing": {"duration_seconds": 40},
+                        "adapter": {"id": "codex"},
+                        "attempts": {"count": 2},
+                        "tokens": {"total_tokens": 12},
+                        "cost": {"amount_microunits": 500, "currency": "USD"},
+                        "patch": {"size_bytes": 80},
+                        "verification": {"status": "passed"},
+                        "final_disposition": {"status": "verified"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            unknown_record.write_text(
+                json.dumps(
+                    {
+                        "run_id": "unknown",
+                        "timing": {"duration_seconds": None},
+                        "adapter": {"id": None},
+                        "attempts": {"count": None},
+                        "tokens": {"total_tokens": None},
+                        "cost": {"amount_microunits": None, "currency": None},
+                        "patch": {"size_bytes": None},
+                        "verification": {"status": None},
+                        "final_disposition": {"status": "pending"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["dashboard", "--format", "json"]), 0)
+
+            payload = json.loads(output.getvalue())
+            groups = {
+                group["adapter"]: group
+                for group in payload["dashboard"]["adapter_comparison"]["groups"]
+            }
+            self.assertEqual(groups["codex"]["duration_seconds"]["average"], 40)
+            self.assertEqual(groups["codex"]["total_tokens"]["sum"], 12)
+            self.assertEqual(groups["codex"]["patch_size_bytes"]["sum"], 80)
+            self.assertEqual(groups["codex"]["cost"]["known_count"], 1)
+            self.assertEqual(groups["unknown"]["duration_seconds"]["known_count"], 0)
+            self.assertEqual(groups["unknown"]["duration_seconds"]["unknown_count"], 1)
+            self.assertIsNone(groups["unknown"]["duration_seconds"]["average"])
+            self.assertEqual(groups["unknown"]["patch_size_bytes"]["unknown_count"], 1)
+            self.assertEqual(groups["unknown"]["cost"]["unknown_count"], 1)
+
     def test_shell_memory_skills_permissions_and_review(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)

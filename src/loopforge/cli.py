@@ -13,6 +13,8 @@ from loopforge.engine import (
     create_run,
     current_guidance,
     current_status,
+    dashboard_snapshot,
+    dashboard_text_lines,
     detect_project_pack,
     discover_pack_contracts,
     initialize_project,
@@ -257,6 +259,11 @@ def print_metrics_summary(summary: dict[str, object]) -> None:
             )
 
 
+def print_dashboard(snapshot: dict[str, object]) -> None:
+    for line in dashboard_text_lines(snapshot):
+        print(line)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="loopforge")
     subcommands = parser.add_subparsers(dest="command")
@@ -328,6 +335,16 @@ def build_parser() -> argparse.ArgumentParser:
     subcommands.add_parser(
         "guide",
         help="Explain the current workflow state and recommended next actions.",
+    )
+    dashboard_parser = subcommands.add_parser(
+        "dashboard",
+        help="Show a read-only local dashboard for LoopForge runs.",
+    )
+    dashboard_parser.add_argument(
+        "--format",
+        choices=("text", "json"),
+        default="text",
+        help="Output format.",
     )
 
     pack_parser = subcommands.add_parser(
@@ -648,6 +665,18 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "guide":
         print_guidance(Path.cwd())
+        return 0
+    if args.command == "dashboard":
+        result = dashboard_snapshot(Path.cwd())
+        if args.format == "json":
+            payload = {
+                "ok": result.ok,
+                "blockers": result.blockers,
+                "dashboard": result.snapshot,
+            }
+            print_json_payload(payload)
+        else:
+            print_dashboard(result.snapshot)
         return 0
     if args.command == "continue":
         adapter_args = args.adapter_args

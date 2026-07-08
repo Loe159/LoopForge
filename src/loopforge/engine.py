@@ -451,6 +451,14 @@ class MetricsSummaryResult:
 
 
 @dataclass(frozen=True)
+class DashboardResult:
+    project_dir: Path
+    ok: bool
+    snapshot: dict[str, Any]
+    blockers: list[str]
+
+
+@dataclass(frozen=True)
 class RunListResult:
     project_dir: Path
     run_root: Path | None
@@ -3189,6 +3197,447 @@ def summarize_run_metrics(project_dir: Path) -> MetricsSummaryResult:
         summary=summary,
         blockers=blockers,
     )
+
+
+def compact_text(value: object, *, limit: int | None = None) -> str:
+    text = " ".join(str(value or "").split())
+    if limit is not None and len(text) > limit:
+        return text[: max(0, limit - 3)].rstrip() + "..."
+    return text
+
+
+def dashboard_number_summary(records: list[dict[str, Any]], values: list[object]) -> dict[str, Any]:
+    return summarize_number_series(records, values)
+
+
+def dashboard_attempt_rows(run: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if run is None:
+        return []
+    rows: list[dict[str, Any]] = []
+    for attempt in attempt_records(run):
+        rows.append(
+            {
+                "id": compact_text(attempt.get("id")),
+                "adapter": compact_text(attempt.get("adapter") or "unknown"),
+                "status": compact_text(attempt.get("status") or "unknown"),
+                "summary": compact_text(attempt.get("summary"), limit=160),
+                "started_at": compact_text(attempt.get("started_at")),
+                "finished_at": compact_text(attempt.get("finished_at")),
+                "stdout_path": compact_text(attempt.get("stdout_path")),
+                "stderr_path": compact_text(attempt.get("stderr_path")),
+            }
+        )
+    return rows
+
+
+def dashboard_memory_proposal_rows(memory: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if memory is None:
+        return []
+    proposal_path = memory.get("proposal_path")
+    if not isinstance(proposal_path, str) or not proposal_path:
+        return []
+    path = Path(proposal_path)
+    if not path.exists():
+        return []
+    try:
+        data = read_json(path)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return []
+    proposals = data.get("proposals", [])
+    if not isinstance(proposals, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for proposal in proposals:
+        if not isinstance(proposal, dict):
+            continue
+        rows.append(
+            {
+                "id": compact_text(proposal.get("id")),
+                "status": compact_text(proposal.get("status") or "unknown"),
+                "category": compact_text(proposal.get("category")),
+                "source": compact_text(
+                    proposal.get("source_path") or proposal.get("source"),
+                    limit=160,
+                ),
+                "text": compact_text(proposal.get("text"), limit=200),
+                "rejection_reason": compact_text(proposal.get("rejection_reason"), limit=160),
+                "promotion_reason": compact_text(proposal.get("promotion_reason"), limit=160),
+            }
+        )
+    return rows
+
+
+def dashboard_adapter_comparison(records: list[dict[str, Any]]) -> dict[str, Any]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for record in records:
+        adapter = record.get("adapter") if isinstance(record.get("adapter"), dict) else {}
+        adapter_id = adapter.get("id") if isinstance(adapter, dict) else None
+        key = adapter_id if isinstance(adapter_id, str) and adapter_id else "unknown"
+        grouped.setdefault(key, []).append(record)
+
+    groups: list[dict[str, Any]] = []
+    for adapter_id in sorted(grouped):
+        adapter_records = grouped[adapter_id]
+        groups.append(
+            {
+                "adapter": adapter_id,
+                "record_count": len(adapter_records),
+                "duration_seconds": dashboard_number_summary(
+                    adapter_records,
+                    [
+                        record.get("timing", {}).get("duration_seconds")
+                        if isinstance(record.get("timing"), dict)
+                        else None
+                        for record in adapter_records
+                    ],
+                ),
+                "attempt_count": dashboard_number_summary(
+                    adapter_records,
+                    [
+                        record.get("attempts", {}).get("count")
+                        if isinstance(record.get("attempts"), dict)
+                        else None
+                        for record in adapter_records
+                    ],
+                ),
+                "total_tokens": dashboard_number_summary(
+                    adapter_records,
+                    [
+                        record.get("tokens", {}).get("total_tokens")
+                        if isinstance(record.get("tokens"), dict)
+                        else None
+                        for record in adapter_records
+                    ],
+                ),
+                "patch_size_bytes": dashboard_number_summary(
+                    adapter_records,
+                    [
+                        record.get("patch", {}).get("size_bytes")
+                        if isinstance(record.get("patch"), dict)
+                        else None
+                        for record in adapter_records
+                    ],
+                ),
+                "cost": summarize_costs(adapter_records),
+                "verification_results": count_values(
+                    [
+                        record.get("verification", {}).get("status")
+                        if isinstance(record.get("verification"), dict)
+                        else None
+                        for record in adapter_records
+                    ]
+                ),
+                "final_dispositions": count_values(
+                    [
+                        record.get("final_disposition", {}).get("status")
+                        if isinstance(record.get("final_disposition"), dict)
+                        else None
+                        for record in adapter_records
+                    ]
+                ),
+            }
+        )
+    return {"record_count": len(records), "groups": groups}
+
+
+def dashboard_snapshot(project_dir: Path) -> DashboardResult:
+    status = current_status(project_dir)
+    guidance = current_guidance(project_dir)
+    run_list = list_runs(project_dir)
+    metrics = summarize_run_metrics(project_dir)
+    run = status.run
+    contract = status.loop_contract or {}
+    attempts = dashboard_attempt_rows(run)
+    blockers = list(status.blockers)
+    for source in (guidance.blocked_reasons, run_list.blockers, metrics.blockers):
+        for blocker in source:
+            append_unique(blockers, str(blocker))
+
+    limits: dict[str, Any] = {"max_attempts": None, "timeout_seconds": None}
+    if run is not None:
+        limits["max_attempts"] = attempt_limit(run, contract)
+        limits["timeout_seconds"] = attempt_timeout(run, contract)
+
+    action = guidance.recommended_actions[0] if guidance.recommended_actions else None
+    memory_rows = dashboard_memory_proposal_rows(status.memory)
+    verification = status.verification or {}
+    patch = verification.get("patch", {}) if isinstance(verification, dict) else {}
+    diff_policy = verification.get("diff_policy", {}) if isinstance(verification, dict) else {}
+    risk = verification.get("risk", {}) if isinstance(verification, dict) else {}
+
+    snapshot = {
+        "dashboard_version": 1,
+        "project": {
+            "path": str(status.project_dir),
+            "name": status.project_dir.name,
+            "initialized": status.initialized,
+            "config_path": str(status.config_path),
+            "profile": status.config.get("profile") if status.config else None,
+            "run_root": status.config.get("run_root") if status.config else None,
+            "current_run_id": status.config.get("current_run_id") if status.config else None,
+            "default_adapter": status.config.get("default_adapter") if status.config else None,
+        },
+        "runs": {
+            "run_root": str(run_list.run_root) if run_list.run_root is not None else None,
+            "current_run_id": run_list.current_run_id,
+            "total": len(run_list.runs),
+            "items": run_list.runs,
+        },
+        "current_loop": {
+            "available": run is not None,
+            "run_id": run.get("run_id") if run else None,
+            "task": run.get("task") if run else None,
+            "status": run.get("status") if run else None,
+            "profile": run.get("profile") if run else None,
+            "pack": run.get("pack") if run else None,
+            "run_dir": str(status.run_dir) if status.run_dir is not None else None,
+            "loop_contract_status": contract.get("status") if contract else None,
+            "success_checks": contract.get("success_checks", []) if contract else [],
+            "allowed_tools": contract.get("allowed_tools", []) if contract else [],
+            "subjective": bool(contract.get("subjective")) if contract else False,
+            "rubric_present": bool(contract.get("rubric")) if contract else False,
+            "attempts_count": len(attempts),
+            "limits": limits,
+            "next_step": status.next_step,
+        },
+        "attempts": {
+            "count": len(attempts),
+            "max_attempts": limits["max_attempts"],
+            "remaining": (
+                max(0, int(limits["max_attempts"]) - len(attempts))
+                if isinstance(limits["max_attempts"], int)
+                else None
+            ),
+            "items": attempts,
+        },
+        "verification": {
+            "available": bool(verification),
+            "status": verification.get("status") if isinstance(verification, dict) else None,
+            "patch_path": patch.get("path") if isinstance(patch, dict) else None,
+            "patch_size_bytes": patch.get("size_bytes") if isinstance(patch, dict) else None,
+            "diff_policy_allowed": (
+                diff_policy.get("allowed") if isinstance(diff_policy, dict) else None
+            ),
+            "risk": risk.get("risk") if isinstance(risk, dict) else None,
+            "checks_passed": (
+                verification.get("checks_passed") if isinstance(verification, dict) else None
+            ),
+            "checks_total": (
+                verification.get("checks_total") if isinstance(verification, dict) else None
+            ),
+            "stagnated": bool(verification.get("stagnated"))
+            if isinstance(verification, dict)
+            else False,
+        },
+        "memory": {
+            "available": status.memory is not None,
+            "durable_path": status.memory.get("durable_path") if status.memory else None,
+            "durable_items": status.memory.get("durable_items") if status.memory else None,
+            "run_snapshot": status.memory.get("run_snapshot") if status.memory else None,
+            "proposal_path": status.memory.get("proposal_path") if status.memory else None,
+            "pending": status.memory.get("pending", 0) if status.memory else 0,
+            "promoted": status.memory.get("promoted", 0) if status.memory else 0,
+            "rejected": status.memory.get("rejected", 0) if status.memory else 0,
+            "proposal_rows": memory_rows,
+            "pending_proposals": [
+                proposal for proposal in memory_rows if proposal.get("status") == "pending"
+            ],
+        },
+        "adapter_comparison": dashboard_adapter_comparison(metrics.records),
+        "next_human_action": {
+            "available": action is not None,
+            "id": action.id if action else None,
+            "label": action.label if action else None,
+            "command": action.command if action else None,
+            "do_command": f"loopforge shell --command \"/do {action.id}\"" if action else None,
+            "risk": action.risk if action else None,
+            "requires_confirmation": action.requires_confirmation if action else None,
+            "why": action.why if action else None,
+        },
+        "blockers": blockers,
+    }
+    return DashboardResult(
+        project_dir=status.project_dir,
+        ok=not blockers and metrics.ok,
+        snapshot=snapshot,
+        blockers=blockers,
+    )
+
+
+def dashboard_average_text(series: object) -> str:
+    if not isinstance(series, dict):
+        return "unknown"
+    average = series.get("average")
+    if average is None:
+        return "unknown"
+    if isinstance(average, float):
+        return f"{average:.2f}".rstrip("0").rstrip(".")
+    return str(average)
+
+
+def dashboard_text_lines(snapshot: dict[str, Any]) -> list[str]:
+    lines = ["LoopForge dashboard"]
+    project = snapshot.get("project", {}) if isinstance(snapshot.get("project"), dict) else {}
+    lines.extend(
+        [
+            f"project: {project.get('name') or 'unknown'}",
+            f"initialized: {project.get('initialized')}",
+            f"profile: {project.get('profile') or 'none'}",
+            "",
+            "Run list",
+        ]
+    )
+    runs = snapshot.get("runs", {}) if isinstance(snapshot.get("runs"), dict) else {}
+    run_items = runs.get("items", []) if isinstance(runs.get("items"), list) else []
+    lines.append(f"run root: {runs.get('run_root') or 'none'}")
+    lines.append(f"runs: {runs.get('total', len(run_items))}")
+    if run_items:
+        for run in run_items[:10]:
+            if not isinstance(run, dict):
+                continue
+            marker = "*" if run.get("current") else "-"
+            task = compact_text(run.get("task"), limit=80)
+            lines.append(f"{marker} {run.get('run_id')} [{run.get('status')}] {task}")
+    else:
+        lines.append("- none")
+
+    current = (
+        snapshot.get("current_loop", {})
+        if isinstance(snapshot.get("current_loop"), dict)
+        else {}
+    )
+    limits = current.get("limits", {}) if isinstance(current.get("limits"), dict) else {}
+    lines.extend(
+        [
+            "",
+            "Current loop",
+            f"run id: {current.get('run_id') or 'none'}",
+            f"task: {compact_text(current.get('task'), limit=120) or 'none'}",
+            f"status: {current.get('status') or 'none'}",
+            f"pack: {current.get('pack') or 'none'}",
+            f"loop contract: {current.get('loop_contract_status') or 'none'}",
+            f"success checks: {len(current.get('success_checks') or [])}",
+            (
+                "limits: "
+                f"max_attempts={limits.get('max_attempts')}, "
+                f"timeout_seconds={limits.get('timeout_seconds')}"
+            ),
+            f"next step: {current.get('next_step') or 'none'}",
+            "",
+            "Attempts",
+        ]
+    )
+    attempts = snapshot.get("attempts", {}) if isinstance(snapshot.get("attempts"), dict) else {}
+    attempt_items = attempts.get("items", []) if isinstance(attempts.get("items"), list) else []
+    lines.append(
+        f"attempts: {attempts.get('count', 0)}/"
+        f"{attempts.get('max_attempts') or 'unknown'}"
+    )
+    if attempt_items:
+        for attempt in attempt_items[:10]:
+            if isinstance(attempt, dict):
+                lines.append(
+                    "- "
+                    f"{attempt.get('id')}: {attempt.get('adapter')} "
+                    f"[{attempt.get('status')}] {attempt.get('summary')}"
+                )
+    else:
+        lines.append("- none")
+
+    verification = (
+        snapshot.get("verification", {})
+        if isinstance(snapshot.get("verification"), dict)
+        else {}
+    )
+    lines.extend(
+        [
+            "",
+            "Verification",
+            f"status: {verification.get('status') or 'not run'}",
+            f"risk: {verification.get('risk') or 'unknown'}",
+            (
+                "checks: "
+                f"{verification.get('checks_passed') or 0}/"
+                f"{verification.get('checks_total') or 0}"
+            ),
+            f"patch size bytes: {verification.get('patch_size_bytes') or 'unknown'}",
+            "",
+            "Memory proposals",
+        ]
+    )
+    memory = snapshot.get("memory", {}) if isinstance(snapshot.get("memory"), dict) else {}
+    proposals = (
+        memory.get("proposal_rows", []) if isinstance(memory.get("proposal_rows"), list) else []
+    )
+    lines.append(f"durable items: {memory.get('durable_items') or 0}")
+    lines.append(
+        "proposals: "
+        f"{memory.get('pending', 0)} pending, "
+        f"{memory.get('promoted', 0)} promoted, "
+        f"{memory.get('rejected', 0)} rejected"
+    )
+    if proposals:
+        for proposal in proposals[:10]:
+            if isinstance(proposal, dict):
+                lines.append(
+                    "- "
+                    f"{proposal.get('id')}: {proposal.get('status')} "
+                    f"{proposal.get('category')} - {proposal.get('text')}"
+                )
+    else:
+        lines.append("- none")
+
+    comparison = (
+        snapshot.get("adapter_comparison", {})
+        if isinstance(snapshot.get("adapter_comparison"), dict)
+        else {}
+    )
+    groups = comparison.get("groups", []) if isinstance(comparison.get("groups"), list) else []
+    lines.extend(["", "Adapter comparison", f"records: {comparison.get('record_count', 0)}"])
+    if groups:
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            cost = group.get("cost", {}) if isinstance(group.get("cost"), dict) else {}
+            lines.append(
+                "- "
+                f"{group.get('adapter')}: records={group.get('record_count')}, "
+                f"duration_avg={dashboard_average_text(group.get('duration_seconds'))}, "
+                f"attempts_avg={dashboard_average_text(group.get('attempt_count'))}, "
+                f"tokens_avg={dashboard_average_text(group.get('total_tokens'))}, "
+                f"patch_avg={dashboard_average_text(group.get('patch_size_bytes'))}, "
+                f"cost_known={cost.get('known_count', 0)}"
+            )
+    else:
+        lines.append("- none")
+
+    action = (
+        snapshot.get("next_human_action", {})
+        if isinstance(snapshot.get("next_human_action"), dict)
+        else {}
+    )
+    lines.extend(["", "Next human action"])
+    if action.get("available"):
+        lines.extend(
+            [
+                f"id: {action.get('id')}",
+                f"label: {action.get('label')}",
+                f"command: {action.get('command')}",
+                f"do command: {action.get('do_command')}",
+                f"requires confirmation: {action.get('requires_confirmation')}",
+                f"why: {action.get('why')}",
+            ]
+        )
+    else:
+        lines.append("- none")
+
+    blockers = snapshot.get("blockers", [])
+    lines.extend(["", "Blockers"])
+    if isinstance(blockers, list) and blockers:
+        lines.extend(f"- {blocker}" for blocker in blockers)
+    else:
+        lines.append("- none")
+    return lines
 
 
 def resume_run(project_dir: Path, run_id: str) -> ResumeRunResult:

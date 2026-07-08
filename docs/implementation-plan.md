@@ -507,6 +507,8 @@ Implementation notes:
 
 ## Phase 10: Local UI
 
+Status: completed on 2026-07-08.
+
 Build only after the CLI proves the model.
 
 Dashboard views:
@@ -521,8 +523,29 @@ Dashboard views:
 
 Done when:
 
-- UI calls the CLI or engine API;
-- it does not bypass loop limits, checks, or memory rules.
+- [x] UI calls the CLI or engine API;
+- [x] it does not bypass loop limits, checks, or memory rules.
+
+Implementation notes:
+
+- `dashboard_snapshot(project_dir)` builds a read-only local dashboard from
+  existing engine evidence: status, guidance, run listing, verification state,
+  memory proposal artifacts, attempts, and recorded metrics.
+- `loopforge dashboard --format text|json` exposes the dashboard for operators
+  and scripts, with JSON sections for project, runs, current loop, attempts,
+  verification, memory, adapter comparison, next human action, and blockers.
+- `/dashboard` renders the same snapshot inside the interactive shell through
+  the existing Rich/plain renderer.
+- Adapter comparison groups recorded metrics by adapter, keeps an `unknown`
+  bucket, and averages only known duration, attempt, token, patch, and cost
+  values without treating unavailable values as zero.
+- The dashboard displays guided action ids and commands, including `/do`, but
+  does not execute actions or bypass profile confirmation, verification,
+  memory approval, loop limits, or checks.
+- Current validation: PowerShell command
+  `$env:PYTHONPATH='src'; python -m unittest discover -s tests` passes with 63
+  tests, including dashboard JSON state coverage, read-only behavior, shell
+  rendering, memory proposal rows, and adapter comparison unknown handling.
 
 ## What Not To Port Yet
 

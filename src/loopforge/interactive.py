@@ -31,6 +31,8 @@ from loopforge.engine import (
     create_run,
     current_guidance,
     current_status,
+    dashboard_snapshot,
+    dashboard_text_lines,
     detect_project_pack,
     directory_file_sizes,
     discover_pack_contracts,
@@ -65,6 +67,7 @@ SUPPORTED_COMMANDS = {
     "cost": "Show local cost status without inventing unavailable values.",
     "cd": "Change the session project directory.",
     "code-review": "Summarize local review evidence from diff, risk, and blockers.",
+    "dashboard": "Show a read-only dashboard for runs, checks, memory, and actions.",
     "debug-config": "Show LoopForge configuration diagnostics.",
     "diff": "Show current Git working tree status and diff summary.",
     "doctor": "Run local environment diagnostics.",
@@ -778,6 +781,12 @@ class InteractiveShell:
         del raw
         self.write_panel("LoopForge status", self.status_lines())
         self.write_guidance(concise=True)
+        return DispatchResult(0)
+
+    def cmd_dashboard(self, raw: str = "") -> DispatchResult:
+        del raw
+        result = dashboard_snapshot(self.project_dir)
+        self.write_panel("LoopForge dashboard", dashboard_text_lines(result.snapshot))
         return DispatchResult(0)
 
     def cmd_continue(self, raw: str) -> DispatchResult:
