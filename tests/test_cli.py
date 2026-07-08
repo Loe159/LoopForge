@@ -8,12 +8,13 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from loopforge.cli import main
-from loopforge.engine import current_guidance, usable_python_executable
+from loopforge.engine import command_for_attempt, current_guidance, usable_python_executable
 from loopforge.interactive import (
     InteractiveShell,
     SlashCommandCompleter,
@@ -172,6 +173,18 @@ class CliTests(unittest.TestCase):
             self.assertEqual(run_json["task"], "Add a useful command")
             self.assertEqual(run_json["project_root"], str(repo.resolve()))
             self.assertEqual(run_json["base_commit"], base_commit)
+            self.assertEqual(run_json["workspace"]["mode"], "git-worktree")
+            workspace_dir = Path(run_json["workspace"]["path"])
+            self.assertTrue(workspace_dir.exists())
+            self.assertFalse(workspace_dir.is_relative_to(repo))
+            workspace_head = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=workspace_dir,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            self.assertEqual(workspace_head, base_commit)
             self.assertEqual(run_json["profile"], "supervised")
             self.assertEqual(run_json["pack"], "generic-code")
             self.assertEqual(run_json["status"], "loop_contract_draft")
@@ -909,7 +922,8 @@ class CliTests(unittest.TestCase):
                 )
                 blocked = current_guidance(repo)
                 self.assertEqual(blocked.state, "adapter_blocked")
-                self.assertEqual(blocked.recommended_actions[0].id, "inspect-attempt")
+                self.assertEqual(blocked.recommended_actions[0].id, "retry-attempt")
+                self.assertEqual(blocked.recommended_actions[1].id, "inspect-attempt")
 
                 self.assertEqual(
                     main(["run", "--task", "Verify run", "--success-check", "README changed"]),
@@ -2233,6 +2247,106 @@ class CliTests(unittest.TestCase):
             self.assertIn("Fixture command completed and changed the workspace.", progress)
             self.assertIn("LoopForge adapter attempt completed", output.getvalue())
 
+    def test_continue_fixture_adapter_uses_git_worktree_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True, text=True)
+            (repo / ".gitignore").write_text(".loopforge/\n", encoding="utf-8")
+            (repo / "README.md").write_text("# Project\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "add", ".gitignore", "README.md"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=LoopForge Tests",
+                    "-c",
+                    "user.email=loopforge@example.invalid",
+                    "commit",
+                    "-m",
+                    "initial",
+                ],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            fixture_code = (
+                "from pathlib import Path\n"
+                "Path('adapter-output.txt').write_text('changed\\n', encoding='utf-8')\n"
+            )
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(
+                        [
+                            "run",
+                            "--task",
+                            "Create output in worktree",
+                            "--success-check",
+                            "adapter-output.txt exists",
+                        ]
+                    ),
+                    0,
+                )
+                self.assertEqual(
+                    main(
+                        [
+                            "continue",
+                            "--adapter",
+                            "local-adapter-fixture",
+                            "--",
+                            fixture_python(),
+                            "-c",
+                            fixture_code,
+                        ]
+                    ),
+                    0,
+                )
+
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+            run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            workspace_dir = Path(run_json["workspace"]["path"])
+
+            self.assertEqual(run_json["status"], "ready_for_verification")
+            self.assertTrue((workspace_dir / "adapter-output.txt").exists())
+            self.assertFalse((repo / "adapter-output.txt").exists())
+            self.assertEqual(run_json["last_attempt"]["workspace"], str(workspace_dir))
+            prompt_path = run_dir / run_json["last_attempt"]["prompt_path"]
+            prompt_text = prompt_path.read_text(encoding="utf-8")
+            self.assertIn(str(run_dir), prompt_text)
+            self.assertIn(str(workspace_dir), prompt_text)
+            self.assertIn("Create output in worktree", prompt_text)
+
+    def test_codex_attempt_command_uses_exec_and_stdin_prompt(self) -> None:
+        self.assertEqual(
+            command_for_attempt(adapter="codex", adapter_args=[]),
+            ["codex", "exec", "-s", "workspace-write", "-"],
+        )
+        self.assertEqual(
+            command_for_attempt(adapter="codex", adapter_args=["-m", "gpt-5"]),
+            ["codex", "exec", "-m", "gpt-5", "-"],
+        )
+        self.assertEqual(
+            command_for_attempt(adapter="codex", adapter_args=["exec", "-s", "workspace-write"]),
+            ["codex", "exec", "-s", "workspace-write", "-"],
+        )
+
     def test_continue_fixture_adapter_failure_blocks_readably(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)
@@ -2287,6 +2401,65 @@ class CliTests(unittest.TestCase):
             self.assertIn("blocked state", error.getvalue())
             self.assertIn("Fixture command failed with return code 3.", error.getvalue())
 
+    def test_continue_can_retry_after_blocked_attempt_without_archiving(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(["run", "--task", "Retry blocked work", "--success-check", "file exists"]),
+                    0,
+                )
+                self.assertEqual(
+                    main(
+                        [
+                            "continue",
+                            "--adapter",
+                            "local-adapter-fixture",
+                            "--",
+                            fixture_python(),
+                            "-c",
+                            "print('no changes')",
+                        ]
+                    ),
+                    1,
+                )
+                self.assertEqual(
+                    main(
+                        [
+                            "continue",
+                            "--adapter",
+                            "local-adapter-fixture",
+                            "--",
+                            fixture_python(),
+                            "-c",
+                            (
+                                "from pathlib import Path; "
+                                "Path('retried.txt').write_text('ok\\n', encoding='utf-8')"
+                            ),
+                        ]
+                    ),
+                    0,
+                )
+
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+            run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+
+            self.assertEqual(run_json["status"], "ready_for_verification")
+            self.assertEqual(run_json["attempt_count"], 2)
+            self.assertEqual(run_json["attempts"][0]["status"], "blocked")
+            self.assertEqual(run_json["attempts"][1]["status"], "completed")
+            self.assertTrue((repo / "retried.txt").exists())
+
     def test_verify_generates_patch_policy_risk_and_pack_checks(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)
@@ -2340,7 +2513,14 @@ class CliTests(unittest.TestCase):
                     ),
                     0,
                 )
-                (repo / "README.md").write_text("# Project\n\nUpdated.\n", encoding="utf-8")
+                config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+                run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+                run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+                workspace_dir = Path(run_json["workspace"]["path"])
+                (workspace_dir / "README.md").write_text(
+                    "# Project\n\nUpdated.\n",
+                    encoding="utf-8",
+                )
                 self.assertEqual(main(["verify"]), 0)
                 self.assertEqual(main(["status"]), 0)
 
@@ -2417,7 +2597,11 @@ class CliTests(unittest.TestCase):
                     ),
                     0,
                 )
-                (repo / "pyproject.toml").write_text(
+                config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+                run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+                run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+                workspace_dir = Path(run_json["workspace"]["path"])
+                (workspace_dir / "pyproject.toml").write_text(
                     "[project]\nname = \"sample\"\nversion = \"0.2.0\"\n",
                     encoding="utf-8",
                 )
@@ -2506,7 +2690,14 @@ class CliTests(unittest.TestCase):
                     ),
                     0,
                 )
-                (repo / "README.md").write_text("# Project\n\nUpdated.\n", encoding="utf-8")
+                config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+                run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+                run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+                workspace_dir = Path(run_json["workspace"]["path"])
+                (workspace_dir / "README.md").write_text(
+                    "# Project\n\nUpdated.\n",
+                    encoding="utf-8",
+                )
 
             first_error = io.StringIO()
             second_error = io.StringIO()
@@ -2600,7 +2791,12 @@ class CliTests(unittest.TestCase):
             }
             session_path = workspace / "expected-session.json"
             session_path.write_text(json.dumps(session), encoding="utf-8")
-            adapter = Path(__file__).resolve().parents[1] / ".agent" / "adapters" / "local_implementation_adapter.py"
+            adapter = (
+                Path(__file__).resolve().parents[1]
+                / ".agent"
+                / "adapters"
+                / "local_implementation_adapter.py"
+            )
 
             result = subprocess.run(
                 [
@@ -2628,6 +2824,181 @@ class CliTests(unittest.TestCase):
                 payload["summary"],
                 "Implementation command completed without workspace changes.",
             )
+
+    def test_imported_adapter_streams_child_output_to_result_file_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True, text=True)
+            (repo / "README.md").write_text("# Project\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=repo, check=True, capture_output=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=LoopForge Tests",
+                    "-c",
+                    "user.email=loopforge@example.invalid",
+                    "commit",
+                    "-m",
+                    "initial",
+                ],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            base_commit = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            session = {
+                "issue": 1,
+                "risk": "low",
+                "base_commit": base_commit,
+                "workspace": str(repo.resolve()),
+                "runner_id": "local-adapter-fixture",
+                "preflight_sha256": hashlib.sha256(b"preflight").hexdigest(),
+                "start_authorization_receipt_sha256": hashlib.sha256(b"start").hexdigest(),
+            }
+            session_path = workspace / "expected-session.json"
+            session_path.write_text(json.dumps(session), encoding="utf-8")
+            result_path = workspace / "result.json"
+            adapter = (
+                Path(__file__).resolve().parents[1]
+                / ".agent"
+                / "adapters"
+                / "local_implementation_adapter.py"
+            )
+
+            result = subprocess.run(
+                [
+                    fixture_python(),
+                    str(adapter),
+                    "--expected-session",
+                    str(session_path),
+                    "--workspace",
+                    str(repo),
+                    "--result-output",
+                    str(result_path),
+                    "--",
+                    fixture_python(),
+                    "-c",
+                    (
+                        "from pathlib import Path; import sys; "
+                        "print('stream stdout'); "
+                        "print('stream stderr', file=sys.stderr); "
+                        "Path('changed.txt').write_text('ok\\n', encoding='utf-8')"
+                    ),
+                ],
+                cwd=Path(__file__).resolve().parents[1],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("stream stdout", result.stdout)
+            self.assertIn("stream stderr", result.stderr)
+            payload = json.loads(result_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["status"], "completed")
+            self.assertTrue(payload["workspace_changed"])
+
+    def test_imported_adapter_streams_before_child_exits(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True, text=True)
+            (repo / "README.md").write_text("# Project\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=repo, check=True, capture_output=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=LoopForge Tests",
+                    "-c",
+                    "user.email=loopforge@example.invalid",
+                    "commit",
+                    "-m",
+                    "initial",
+                ],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            base_commit = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            session = {
+                "issue": 1,
+                "risk": "low",
+                "base_commit": base_commit,
+                "workspace": str(repo.resolve()),
+                "runner_id": "local-adapter-fixture",
+                "preflight_sha256": hashlib.sha256(b"preflight").hexdigest(),
+                "start_authorization_receipt_sha256": hashlib.sha256(b"start").hexdigest(),
+            }
+            session_path = workspace / "expected-session.json"
+            session_path.write_text(json.dumps(session), encoding="utf-8")
+            result_path = workspace / "result.json"
+            adapter = (
+                Path(__file__).resolve().parents[1]
+                / ".agent"
+                / "adapters"
+                / "local_implementation_adapter.py"
+            )
+            child_code = (
+                "from pathlib import Path\n"
+                "import time\n"
+                "print('first streamed line', flush=True)\n"
+                "time.sleep(2)\n"
+                "Path('changed.txt').write_text('ok\\n', encoding='utf-8')\n"
+                "print('second streamed line', flush=True)\n"
+            )
+
+            started = time.monotonic()
+            process = subprocess.Popen(
+                [
+                    fixture_python(),
+                    str(adapter),
+                    "--expected-session",
+                    str(session_path),
+                    "--workspace",
+                    str(repo),
+                    "--result-output",
+                    str(result_path),
+                    "--",
+                    fixture_python(),
+                    "-u",
+                    "-c",
+                    child_code,
+                ],
+                cwd=Path(__file__).resolve().parents[1],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            assert process.stdout is not None
+            first_line = process.stdout.readline().strip()
+            elapsed = time.monotonic() - started
+            stdout, stderr = process.communicate(timeout=10)
+
+            self.assertEqual(process.returncode, 0, stdout + stderr)
+            self.assertEqual(first_line, "first streamed line")
+            self.assertLess(elapsed, 1.5)
+            self.assertIn("second streamed line", stdout)
+            payload = json.loads(result_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["status"], "completed")
 
     def test_run_without_git_uses_native_task_id_and_legacy_sentinel(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

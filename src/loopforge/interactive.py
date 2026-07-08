@@ -475,6 +475,10 @@ class InteractiveShell:
                 f"run directory: {result.run_dir}",
             ]
         )
+        workspace = run.get("workspace", {})
+        if isinstance(workspace, dict) and workspace:
+            lines.append(f"workspace mode: {workspace.get('mode') or 'unknown'}")
+            lines.append(f"workspace: {workspace.get('path') or 'none'}")
         if result.loop_contract is not None:
             lines.append(f"loop contract: {result.loop_contract['status']}")
             lines.append(

@@ -41,5 +41,6 @@
     ".agent/checks/validate_implementation_result.py",
     ".agent/policies/implementation-result-validation.json",
     ".agent/schemas/implementation-result.schema.json"
-  ]
+  ],
+  "stream_child_output": true
 }

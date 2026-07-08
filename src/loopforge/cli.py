@@ -147,6 +147,14 @@ def print_pack_contract(run: dict[str, object]) -> None:
             print(f"- {skill}")
 
 
+def print_workspace(run: dict[str, object]) -> None:
+    workspace = run.get("workspace", {})
+    if not isinstance(workspace, dict) or not workspace:
+        return
+    print(f"workspace mode: {workspace.get('mode') or 'unknown'}")
+    print(f"workspace: {workspace.get('path') or 'none'}")
+
+
 def print_profile_policy(profile: object, *, file=None) -> None:
     if file is None:
         file = sys.stdout
@@ -530,6 +538,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"base commit: {result.run['base_commit'] or 'none'}")
         print(f"status: {result.run['status']}")
         print(f"pack: {result.run['pack']}")
+        print_workspace(result.run)
         print_profile_policy(result.run["profile"])
         print(f"loop contract: {result.run['loop_contract']['path']}")
         if result.run["loop_contract"]["subjective"] and not args.rubric:
@@ -647,6 +656,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"attempts: {run.get('attempt_count', len(run.get('attempts', [])))}")
         print(f"pack: {run['pack']}")
         print_pack_contract(run)
+        print_workspace(run)
         print(f"base commit: {run.get('base_commit') or 'none'}")
         print(f"run directory: {result.run_dir}")
         print_native_artifacts(result.native_artifacts)

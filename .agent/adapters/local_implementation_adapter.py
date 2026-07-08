@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -59,6 +60,7 @@ EXPECTED_POLICY: dict[str, Any] = {
         ".agent/policies/implementation-result-validation.json",
         ".agent/schemas/implementation-result.schema.json",
     ],
+    "stream_child_output": True,
 }
 
 
@@ -191,6 +193,8 @@ def run_adapter(
     command: Sequence[str],
     workspace: Path,
     policy: dict[str, Any],
+    stdin_file: Path | None = None,
+    stream_output: bool = False,
 ) -> bytes:
     if not command:
         raise ValueError("Local implementation adapter command is required")
@@ -213,17 +217,67 @@ def run_adapter(
     completed: subprocess.CompletedProcess[bytes] | None = None
     timed_out = False
     try:
-        completed = subprocess.run(
+        stdin_handle = stdin_file.open("rb") if stdin_file is not None else None
+        process = subprocess.Popen(
             list(command),
             cwd=workspace,
-            check=False,
-            capture_output=True,
+            stdin=stdin_handle,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             shell=False,
-            timeout=policy["command_timeout_seconds"],
             env=isolated_process.build_child_environment(
                 os.environ,
                 isolated_process.load_policy(),
             ),
+        )
+        stdout_buffer = bytearray()
+        stderr_buffer = bytearray()
+
+        def read_available(source) -> bytes:  # type: ignore[no-untyped-def]
+            if hasattr(source, "read1"):
+                return source.read1(4096)
+            return source.read(1)
+
+        def pump(source, target, buffer: bytearray) -> None:  # type: ignore[no-untyped-def]
+            try:
+                while True:
+                    chunk = read_available(source)
+                    if not chunk:
+                        break
+                    buffer.extend(chunk)
+                    if stream_output and policy["stream_child_output"]:
+                        target.buffer.write(chunk)
+                        target.buffer.flush()
+            finally:
+                source.close()
+
+        stdout_thread = threading.Thread(
+            target=pump,
+            args=(process.stdout, sys.stdout, stdout_buffer),
+            daemon=True,
+        )
+        stderr_thread = threading.Thread(
+            target=pump,
+            args=(process.stderr, sys.stderr, stderr_buffer),
+            daemon=True,
+        )
+        stdout_thread.start()
+        stderr_thread.start()
+        try:
+            returncode = process.wait(timeout=policy["command_timeout_seconds"])
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            process.kill()
+            returncode = process.wait()
+        stdout_thread.join(timeout=5)
+        stderr_thread.join(timeout=5)
+        if stdin_handle is not None:
+            stdin_handle.close()
+        completed = subprocess.CompletedProcess(
+            list(command),
+            returncode=returncode,
+            stdout=bytes(stdout_buffer),
+            stderr=bytes(stderr_buffer),
         )
     except subprocess.TimeoutExpired as error:
         timed_out = True
@@ -253,6 +307,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--expected-session", type=Path, required=True)
     parser.add_argument("--workspace", type=Path, default=Path.cwd())
+    parser.add_argument("--stdin-file", type=Path)
+    parser.add_argument("--result-output", type=Path)
     parser.add_argument("command", nargs=argparse.REMAINDER)
     return parser
 
@@ -269,11 +325,22 @@ def main() -> int:
         )
         return 1
     try:
-        content = run_adapter(args.expected_session, command, args.workspace, load_policy())
+        content = run_adapter(
+            args.expected_session,
+            command,
+            args.workspace,
+            load_policy(),
+            stdin_file=args.stdin_file,
+            stream_output=args.result_output is not None,
+        )
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as error:
         print(f"local-implementation-adapter: ERROR\n- {error}", file=sys.stderr)
         return 1
-    sys.stdout.buffer.write(content)
+    if args.result_output is not None:
+        args.result_output.parent.mkdir(parents=True, exist_ok=True)
+        args.result_output.write_bytes(content)
+    else:
+        sys.stdout.buffer.write(content)
     return 0
 
 

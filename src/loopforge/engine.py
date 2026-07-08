@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import uuid
 import hashlib
 import importlib.util
@@ -23,6 +24,8 @@ PROJECT_MEMORY_FILE = "memory.md"
 DEFAULT_PROFILE = "supervised"
 DEFAULT_PACK = "generic-code"
 DEFAULT_ADAPTER = "codex"
+WORKSPACE_MODE_GIT_WORKTREE = "git-worktree"
+WORKSPACE_MODE_SHARED_CHECKOUT = "shared-checkout"
 READY_FOR_VERIFICATION = "ready_for_verification"
 ADAPTER_BLOCKED = "adapter_blocked"
 LOOP_CONTRACT_DRAFT = "loop_contract_draft"
@@ -549,6 +552,10 @@ def loopforge_home(home: Path | None = None) -> Path:
 
 def default_run_root(project_dir: Path, home: Path | None = None) -> Path:
     return loopforge_home(home=home) / "runs" / project_name(project_dir)
+
+
+def default_workspace_root(project_dir: Path, home: Path | None = None) -> Path:
+    return loopforge_home(home=home) / "workspaces" / project_name(project_dir)
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -1522,6 +1529,97 @@ def detect_git_base_commit(project_dir: Path) -> str | None:
     return commit or None
 
 
+def git_toplevel(project_dir: Path) -> Path | None:
+    result = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=project_dir,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    try:
+        return Path(result.stdout.strip()).resolve()
+    except OSError:
+        return None
+
+
+def run_workspace_path(run: dict[str, Any], fallback_project_dir: Path) -> Path:
+    workspace = run.get("workspace", {})
+    if isinstance(workspace, dict):
+        raw_path = workspace.get("path")
+        if isinstance(raw_path, str) and raw_path.strip():
+            return Path(raw_path).expanduser().resolve()
+    return fallback_project_dir.resolve()
+
+
+def run_workspace_state(run: dict[str, Any], fallback_project_dir: Path) -> dict[str, Any]:
+    workspace = run.get("workspace", {})
+    if not isinstance(workspace, dict):
+        workspace = {}
+    mode = workspace.get("mode")
+    if mode not in {WORKSPACE_MODE_GIT_WORKTREE, WORKSPACE_MODE_SHARED_CHECKOUT}:
+        mode = WORKSPACE_MODE_SHARED_CHECKOUT
+    base_commit = workspace.get("base_commit")
+    if not isinstance(base_commit, str):
+        base_commit = run.get("base_commit")
+    return {
+        "mode": mode,
+        "path": str(run_workspace_path(run, fallback_project_dir)),
+        "base_commit": base_commit,
+        "created_at": workspace.get("created_at"),
+    }
+
+
+def prepare_run_workspace(
+    *,
+    project_dir: Path,
+    run_id: str,
+    base_commit: str | None,
+    now: str,
+) -> dict[str, Any]:
+    if base_commit is None or git_toplevel(project_dir) is None:
+        return {
+            "mode": WORKSPACE_MODE_SHARED_CHECKOUT,
+            "path": str(project_dir),
+            "base_commit": base_commit,
+            "created_at": now,
+        }
+
+    workspace_path = default_workspace_root(project_dir) / run_id
+    if workspace_path.exists():
+        raise ValueError(f"workspace already exists: {workspace_path}")
+    workspace_path.parent.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run(
+        [
+            "git",
+            "-c",
+            f"safe.directory={project_dir.resolve().as_posix()}",
+            "worktree",
+            "add",
+            "--detach",
+            str(workspace_path),
+            base_commit,
+        ],
+        cwd=project_dir,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or "unknown error"
+        raise ValueError(f"could not create run worktree: {detail}")
+    return {
+        "mode": WORKSPACE_MODE_GIT_WORKTREE,
+        "path": str(workspace_path.resolve()),
+        "base_commit": base_commit,
+        "created_at": now,
+    }
+
+
 def task_looks_subjective(task: str) -> bool:
     lowered = task.lower()
     return any(marker in lowered for marker in SUBJECTIVE_TASK_MARKERS)
@@ -2491,6 +2589,17 @@ def current_guidance(project_dir: Path) -> GuidanceResult:
         summary = "The run is ready for an adapter attempt."
         priority = "execute_attempt"
     elif run_status == ADAPTER_BLOCKED:
+        if len(attempt_records(run)) < attempt_limit(run, status.loop_contract or {}):
+            actions.append(
+                guided_action(
+                    "retry-attempt",
+                    f"Retry a bounded attempt with {adapter}",
+                    f"loopforge continue --adapter {adapter}",
+                    risk="adapter-execution",
+                    requires_confirmation=profile != "autonomous",
+                    why="The previous attempt is recorded; a new attempt can continue with better context.",
+                )
+            )
         actions.append(
             guided_action(
                 "inspect-attempt",
@@ -3881,6 +3990,12 @@ def create_run(
 
     now = utc_now()
     base_commit = detect_git_base_commit(project_dir)
+    workspace_state = prepare_run_workspace(
+        project_dir=project_dir,
+        run_id=run_id,
+        base_commit=base_commit,
+        now=now,
+    )
     task_id = run_id
     legacy_issue = legacy_issue_for_task(task_id)
     legacy_base_commit = base_commit or SYNTHETIC_LEGACY_BASE_COMMIT
@@ -3917,6 +4032,7 @@ def create_run(
         "task": task.strip(),
         "project_root": str(project_dir),
         "base_commit": base_commit,
+        "workspace": workspace_state,
         "profile": run_profile,
         "profile_policy": profile_policy(run_profile),
         "pack": selected_pack,
@@ -4098,12 +4214,111 @@ def command_for_adapter(adapter: str, adapter_args: list[str]) -> list[str]:
     return [command, *adapter_args]
 
 
+def command_for_attempt(
+    *,
+    adapter: str,
+    adapter_args: list[str],
+) -> list[str]:
+    if adapter == "codex":
+        args = list(adapter_args)
+        if not args:
+            args = ["exec", "-s", "workspace-write"]
+        elif args[0] not in {"exec", "e"}:
+            args = ["exec", *args]
+        if "-" not in args:
+            args.append("-")
+        return ["codex", *args]
+    return command_for_adapter(adapter, adapter_args)
+
+
+def render_adapter_prompt(
+    *,
+    run: dict[str, Any],
+    contract: dict[str, Any],
+    run_dir: Path,
+    workspace_dir: Path,
+    adapter: str,
+    attempt_id: str,
+) -> str:
+    success_checks = contract.get("success_checks") or run.get("success_checks") or []
+    if not isinstance(success_checks, list):
+        success_checks = []
+    allowed_tools = contract.get("allowed_tools")
+    if not isinstance(allowed_tools, list):
+        allowed_tools = []
+    pack_contract = run.get("pack_contract", {})
+    skills = []
+    if isinstance(pack_contract, dict) and isinstance(pack_contract.get("skills"), list):
+        skills = [str(skill) for skill in pack_contract["skills"]]
+    limits = run.get("limits", {}) if isinstance(run.get("limits"), dict) else {}
+    lines = [
+        "# LoopForge Adapter Attempt",
+        "",
+        "You are executing one bounded LoopForge implementation attempt.",
+        "Do not stop at analysis: make the requested code changes when feasible.",
+        "",
+        "## Paths",
+        "",
+        f"- Run directory: {run_dir}",
+        f"- Workspace directory: {workspace_dir}",
+        f"- Project control checkout: {run.get('project_root')}",
+        f"- Attempt: {attempt_id}",
+        f"- Adapter: {adapter}",
+        "",
+        "Read these run artifacts before editing:",
+        f"- {run_dir / 'task.md'}",
+        f"- {run_dir / 'loop.md'}",
+        f"- {run_dir / 'memory.md'}",
+        f"- {run_dir / 'scratch.md'}",
+        "",
+        "Make code changes only in the workspace directory unless the run contract says otherwise.",
+        "Preserve unrelated working-tree changes.",
+        "Do not publish, push, deploy, delete unrelated files, expose secrets, "
+        "or use hidden network effects.",
+        "",
+        "## Objective",
+        "",
+        str(run.get("task") or "").strip(),
+        "",
+        "## Success Checks",
+        "",
+    ]
+    if success_checks:
+        lines.extend(f"- {check}" for check in success_checks)
+    else:
+        lines.append("- None recorded.")
+    lines.extend(["", "## Allowed Tools", ""])
+    if allowed_tools:
+        lines.extend(f"- {tool}" for tool in allowed_tools)
+    else:
+        lines.append("- Use only local deterministic project tools.")
+    lines.extend(["", "## Pack Skills", ""])
+    lines.extend(f"- {skill}" for skill in skills) if skills else lines.append("- None recorded.")
+    lines.extend(
+        [
+            "",
+            "## Limits",
+            "",
+            f"- Max attempts: {limits.get('max_attempts', 'unknown')}",
+            f"- Timeout seconds: {limits.get('timeout_seconds', 'unknown')}",
+            "",
+            "## Required Finish",
+            "",
+            "Run the relevant deterministic checks from the success checks when possible.",
+            "Leave the workspace with the implementation changes present for `loopforge verify`.",
+            "Summarize what changed and any checks run.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def session_hash(seed: dict[str, Any], label: str) -> str:
     encoded = json.dumps({"label": label, **seed}, sort_keys=True).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
 
-def expected_session_for(run: dict[str, Any], adapter: str, project_dir: Path) -> dict[str, Any]:
+def expected_session_for(run: dict[str, Any], adapter: str, workspace_dir: Path) -> dict[str, Any]:
     legacy = run.get("legacy", {})
     if not isinstance(legacy, dict):
         legacy = {}
@@ -4119,13 +4334,13 @@ def expected_session_for(run: dict[str, Any], adapter: str, project_dir: Path) -
         "run_id": run.get("run_id"),
         "task_id": run.get("task_id"),
         "adapter": adapter,
-        "workspace": str(project_dir.resolve()),
+        "workspace": str(workspace_dir.resolve()),
     }
     return {
         "issue": issue,
         "risk": "low",
         "base_commit": base_commit,
-        "workspace": str(project_dir.resolve()),
+        "workspace": str(workspace_dir.resolve()),
         "runner_id": adapter,
         "preflight_sha256": session_hash(seed, "preflight"),
         "start_authorization_receipt_sha256": session_hash(seed, "start-authorization"),
@@ -4207,6 +4422,8 @@ def append_progress(run_dir: Path, attempt: dict[str, Any]) -> None:
         f"- Status: {attempt['status']}",
         f"- Summary: {attempt['summary']}",
         f"- Workspace changed: {'yes' if attempt['workspace_changed'] else 'no'}",
+        f"- Workspace: {attempt.get('workspace') or 'unknown'}",
+        f"- Prompt: {attempt.get('prompt_path') or 'none'}",
         f"- Stdout: {attempt['stdout_path']}",
         f"- Stderr: {attempt['stderr_path']}",
         f"- Result: {attempt['result_path']}",
@@ -4263,26 +4480,96 @@ def run_with_isolated_process(command: list[str], cwd: Path, timeout_seconds: in
     )
 
 
+def run_streaming_process(command: list[str], cwd: Path, timeout_seconds: int) -> dict[str, Any]:
+    isolated_process = isolated_process_module()
+    policy = isolated_process.load_policy()
+    bounded_timeout = min(float(timeout_seconds), float(policy["max_timeout_seconds"]))
+    env = isolated_process.build_child_environment(os.environ, policy)
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        shell=False,
+    )
+    stdout_buffer = bytearray()
+    stderr_buffer = bytearray()
+
+    def read_available(source) -> bytes:  # type: ignore[no-untyped-def]
+        if hasattr(source, "read1"):
+            return source.read1(4096)
+        return source.read(1)
+
+    def pump(source, target, buffer: bytearray) -> None:  # type: ignore[no-untyped-def]
+        try:
+            while True:
+                chunk = read_available(source)
+                if not chunk:
+                    break
+                buffer.extend(chunk)
+                target.write(chunk)
+                target.flush()
+        finally:
+            source.close()
+
+    stdout_thread = threading.Thread(
+        target=pump,
+        args=(process.stdout, sys.stdout.buffer, stdout_buffer),
+        daemon=True,
+    )
+    stderr_thread = threading.Thread(
+        target=pump,
+        args=(process.stderr, sys.stderr.buffer, stderr_buffer),
+        daemon=True,
+    )
+    stdout_thread.start()
+    stderr_thread.start()
+    timed_out = False
+    try:
+        returncode = process.wait(timeout=bounded_timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        process.kill()
+        returncode = process.wait()
+    stdout_thread.join(timeout=5)
+    stderr_thread.join(timeout=5)
+    return {
+        "completed": not timed_out,
+        "returncode": returncode,
+        "timed_out": timed_out,
+        "output_limit_exceeded": False,
+        "stdout": bytes(stdout_buffer),
+        "stderr": bytes(stderr_buffer),
+    }
+
+
 def adapter_protocol_command(
     *,
     adapter: str,
     command: list[str],
     expected_session_path: Path,
-    project_dir: Path,
+    workspace_dir: Path,
+    stdin_file: Path | None,
+    result_output: Path | None,
 ) -> list[str]:
     adapter_path = local_implementation_adapter()
     if not adapter_path.exists():
         raise FileNotFoundError(f"local implementation adapter not found: {adapter_path}")
-    return [
+    protocol = [
         usable_python_executable(),
         str(adapter_path),
         "--expected-session",
         str(expected_session_path),
         "--workspace",
-        str(project_dir),
-        "--",
-        *command,
+        str(workspace_dir),
     ]
+    if stdin_file is not None:
+        protocol.extend(["--stdin-file", str(stdin_file)])
+    if result_output is not None:
+        protocol.extend(["--result-output", str(result_output)])
+    protocol.extend(["--", *command])
+    return protocol
 
 
 def execute_fixture_command(
@@ -4308,16 +4595,20 @@ def execute_adapter_command(
     adapter: str,
     command: list[str],
     expected_session_path: Path,
-    project_dir: Path,
+    workspace_dir: Path,
+    stdin_file: Path,
+    result_output: Path,
     timeout_seconds: int,
 ) -> tuple[dict[str, Any], bytes, bytes]:
     protocol_command = adapter_protocol_command(
         adapter=adapter,
         command=command,
         expected_session_path=expected_session_path,
-        project_dir=project_dir,
+        workspace_dir=workspace_dir,
+        stdin_file=stdin_file,
+        result_output=result_output,
     )
-    child = run_with_isolated_process(
+    child = run_streaming_process(
         protocol_command,
         repository_root(),
         min(timeout_seconds + 5, 600),
@@ -4337,6 +4628,16 @@ def parse_adapter_result(stdout: bytes) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def parse_adapter_result_file(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
 def execute_attempt(
     *,
     project_dir: Path,
@@ -4348,7 +4649,10 @@ def execute_attempt(
 ) -> dict[str, Any]:
     if adapter not in SUPPORTED_ADAPTERS:
         raise ValueError(f"unsupported adapter: {adapter}")
-    command = command_for_adapter(adapter, adapter_args)
+    command = command_for_attempt(adapter=adapter, adapter_args=adapter_args)
+    workspace_dir = run_workspace_path(run, project_dir)
+    if not workspace_dir.exists() or not workspace_dir.is_dir():
+        raise ValueError(f"run workspace is not available: {workspace_dir}")
     attempts = attempt_records(run)
     number = len(attempts) + 1
     attempt_id = f"attempt-{number:03d}"
@@ -4356,33 +4660,48 @@ def execute_attempt(
     attempt_dir.mkdir(parents=True, exist_ok=False)
 
     started = utc_now()
-    session = expected_session_for(run, adapter, project_dir)
+    prompt_path = attempt_dir / "adapter-prompt.md"
+    prompt_path.write_text(
+        render_adapter_prompt(
+            run=run,
+            contract=contract,
+            run_dir=run_dir,
+            workspace_dir=workspace_dir,
+            adapter=adapter,
+            attempt_id=attempt_id,
+        ),
+        encoding="utf-8",
+    )
+    session = expected_session_for(run, adapter, workspace_dir)
     expected_session_path = attempt_dir / "expected-session.json"
     write_json_atomic(expected_session_path, session)
-    before_snapshot = workspace_snapshot(project_dir)
-    before_git = git_status_entries(project_dir)
+    before_snapshot = workspace_snapshot(workspace_dir)
+    before_git = git_status_entries(workspace_dir)
     timeout_seconds = attempt_timeout(run, contract)
 
     if adapter == "local-adapter-fixture":
         child, stdout, stderr = execute_fixture_command(
             command=command,
-            project_dir=project_dir,
+            project_dir=workspace_dir,
             timeout_seconds=timeout_seconds,
         )
         result = None
     else:
+        result_path = attempt_dir / "result.json"
         child, stdout, stderr = execute_adapter_command(
             adapter=adapter,
             command=command,
             expected_session_path=expected_session_path,
-            project_dir=project_dir,
+            workspace_dir=workspace_dir,
+            stdin_file=prompt_path,
+            result_output=result_path,
             timeout_seconds=timeout_seconds,
         )
-        result = parse_adapter_result(stdout)
+        result = parse_adapter_result_file(result_path) or parse_adapter_result(stdout)
 
     finished = utc_now()
-    after_snapshot = workspace_snapshot(project_dir)
-    after_git = git_status_entries(project_dir)
+    after_snapshot = workspace_snapshot(workspace_dir)
+    after_git = git_status_entries(workspace_dir)
     workspace_changes = (
         after_git
         if after_git is not None
@@ -4469,7 +4788,9 @@ def execute_attempt(
         "publication_requested": bool(result.get("publication_requested", False)),
         "network_requested": bool(result.get("network_requested", False)),
         "attempt_dir": str(attempt_dir),
+        "workspace": str(workspace_dir),
         "expected_session_path": relative_to_run(run_dir, expected_session_path),
+        "prompt_path": relative_to_run(run_dir, prompt_path),
         "stdout_path": relative_to_run(run_dir, stdout_path),
         "stderr_path": relative_to_run(run_dir, stderr_path),
         "result_path": relative_to_run(run_dir, result_path),
@@ -4892,6 +5213,7 @@ def verify_run(project_dir: Path, *, confirmed: bool = False) -> VerifyResult:
 
     run = status.run
     run_dir = status.run_dir
+    workspace_dir = run_workspace_path(run, status.project_dir)
     run_json_path = status.run_json_path or (run_dir / "run.json")
     profile_blockers = profile_transition_blockers(
         profile=run.get("profile", DEFAULT_PROFILE),
@@ -4943,6 +5265,8 @@ def verify_run(project_dir: Path, *, confirmed: bool = False) -> VerifyResult:
     base_commit = run.get("base_commit")
     if not isinstance(base_commit, str) or not base_commit:
         blockers.append("patch generation requires a Git base_commit recorded in run.json.")
+    elif not workspace_dir.exists() or not workspace_dir.is_dir():
+        blockers.append(f"patch generation requires the run workspace: {workspace_dir}.")
     else:
         generator = imported_check("generate_complete_patch.py")
         generated = run_json_check(
@@ -4950,7 +5274,7 @@ def verify_run(project_dir: Path, *, confirmed: bool = False) -> VerifyResult:
                 usable_python_executable(),
                 str(generator),
                 "--repo",
-                str(status.project_dir),
+                str(workspace_dir),
                 "--base",
                 base_commit,
                 "--output",
@@ -5002,7 +5326,7 @@ def verify_run(project_dir: Path, *, confirmed: bool = False) -> VerifyResult:
                 "--policy",
                 str(default_diff_policy()),
                 "--repo",
-                str(status.project_dir),
+                str(workspace_dir),
                 "--base",
                 str(base_commit),
                 "--format",
@@ -5048,7 +5372,7 @@ def verify_run(project_dir: Path, *, confirmed: bool = False) -> VerifyResult:
                 "--risk-policy",
                 str(risk_policy_path or default_risk_policy()),
                 "--repo",
-                str(status.project_dir),
+                str(workspace_dir),
                 "--base",
                 str(base_commit),
                 "--format",
@@ -5086,7 +5410,7 @@ def verify_run(project_dir: Path, *, confirmed: bool = False) -> VerifyResult:
         for check in pack_config["checks"]:
             result = run_pack_check(
                 check,
-                project_dir=status.project_dir,
+                project_dir=workspace_dir,
                 run_dir=run_dir,
                 patch_path=patch_path if patch_path.exists() else None,
             )
@@ -5182,7 +5506,8 @@ def continue_run(
         )
 
     contract = status.loop_contract or loop_contract_state(status.run_dir / "loop.md")
-    blockers = list(status.blockers)
+    run_status = str(status.run.get("status") or "")
+    blockers = [] if run_status == ADAPTER_BLOCKED else list(status.blockers)
     if contract["status"] != "valid":
         for error in contract.get("errors", []):
             append_unique(blockers, str(error))
@@ -5205,6 +5530,9 @@ def continue_run(
             blockers,
             f"max attempts reached ({len(attempts)}/{max_attempts}); human review is required.",
         )
+    workspace_dir = run_workspace_path(status.run, status.project_dir)
+    if not workspace_dir.exists() or not workspace_dir.is_dir():
+        append_unique(blockers, f"run workspace is not available: {workspace_dir}")
     if blockers:
         return ContinueResult(
             project_dir=status.project_dir,
