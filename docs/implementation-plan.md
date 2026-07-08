@@ -463,6 +463,8 @@ Implementation notes:
 
 ## Phase 9: Metrics
 
+Status: completed on 2026-07-08.
+
 Reuse and simplify imported metrics recording.
 
 Track:
@@ -479,9 +481,29 @@ Track:
 
 Done when:
 
-- `loopforge metrics record` writes a compact JSON record;
-- `loopforge metrics summarize` compares runs without treating unknowns as
+- [x] `loopforge metrics record` writes a compact JSON record;
+- [x] `loopforge metrics summarize` compares runs without treating unknowns as
   zero.
+
+Implementation notes:
+
+- `loopforge metrics record` writes `RUN/metrics/record.json` for the current
+  run or a selected `--run-id`, using existing run, attempt, adapter-result, and
+  verification evidence.
+- Records track duration, adapter, model, attempts, token/cost status, patch
+  size, verification result, human corrections, and final disposition; unavailable
+  values are kept as `null` with an explicit `unavailable` status.
+- Operators can provide missing reported values through CLI flags such as
+  `--model`, `--input-tokens`, `--output-tokens`, `--cost-microunits`,
+  `--human-corrections`, and `--final-disposition`.
+- `loopforge metrics summarize` scans recorded run metrics under the configured
+  run root, reports per-run comparisons, and computes aggregates only across
+  known values while separately counting unknowns.
+- Both metrics commands support `--format json` for scripts and tests.
+- Current validation: PowerShell command
+  `$env:PYTHONPATH='src'; python -m unittest discover -s tests` passes with 60
+  tests, including coverage for compact metrics records and summaries that do
+  not treat unknown patch size or token values as zero.
 
 ## Phase 10: Local UI
 

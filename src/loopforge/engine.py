@@ -30,6 +30,7 @@ LOOP_CONTRACT_READY = "loop_contract_ready"
 VERIFIED = "verified"
 VERIFICATION_FAILED = "verification_failed"
 SYNTHETIC_LEGACY_BASE_COMMIT = "0" * 40
+METRICS_RECORD_FILE = "record.json"
 
 SUPPORTED_ADAPTERS = (
     "codex",
@@ -423,6 +424,29 @@ class LearnResult:
     promoted: list[dict[str, Any]]
     rejected: list[dict[str, Any]]
     proposal_path: Path | None
+    blockers: list[str]
+
+
+@dataclass(frozen=True)
+class MetricsRecordResult:
+    project_dir: Path
+    run_dir: Path | None
+    run: dict[str, Any] | None
+    ok: bool
+    message: str
+    record_path: Path | None
+    record: dict[str, Any] | None
+    blockers: list[str]
+
+
+@dataclass(frozen=True)
+class MetricsSummaryResult:
+    project_dir: Path
+    run_root: Path | None
+    ok: bool
+    message: str
+    records: list[dict[str, Any]]
+    summary: dict[str, Any]
     blockers: list[str]
 
 
@@ -1274,6 +1298,29 @@ def legacy_artifact_state(run: dict[str, Any]) -> dict[str, Any]:
 def verification_state(run: dict[str, Any]) -> dict[str, Any] | None:
     verification = run.get("verification")
     return verification if isinstance(verification, dict) else None
+
+
+def parse_utc_timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.removesuffix("Z") + "+00:00")
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def duration_seconds(started_at: object, finished_at: object) -> int | None:
+    started = parse_utc_timestamp(started_at)
+    finished = parse_utc_timestamp(finished_at)
+    if started is None or finished is None:
+        return None
+    seconds = int((finished - started).total_seconds())
+    if seconds < 0:
+        return None
+    return seconds
 
 
 def new_config(
@@ -2599,6 +2646,548 @@ def list_runs(project_dir: Path) -> RunListResult:
         current_run_id=str(current_run_id) if current_run_id else None,
         runs=runs,
         blockers=[],
+    )
+
+
+def current_or_selected_run(
+    project_dir: Path,
+    run_id: str | None = None,
+) -> tuple[StatusResult, Path | None, Path | None, dict[str, Any] | None, list[str]]:
+    status = current_status(project_dir)
+    if not status.initialized or status.config is None:
+        return status, None, None, None, [status.next_step]
+    if run_id is None:
+        if status.run is None or status.run_dir is None:
+            blockers = status.blockers or [status.next_step]
+            return status, status.run_dir, status.run_json_path, None, blockers
+        return status, status.run_dir, status.run_json_path, status.run, []
+
+    selected = run_id.strip()
+    if not selected:
+        return status, None, None, None, ["run id must not be empty"]
+    run_dir = Path(str(status.config["run_root"])).expanduser() / selected
+    run_json_path = run_dir / "run.json"
+    if not run_json_path.exists():
+        return status, run_dir, run_json_path, None, [f"run metadata not found: {run_json_path}"]
+    return status, run_dir, run_json_path, read_json(run_json_path), []
+
+
+def nonnegative_int_or_none(value: object) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return None
+
+
+def first_nonnegative_int(*values: object) -> int | None:
+    for value in values:
+        parsed = nonnegative_int_or_none(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def latest_attempt(run: dict[str, Any]) -> dict[str, Any] | None:
+    attempts = attempt_records(run)
+    return attempts[-1] if attempts else None
+
+
+def read_attempt_protocol_result(run_dir: Path, attempt: dict[str, Any] | None) -> dict[str, Any]:
+    if attempt is None:
+        return {}
+    raw_path = attempt.get("result_path")
+    if not isinstance(raw_path, str) or not raw_path:
+        return {}
+    path = Path(raw_path)
+    if not path.is_absolute():
+        path = run_dir / path
+    if not path.exists():
+        return {}
+    try:
+        result = read_json(path)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {}
+    return result
+
+
+def model_from_command(command: object) -> str | None:
+    if not isinstance(command, list):
+        return None
+    parts = [str(part) for part in command]
+    for index, part in enumerate(parts):
+        if part in {"-m", "--model"} and index + 1 < len(parts):
+            return parts[index + 1]
+        if part.startswith("--model="):
+            return part.split("=", 1)[1] or None
+    return None
+
+
+def metrics_model(
+    *,
+    override: str | None,
+    attempt: dict[str, Any] | None,
+    protocol_result: dict[str, Any],
+) -> dict[str, Any]:
+    model: str | None = override.strip() if isinstance(override, str) and override.strip() else None
+    if model is None:
+        raw_model = protocol_result.get("model")
+        if isinstance(raw_model, str) and raw_model.strip():
+            model = raw_model.strip()
+        elif isinstance(raw_model, dict):
+            candidate = raw_model.get("id") or raw_model.get("name")
+            if isinstance(candidate, str) and candidate.strip():
+                model = candidate.strip()
+    if model is None:
+        for key in ("model_id", "model_name"):
+            candidate = protocol_result.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                model = candidate.strip()
+                break
+    if model is None and attempt is not None:
+        model = model_from_command(attempt.get("command"))
+    return {
+        "status": "reported" if model is not None else "unavailable",
+        "id": model,
+    }
+
+
+def metrics_tokens(
+    *,
+    protocol_result: dict[str, Any],
+    input_tokens: int | None,
+    output_tokens: int | None,
+    total_tokens: int | None,
+) -> dict[str, Any]:
+    source = protocol_result.get("tokens")
+    if not isinstance(source, dict):
+        source = protocol_result.get("usage")
+    if not isinstance(source, dict):
+        source = {}
+    measured_input = first_nonnegative_int(
+        input_tokens,
+        source.get("input_tokens"),
+        source.get("prompt_tokens"),
+    )
+    measured_output = first_nonnegative_int(
+        output_tokens,
+        source.get("output_tokens"),
+        source.get("completion_tokens"),
+    )
+    measured_total = first_nonnegative_int(total_tokens, source.get("total_tokens"))
+    if measured_total is None and measured_input is not None and measured_output is not None:
+        measured_total = measured_input + measured_output
+    status = (
+        "reported"
+        if any(value is not None for value in (measured_input, measured_output, measured_total))
+        else "unavailable"
+    )
+    return {
+        "status": status,
+        "input_tokens": measured_input,
+        "output_tokens": measured_output,
+        "total_tokens": measured_total,
+    }
+
+
+def metrics_cost(
+    *,
+    protocol_result: dict[str, Any],
+    amount_microunits: int | None,
+    currency: str | None,
+) -> dict[str, Any]:
+    source = protocol_result.get("cost")
+    if not isinstance(source, dict):
+        source = {}
+    measured_amount = first_nonnegative_int(
+        amount_microunits,
+        source.get("amount_microunits"),
+        source.get("total_microunits"),
+    )
+    measured_currency = (
+        currency.strip().upper()
+        if isinstance(currency, str) and currency.strip()
+        else None
+    )
+    if measured_currency is None:
+        raw_currency = source.get("currency")
+        if isinstance(raw_currency, str) and raw_currency.strip():
+            measured_currency = raw_currency.strip().upper()
+    return {
+        "status": "reported" if measured_amount is not None else "unavailable",
+        "amount_microunits": measured_amount,
+        "currency": measured_currency if measured_amount is not None else None,
+    }
+
+
+def metrics_patch(verification: dict[str, Any] | None) -> dict[str, Any]:
+    if verification is None:
+        return {
+            "status": "unavailable",
+            "path": None,
+            "size_bytes": None,
+            "sha256": None,
+        }
+    patch = verification.get("patch", {})
+    if not isinstance(patch, dict):
+        patch = {}
+    size = nonnegative_int_or_none(patch.get("size_bytes"))
+    generated = bool(patch.get("generated"))
+    if generated or patch.get("status") == "generated":
+        status = "measured"
+    else:
+        status = "not_generated"
+    return {
+        "status": status,
+        "path": patch.get("path") if isinstance(patch.get("path"), str) else None,
+        "size_bytes": size if size is not None else (0 if status == "not_generated" else None),
+        "sha256": patch.get("sha256") if isinstance(patch.get("sha256"), str) else None,
+    }
+
+
+def inferred_final_disposition(run_status: object) -> str:
+    status = str(run_status or "unknown")
+    if status == VERIFIED:
+        return "verified"
+    if status == VERIFICATION_FAILED:
+        return "failed"
+    if status == ADAPTER_BLOCKED:
+        return "blocked"
+    if status == READY_FOR_VERIFICATION:
+        return "pending_verification"
+    if status in {LOOP_CONTRACT_DRAFT, LOOP_CONTRACT_READY}:
+        return "pending"
+    return status
+
+
+def build_metrics_record(
+    *,
+    project_dir: Path,
+    run_dir: Path,
+    run: dict[str, Any],
+    model: str | None = None,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    total_tokens: int | None = None,
+    cost_microunits: int | None = None,
+    cost_currency: str | None = None,
+    human_corrections: int | None = None,
+    final_disposition: str | None = None,
+) -> dict[str, Any]:
+    attempt = latest_attempt(run)
+    protocol_result = read_attempt_protocol_result(run_dir, attempt)
+    verification = verification_state(run)
+    finished_at = (
+        verification.get("finished_at")
+        if isinstance(verification, dict) and verification.get("finished_at")
+        else (attempt or {}).get("finished_at")
+    )
+    if not finished_at:
+        finished_at = run.get("updated_at") or run.get("created_at")
+    measured_duration = duration_seconds(run.get("created_at"), finished_at)
+    attempt_count = run.get("attempt_count")
+    if not isinstance(attempt_count, int) or isinstance(attempt_count, bool):
+        attempt_count = len(attempt_records(run))
+    adapter = attempt.get("adapter") if isinstance(attempt, dict) else None
+    final = (
+        final_disposition.strip()
+        if isinstance(final_disposition, str) and final_disposition.strip()
+        else inferred_final_disposition(run.get("status"))
+    )
+    corrections = nonnegative_int_or_none(human_corrections)
+    if corrections is None:
+        corrections = nonnegative_int_or_none(run.get("human_correction_count"))
+    return {
+        "metrics_version": 1,
+        "recorded_at": utc_now(),
+        "run_id": run.get("run_id"),
+        "task_id": run.get("task_id"),
+        "task": run.get("task"),
+        "project_root": str(project_dir),
+        "profile": run.get("profile"),
+        "pack": run.get("pack"),
+        "timing": {
+            "started_at": run.get("created_at"),
+            "finished_at": finished_at,
+            "duration_seconds": measured_duration,
+            "status": "measured" if measured_duration is not None else "unavailable",
+        },
+        "adapter": {
+            "status": "reported" if isinstance(adapter, str) and adapter else "unavailable",
+            "id": adapter if isinstance(adapter, str) and adapter else None,
+        },
+        "model": metrics_model(
+            override=model,
+            attempt=attempt,
+            protocol_result=protocol_result,
+        ),
+        "attempts": {
+            "count": attempt_count,
+            "statuses": [
+                str(item.get("status") or "unknown")
+                for item in attempt_records(run)
+            ],
+        },
+        "tokens": metrics_tokens(
+            protocol_result=protocol_result,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+        ),
+        "cost": metrics_cost(
+            protocol_result=protocol_result,
+            amount_microunits=cost_microunits,
+            currency=cost_currency,
+        ),
+        "patch": metrics_patch(verification),
+        "verification": {
+            "status": verification.get("status") if isinstance(verification, dict) else None,
+            "checks_passed": (
+                verification.get("checks_passed") if isinstance(verification, dict) else None
+            ),
+            "checks_total": (
+                verification.get("checks_total") if isinstance(verification, dict) else None
+            ),
+        },
+        "human_corrections": {
+            "status": "measured" if corrections is not None else "unavailable",
+            "count": corrections,
+        },
+        "final_disposition": {
+            "status": final,
+            "source": "reported" if final_disposition else "run_status",
+        },
+    }
+
+
+def record_run_metrics(
+    project_dir: Path,
+    *,
+    run_id: str | None = None,
+    model: str | None = None,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    total_tokens: int | None = None,
+    cost_microunits: int | None = None,
+    cost_currency: str | None = None,
+    human_corrections: int | None = None,
+    final_disposition: str | None = None,
+) -> MetricsRecordResult:
+    status, run_dir, _run_json_path, run, blockers = current_or_selected_run(project_dir, run_id)
+    if blockers or run is None or run_dir is None:
+        return MetricsRecordResult(
+            project_dir=status.project_dir,
+            run_dir=run_dir,
+            run=run,
+            ok=False,
+            message="LoopForge metrics record failed.",
+            record_path=None,
+            record=None,
+            blockers=blockers,
+        )
+    record = build_metrics_record(
+        project_dir=status.project_dir,
+        run_dir=run_dir,
+        run=run,
+        model=model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
+        cost_microunits=cost_microunits,
+        cost_currency=cost_currency,
+        human_corrections=human_corrections,
+        final_disposition=final_disposition,
+    )
+    record_path = run_dir / "metrics" / METRICS_RECORD_FILE
+    write_json_atomic(record_path, record)
+    return MetricsRecordResult(
+        project_dir=status.project_dir,
+        run_dir=run_dir,
+        run=run,
+        ok=True,
+        message="LoopForge metrics recorded.",
+        record_path=record_path,
+        record=record,
+        blockers=[],
+    )
+
+
+def metric_number(value: object) -> int | float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)) and value >= 0:
+        return value
+    return None
+
+
+def summarize_number_series(records: list[dict[str, Any]], values: list[object]) -> dict[str, Any]:
+    known = [number for number in (metric_number(value) for value in values) if number is not None]
+    total = sum(known) if known else None
+    return {
+        "known_count": len(known),
+        "unknown_count": len(records) - len(known),
+        "min": min(known) if known else None,
+        "max": max(known) if known else None,
+        "sum": total,
+        "average": (total / len(known)) if known else None,
+    }
+
+
+def count_values(values: list[object]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for value in values:
+        key = str(value) if value is not None else "unknown"
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def summarize_token_field(records: list[dict[str, Any]], field: str) -> dict[str, Any]:
+    return summarize_number_series(
+        records,
+        [
+            record.get("tokens", {}).get(field)
+            if isinstance(record.get("tokens"), dict)
+            else None
+            for record in records
+        ],
+    )
+
+
+def summarize_costs(records: list[dict[str, Any]]) -> dict[str, Any]:
+    totals_by_currency: dict[str, int] = {}
+    known = 0
+    for record in records:
+        cost = record.get("cost")
+        if not isinstance(cost, dict):
+            continue
+        amount = nonnegative_int_or_none(cost.get("amount_microunits"))
+        currency = cost.get("currency")
+        if amount is None or not isinstance(currency, str) or not currency:
+            continue
+        known += 1
+        totals_by_currency[currency] = totals_by_currency.get(currency, 0) + amount
+    return {
+        "known_count": known,
+        "unknown_count": len(records) - known,
+        "amount_microunits_by_currency": dict(sorted(totals_by_currency.items())),
+    }
+
+
+def build_metrics_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
+    rows = []
+    for record in records:
+        timing = record.get("timing") if isinstance(record.get("timing"), dict) else {}
+        patch = record.get("patch") if isinstance(record.get("patch"), dict) else {}
+        verification = (
+            record.get("verification") if isinstance(record.get("verification"), dict) else {}
+        )
+        final = (
+            record.get("final_disposition")
+            if isinstance(record.get("final_disposition"), dict)
+            else {}
+        )
+        attempts = record.get("attempts") if isinstance(record.get("attempts"), dict) else {}
+        rows.append(
+            {
+                "run_id": record.get("run_id"),
+                "duration_seconds": timing.get("duration_seconds"),
+                "attempt_count": attempts.get("count"),
+                "patch_size_bytes": patch.get("size_bytes"),
+                "verification": verification.get("status"),
+                "final_disposition": final.get("status"),
+            }
+        )
+    return {
+        "metrics_version": 1,
+        "record_count": len(records),
+        "duration_seconds": summarize_number_series(
+            records,
+            [
+                record.get("timing", {}).get("duration_seconds")
+                if isinstance(record.get("timing"), dict)
+                else None
+                for record in records
+            ],
+        ),
+        "attempt_count": summarize_number_series(
+            records,
+            [
+                record.get("attempts", {}).get("count")
+                if isinstance(record.get("attempts"), dict)
+                else None
+                for record in records
+            ],
+        ),
+        "patch_size_bytes": summarize_number_series(
+            records,
+            [
+                record.get("patch", {}).get("size_bytes")
+                if isinstance(record.get("patch"), dict)
+                else None
+                for record in records
+            ],
+        ),
+        "tokens": {
+            "input_tokens": summarize_token_field(records, "input_tokens"),
+            "output_tokens": summarize_token_field(records, "output_tokens"),
+            "total_tokens": summarize_token_field(records, "total_tokens"),
+        },
+        "cost": summarize_costs(records),
+        "verification_results": count_values(
+            [
+                record.get("verification", {}).get("status")
+                if isinstance(record.get("verification"), dict)
+                else None
+                for record in records
+            ]
+        ),
+        "final_dispositions": count_values(
+            [
+                record.get("final_disposition", {}).get("status")
+                if isinstance(record.get("final_disposition"), dict)
+                else None
+                for record in records
+            ]
+        ),
+        "runs": rows,
+    }
+
+
+def summarize_run_metrics(project_dir: Path) -> MetricsSummaryResult:
+    status = current_status(project_dir)
+    if not status.initialized or status.config is None:
+        return MetricsSummaryResult(
+            project_dir=status.project_dir,
+            run_root=None,
+            ok=False,
+            message="LoopForge metrics summarize failed.",
+            records=[],
+            summary=build_metrics_summary([]),
+            blockers=[status.next_step],
+        )
+
+    run_root = Path(str(status.config["run_root"])).expanduser()
+    records: list[dict[str, Any]] = []
+    blockers: list[str] = []
+    if run_root.exists():
+        for path in sorted(run_root.glob(f"*/metrics/{METRICS_RECORD_FILE}")):
+            try:
+                record = read_json(path)
+            except (OSError, ValueError, json.JSONDecodeError) as error:
+                blockers.append(f"could not read metrics record {path}: {error}")
+                continue
+            records.append(record)
+    summary = build_metrics_summary(records)
+    return MetricsSummaryResult(
+        project_dir=status.project_dir,
+        run_root=run_root,
+        ok=not blockers,
+        message=(
+            "LoopForge metrics summary ready."
+            if not blockers
+            else "LoopForge metrics summary has warnings."
+        ),
+        records=records,
+        summary=summary,
+        blockers=blockers,
     )
 
 

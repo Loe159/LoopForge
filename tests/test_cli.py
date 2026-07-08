@@ -1215,6 +1215,169 @@ class CliTests(unittest.TestCase):
             self.assertIn("LoopForge attempts", text)
             self.assertIn("raw hello", text)
 
+    def test_metrics_record_writes_compact_json_without_inventing_unknowns(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            record_output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(["run", "--task", "Measure one run", "--success-check", "record exists"]),
+                    0,
+                )
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(record_output),
+            ):
+                self.assertEqual(
+                    main(
+                        [
+                            "metrics",
+                            "record",
+                            "--model",
+                            "gpt-test",
+                            "--input-tokens",
+                            "12",
+                            "--output-tokens",
+                            "8",
+                            "--cost-microunits",
+                            "1234",
+                            "--cost-currency",
+                            "usd",
+                            "--human-corrections",
+                            "2",
+                            "--final-disposition",
+                            "accepted",
+                            "--format",
+                            "json",
+                        ]
+                    ),
+                    0,
+                )
+
+            payload = json.loads(record_output.getvalue())
+            record_path = Path(payload["record_path"])
+            record = payload["record"]
+
+            self.assertTrue(record_path.exists())
+            self.assertEqual(json.loads(record_path.read_text(encoding="utf-8")), record)
+            self.assertEqual(record["model"], {"id": "gpt-test", "status": "reported"})
+            self.assertEqual(record["tokens"]["input_tokens"], 12)
+            self.assertEqual(record["tokens"]["output_tokens"], 8)
+            self.assertEqual(record["tokens"]["total_tokens"], 20)
+            self.assertEqual(record["cost"]["amount_microunits"], 1234)
+            self.assertEqual(record["cost"]["currency"], "USD")
+            self.assertEqual(record["patch"]["status"], "unavailable")
+            self.assertIsNone(record["patch"]["size_bytes"])
+            self.assertEqual(record["human_corrections"]["count"], 2)
+            self.assertEqual(record["final_disposition"]["status"], "accepted")
+
+    def test_metrics_summarize_compares_runs_without_treating_unknowns_as_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(["run", "--task", "Known patch run", "--success-check", "patch measured"]),
+                    0,
+                )
+
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            first_run_id = config["current_run_id"]
+            first_run_dir = loopforge_home / "runs" / repo.name / first_run_id
+            first_run_path = first_run_dir / "run.json"
+            first_run = json.loads(first_run_path.read_text(encoding="utf-8"))
+            first_run["status"] = "verified"
+            first_run["verification"] = {
+                "status": "passed",
+                "finished_at": first_run["created_at"],
+                "patch": {
+                    "generated": True,
+                    "status": "generated",
+                    "path": "artifacts/patches/complete.patch",
+                    "size_bytes": 20,
+                    "sha256": "a" * 64,
+                },
+                "checks_passed": 1,
+                "checks_total": 1,
+            }
+            first_run_path.write_text(json.dumps(first_run, indent=2), encoding="utf-8")
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(
+                    main(
+                        [
+                            "metrics",
+                            "record",
+                            "--run-id",
+                            first_run_id,
+                            "--input-tokens",
+                            "10",
+                            "--output-tokens",
+                            "5",
+                        ]
+                    ),
+                    0,
+                )
+                self.assertEqual(
+                    main(
+                        [
+                            "run",
+                            "--task",
+                            "Unknown patch run",
+                            "--success-check",
+                            "record exists",
+                        ]
+                    ),
+                    0,
+                )
+                self.assertEqual(main(["metrics", "record"]), 0)
+
+            summary_output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(summary_output),
+            ):
+                self.assertEqual(main(["metrics", "summarize", "--format", "json"]), 0)
+
+            payload = json.loads(summary_output.getvalue())
+            summary = payload["summary"]
+
+            self.assertEqual(summary["record_count"], 2)
+            self.assertEqual(summary["patch_size_bytes"]["known_count"], 1)
+            self.assertEqual(summary["patch_size_bytes"]["unknown_count"], 1)
+            self.assertEqual(summary["patch_size_bytes"]["sum"], 20)
+            self.assertEqual(summary["patch_size_bytes"]["average"], 20)
+            self.assertEqual(summary["tokens"]["total_tokens"]["known_count"], 1)
+            self.assertEqual(summary["tokens"]["total_tokens"]["unknown_count"], 1)
+            self.assertEqual(summary["tokens"]["total_tokens"]["sum"], 15)
+            self.assertEqual(summary["verification_results"]["passed"], 1)
+            self.assertEqual(summary["verification_results"]["unknown"], 1)
+            self.assertEqual(summary["final_dispositions"]["pending"], 1)
+            self.assertEqual(summary["final_dispositions"]["verified"], 1)
+
     def test_shell_memory_skills_permissions_and_review(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)

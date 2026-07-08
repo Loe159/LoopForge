@@ -18,6 +18,8 @@ from loopforge.engine import (
     initialize_project,
     learn_run,
     profile_permission_lines,
+    record_run_metrics,
+    summarize_run_metrics,
     verify_run,
 )
 
@@ -150,6 +152,111 @@ def print_profile_policy(profile: object, *, file=None) -> None:
         print(line, file=file)
 
 
+def non_negative_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("value must be non-negative")
+    return parsed
+
+
+def print_json_payload(payload: object) -> None:
+    import json
+
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def format_metric_value(value: object) -> str:
+    return "unknown" if value is None else str(value)
+
+
+def print_metrics_record(record: dict[str, object], record_path: Path) -> None:
+    print(f"metrics record: {record_path}")
+    print(f"run id: {record.get('run_id')}")
+    timing = record.get("timing", {})
+    if isinstance(timing, dict):
+        print(f"duration seconds: {format_metric_value(timing.get('duration_seconds'))}")
+    adapter = record.get("adapter", {})
+    if isinstance(adapter, dict):
+        print(f"adapter: {format_metric_value(adapter.get('id'))}")
+    model = record.get("model", {})
+    if isinstance(model, dict):
+        print(f"model: {format_metric_value(model.get('id'))}")
+    tokens = record.get("tokens", {})
+    if isinstance(tokens, dict):
+        print(f"tokens: {tokens.get('status', 'unknown')}")
+    cost = record.get("cost", {})
+    if isinstance(cost, dict):
+        print(f"cost: {cost.get('status', 'unknown')}")
+    patch = record.get("patch", {})
+    if isinstance(patch, dict):
+        print(f"patch size bytes: {format_metric_value(patch.get('size_bytes'))}")
+    verification = record.get("verification", {})
+    if isinstance(verification, dict):
+        print(f"verification: {format_metric_value(verification.get('status'))}")
+    final = record.get("final_disposition", {})
+    if isinstance(final, dict):
+        print(f"final disposition: {format_metric_value(final.get('status'))}")
+
+
+def print_metric_series(name: str, series: object) -> None:
+    if not isinstance(series, dict):
+        return
+    average = series.get("average")
+    if average is None:
+        average_text = "unknown"
+    elif isinstance(average, float):
+        average_text = f"{average:.2f}".rstrip("0").rstrip(".")
+    else:
+        average_text = str(average)
+    print(
+        f"{name}: average {average_text} "
+        f"(known {series.get('known_count', 0)}, unknown {series.get('unknown_count', 0)})"
+    )
+
+
+def print_metrics_summary(summary: dict[str, object]) -> None:
+    print("LoopForge metrics summary")
+    print(f"records: {summary.get('record_count', 0)}")
+    print_metric_series("duration seconds", summary.get("duration_seconds"))
+    print_metric_series("attempt count", summary.get("attempt_count"))
+    print_metric_series("patch size bytes", summary.get("patch_size_bytes"))
+    cost = summary.get("cost", {})
+    if isinstance(cost, dict):
+        totals = cost.get("amount_microunits_by_currency", {})
+        print(
+            "cost records: "
+            f"known {cost.get('known_count', 0)}, unknown {cost.get('unknown_count', 0)}"
+        )
+        if isinstance(totals, dict) and totals:
+            for currency, amount in totals.items():
+                print(f"cost {currency}: {amount} microunits")
+    verification = summary.get("verification_results", {})
+    if isinstance(verification, dict):
+        print("verification results:")
+        for name, count in verification.items():
+            print(f"- {name}: {count}")
+    final = summary.get("final_dispositions", {})
+    if isinstance(final, dict):
+        print("final dispositions:")
+        for name, count in final.items():
+            print(f"- {name}: {count}")
+    runs = summary.get("runs", [])
+    if isinstance(runs, list) and runs:
+        print("runs:")
+        for run in runs:
+            if not isinstance(run, dict):
+                continue
+            print(
+                "- "
+                f"{run.get('run_id')}: "
+                f"duration={format_metric_value(run.get('duration_seconds'))}, "
+                f"attempts={format_metric_value(run.get('attempt_count'))}, "
+                f"patch={format_metric_value(run.get('patch_size_bytes'))}, "
+                f"verification={format_metric_value(run.get('verification'))}, "
+                f"disposition={format_metric_value(run.get('final_disposition'))}"
+            )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="loopforge")
     subcommands = parser.add_subparsers(dest="command")
@@ -230,6 +337,44 @@ def build_parser() -> argparse.ArgumentParser:
     pack_subcommands = pack_parser.add_subparsers(dest="pack_command", required=True)
     pack_subcommands.add_parser("list", help="List available project packs.")
     pack_subcommands.add_parser("detect", help="Show the pack selected for this project.")
+
+    metrics_parser = subcommands.add_parser(
+        "metrics",
+        help="Record or summarize compact LoopForge run metrics.",
+    )
+    metrics_subcommands = metrics_parser.add_subparsers(
+        dest="metrics_command",
+        required=True,
+    )
+    metrics_record = metrics_subcommands.add_parser(
+        "record",
+        help="Write a compact JSON metrics record for the current or selected run.",
+    )
+    metrics_record.add_argument("--run-id", help="Run id to record. Defaults to current run.")
+    metrics_record.add_argument("--model", help="Model id when adapter output did not report one.")
+    metrics_record.add_argument("--input-tokens", type=non_negative_int)
+    metrics_record.add_argument("--output-tokens", type=non_negative_int)
+    metrics_record.add_argument("--total-tokens", type=non_negative_int)
+    metrics_record.add_argument("--cost-microunits", type=non_negative_int)
+    metrics_record.add_argument("--cost-currency")
+    metrics_record.add_argument("--human-corrections", type=non_negative_int)
+    metrics_record.add_argument("--final-disposition")
+    metrics_record.add_argument(
+        "--format",
+        choices=("text", "json"),
+        default="text",
+        help="Output format.",
+    )
+    metrics_summarize = metrics_subcommands.add_parser(
+        "summarize",
+        help="Compare recorded metrics across runs.",
+    )
+    metrics_summarize.add_argument(
+        "--format",
+        choices=("text", "json"),
+        default="text",
+        help="Output format.",
+    )
 
     continue_parser = subcommands.add_parser(
         "continue",
@@ -391,6 +536,61 @@ def main(argv: list[str] | None = None) -> int:
             print(f"source: {pack.get('source') or 'none'}")
             print(f"score: {pack.get('detection_score', 0)}")
             return 0
+    if args.command == "metrics":
+        if args.metrics_command == "record":
+            result = record_run_metrics(
+                Path.cwd(),
+                run_id=args.run_id,
+                model=args.model,
+                input_tokens=args.input_tokens,
+                output_tokens=args.output_tokens,
+                total_tokens=args.total_tokens,
+                cost_microunits=args.cost_microunits,
+                cost_currency=args.cost_currency,
+                human_corrections=args.human_corrections,
+                final_disposition=args.final_disposition,
+            )
+            output = sys.stdout if result.ok else sys.stderr
+            if args.format == "json":
+                payload = {
+                    "ok": result.ok,
+                    "message": result.message,
+                    "record_path": str(result.record_path) if result.record_path else None,
+                    "record": result.record,
+                    "blockers": result.blockers,
+                }
+                print_json_payload(payload)
+            else:
+                print(result.message, file=output)
+                if result.record is not None and result.record_path is not None:
+                    print_metrics_record(result.record, result.record_path)
+                if result.blockers:
+                    print("blockers:", file=output)
+                    for blocker in result.blockers:
+                        print(f"- {blocker}", file=output)
+            return 0 if result.ok else 1
+        if args.metrics_command == "summarize":
+            result = summarize_run_metrics(Path.cwd())
+            output = sys.stdout if result.ok else sys.stderr
+            if args.format == "json":
+                payload = {
+                    "ok": result.ok,
+                    "message": result.message,
+                    "run_root": str(result.run_root) if result.run_root else None,
+                    "summary": result.summary,
+                    "blockers": result.blockers,
+                }
+                print_json_payload(payload)
+            else:
+                print(result.message, file=output)
+                if result.run_root is not None:
+                    print(f"run root: {result.run_root}", file=output)
+                print_metrics_summary(result.summary)
+                if result.blockers:
+                    print("blockers:", file=output)
+                    for blocker in result.blockers:
+                        print(f"- {blocker}", file=output)
+            return 0 if result.ok else 1
     if args.command == "status":
         result = current_status(Path.cwd())
         print(f"project: {result.project_dir.name}")
