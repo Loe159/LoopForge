@@ -14,7 +14,7 @@ from unittest import mock
 
 from loopforge.cli import main
 from loopforge.engine import usable_python_executable
-from loopforge.interactive import available_commands, tui_dependency_state
+from loopforge.interactive import SlashCommandCompleter, available_commands, tui_dependency_state
 
 
 @contextlib.contextmanager
@@ -824,6 +824,11 @@ class CliTests(unittest.TestCase):
             text = output.getvalue()
             self.assertIn("/model is recognized but not supported yet", text)
             self.assertIn("Model selection is owned", text)
+
+    def test_shell_completer_supports_prompt_toolkit_async_api(self) -> None:
+        completer = SlashCommandCompleter(available_commands())
+
+        self.assertTrue(hasattr(completer, "get_completions_async"))
 
     def test_shell_doctor_reports_missing_tui_dependencies(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -11,6 +11,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TextIO
 
+try:
+    from prompt_toolkit.completion import Completer
+except ImportError:  # pragma: no cover - exercised only in minimal installs.
+    class Completer:  # type: ignore[no-redef]
+        pass
+
 from loopforge.engine import (
     DEFAULT_PROFILE,
     SUPPORTED_ADAPTERS,
@@ -161,7 +167,7 @@ def available_commands() -> dict[str, str]:
     return COMMANDS.copy()
 
 
-class SlashCommandCompleter:
+class SlashCommandCompleter(Completer):
     def __init__(self, commands: dict[str, str]) -> None:
         self.commands = commands
 
