@@ -19,7 +19,13 @@ loopforge status
 loopforge continue
 loopforge verify
 loopforge learn
+loopforge shell
 ```
+
+`loopforge shell` starts an interactive prompt with slash commands such as
+`/status`, `/context`, `/compact`, `/runs`, and `/resume`. For scripts and
+tests, use `loopforge shell --command "/status"` or
+`loopforge shell --script commands.loopforge`.
 
 ## Imported Core
 

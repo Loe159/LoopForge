@@ -335,6 +335,38 @@ class LearnResult:
     blockers: list[str]
 
 
+@dataclass(frozen=True)
+class RunListResult:
+    project_dir: Path
+    run_root: Path | None
+    initialized: bool
+    config: dict[str, Any] | None
+    current_run_id: str | None
+    runs: list[dict[str, Any]]
+    blockers: list[str]
+
+
+@dataclass(frozen=True)
+class ResumeRunResult:
+    project_dir: Path
+    run_dir: Path | None
+    run: dict[str, Any] | None
+    ok: bool
+    message: str
+    blockers: list[str]
+
+
+@dataclass(frozen=True)
+class CompactContextResult:
+    project_dir: Path
+    run_dir: Path | None
+    path: Path | None
+    ok: bool
+    message: str
+    summary: str
+    blockers: list[str]
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -1862,6 +1894,268 @@ def current_status(project_dir: Path) -> StatusResult:
         memory=memory_state(project_dir, run_dir),
         next_step=describe_next_step(run),
         blockers=blockers,
+    )
+
+
+def run_summary_from_path(run_path: Path, *, current_run_id: str | None = None) -> dict[str, Any]:
+    run_json_path = run_path / "run.json"
+    summary: dict[str, Any] = {
+        "run_id": run_path.name,
+        "path": str(run_path),
+        "current": run_path.name == current_run_id,
+        "status": "missing",
+        "task": "",
+        "pack": "",
+        "created_at": "",
+        "updated_at": "",
+    }
+    if not run_json_path.exists():
+        return summary
+    try:
+        run = read_json(run_json_path)
+    except ValueError as error:
+        summary.update({"status": "invalid", "error": str(error)})
+        return summary
+    summary.update(
+        {
+            "run_id": str(run.get("run_id") or run_path.name),
+            "status": str(run.get("status") or "unknown"),
+            "task": str(run.get("task") or ""),
+            "pack": str(run.get("pack") or ""),
+            "created_at": str(run.get("created_at") or ""),
+            "updated_at": str(run.get("updated_at") or ""),
+        }
+    )
+    return summary
+
+
+def list_runs(project_dir: Path) -> RunListResult:
+    status = current_status(project_dir)
+    if not status.initialized or status.config is None:
+        return RunListResult(
+            project_dir=status.project_dir,
+            run_root=None,
+            initialized=False,
+            config=None,
+            current_run_id=None,
+            runs=[],
+            blockers=[status.next_step],
+        )
+
+    run_root = Path(str(status.config["run_root"])).expanduser()
+    current_run_id = status.config.get("current_run_id")
+    runs: list[dict[str, Any]] = []
+    if run_root.exists():
+        for run_path in sorted(run_root.iterdir(), reverse=True):
+            if run_path.is_dir():
+                runs.append(
+                    run_summary_from_path(
+                        run_path,
+                        current_run_id=str(current_run_id) if current_run_id else None,
+                    )
+                )
+    return RunListResult(
+        project_dir=status.project_dir,
+        run_root=run_root,
+        initialized=True,
+        config=status.config,
+        current_run_id=str(current_run_id) if current_run_id else None,
+        runs=runs,
+        blockers=[],
+    )
+
+
+def resume_run(project_dir: Path, run_id: str) -> ResumeRunResult:
+    if not run_id.strip():
+        return ResumeRunResult(
+            project_dir=project_dir.resolve(),
+            run_dir=None,
+            run=None,
+            ok=False,
+            message="LoopForge resume failed.",
+            blockers=["run id must not be empty"],
+        )
+
+    status = current_status(project_dir)
+    if not status.initialized or status.config is None:
+        return ResumeRunResult(
+            project_dir=status.project_dir,
+            run_dir=None,
+            run=None,
+            ok=False,
+            message="LoopForge resume failed.",
+            blockers=[status.next_step],
+        )
+
+    run_root = Path(str(status.config["run_root"])).expanduser()
+    run_dir = run_root / run_id.strip()
+    run_json_path = run_dir / "run.json"
+    if not run_json_path.exists():
+        return ResumeRunResult(
+            project_dir=status.project_dir,
+            run_dir=run_dir,
+            run=None,
+            ok=False,
+            message="LoopForge resume failed.",
+            blockers=[f"run metadata not found: {run_json_path}"],
+        )
+
+    run = read_json(run_json_path)
+    config = dict(status.config)
+    config["current_run_id"] = str(run.get("run_id") or run_id.strip())
+    config["updated_at"] = utc_now()
+    write_json_atomic(status.config_path, config)
+    return ResumeRunResult(
+        project_dir=status.project_dir,
+        run_dir=run_dir,
+        run=run,
+        ok=True,
+        message=f"LoopForge resumed run: {config['current_run_id']}",
+        blockers=[],
+    )
+
+
+def directory_file_sizes(root: Path) -> list[tuple[str, int]]:
+    if not root.exists():
+        return []
+    sizes: list[tuple[str, int]] = []
+    for path in sorted(root.rglob("*")):
+        if path.is_file():
+            try:
+                sizes.append((str(path.relative_to(root)), path.stat().st_size))
+            except OSError:
+                continue
+    return sizes
+
+
+def render_compact_context(status: StatusResult, *, focus: str = "") -> str:
+    lines = [
+        "# LoopForge Compact Context",
+        "",
+        f"- Generated: {utc_now()}",
+        f"- Project: {status.project_dir}",
+    ]
+    if focus.strip():
+        lines.append(f"- Focus: {focus.strip()}")
+    if status.config is not None:
+        lines.extend(
+            [
+                f"- Profile: {status.config.get('profile')}",
+                f"- Run root: {status.config.get('run_root')}",
+            ]
+        )
+    if status.run is None or status.run_dir is None:
+        lines.extend(["", "## Current Run", "", "No current run is available."])
+    else:
+        run = status.run
+        lines.extend(
+            [
+                "",
+                "## Current Run",
+                "",
+                f"- Run ID: {run.get('run_id')}",
+                f"- Task: {run.get('task')}",
+                f"- Status: {run.get('status')}",
+                f"- Pack: {run.get('pack')}",
+                f"- Attempts: {run.get('attempt_count', len(run.get('attempts', [])))}",
+                f"- Run directory: {status.run_dir}",
+            ]
+        )
+        checks = run.get("success_checks", [])
+        if isinstance(checks, list) and checks:
+            lines.extend(["", "## Success Checks", ""])
+            lines.extend(f"- {check}" for check in checks)
+        if status.loop_contract is not None:
+            lines.extend(
+                [
+                    "",
+                    "## Loop Contract",
+                    "",
+                    f"- Status: {status.loop_contract.get('status')}",
+                    f"- Subjective: {'yes' if status.loop_contract.get('subjective') else 'no'}",
+                    f"- Rubric: {'present' if status.loop_contract.get('rubric') else 'missing'}",
+                ]
+            )
+        if status.verification is not None:
+            verification = status.verification
+            checks_passed = verification.get("checks_passed", 0)
+            checks_total = verification.get("checks_total", 0)
+            lines.extend(
+                [
+                    "",
+                    "## Verification",
+                    "",
+                    f"- Status: {verification.get('status')}",
+                    f"- Checks: {checks_passed}/{checks_total}",
+                ]
+            )
+            patch = verification.get("patch", {})
+            if isinstance(patch, dict):
+                lines.append(f"- Patch: {patch.get('path') or 'none'}")
+        if status.memory is not None:
+            memory = status.memory
+            lines.extend(
+                [
+                    "",
+                    "## Memory",
+                    "",
+                    f"- Durable items: {memory.get('durable_items', 0)}",
+                    f"- Pending proposals: {memory.get('pending', 0)}",
+                    f"- Run snapshot: {memory.get('run_snapshot') or 'none'}",
+                ]
+            )
+        sizes = directory_file_sizes(status.run_dir)
+        if sizes:
+            lines.extend(["", "## Run Files", ""])
+            for relative_name, size in sizes[:40]:
+                lines.append(f"- {relative_name}: {size} bytes")
+            if len(sizes) > 40:
+                lines.append(f"- ... {len(sizes) - 40} more files")
+
+    lines.extend(["", "## Blockers", ""])
+    if status.blockers:
+        lines.extend(f"- {blocker}" for blocker in status.blockers)
+    else:
+        lines.append("- none")
+    lines.extend(["", "## Next Step", "", status.next_step, ""])
+    return "\n".join(lines)
+
+
+def compact_current_context(project_dir: Path, *, focus: str = "") -> CompactContextResult:
+    status = current_status(project_dir)
+    summary = render_compact_context(status, focus=focus)
+    if not status.initialized:
+        return CompactContextResult(
+            project_dir=status.project_dir,
+            run_dir=None,
+            path=None,
+            ok=False,
+            message="LoopForge compact failed.",
+            summary=summary,
+            blockers=[status.next_step],
+        )
+    if status.run_dir is None:
+        return CompactContextResult(
+            project_dir=status.project_dir,
+            run_dir=None,
+            path=None,
+            ok=False,
+            message="LoopForge compact failed.",
+            summary=summary,
+            blockers=[status.next_step],
+        )
+    target_dir = status.run_dir / "artifacts" / "context"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_path = target_dir / "compact.md"
+    target_path.write_text(summary, encoding="utf-8")
+    return CompactContextResult(
+        project_dir=status.project_dir,
+        run_dir=status.run_dir,
+        path=target_path,
+        ok=True,
+        message=f"LoopForge compact context written: {target_path}",
+        summary=summary,
+        blockers=[],
     )
 
 

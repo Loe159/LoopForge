@@ -14,6 +14,7 @@ from unittest import mock
 
 from loopforge.cli import main
 from loopforge.engine import usable_python_executable
+from loopforge.interactive import available_commands, tui_dependency_state
 
 
 @contextlib.contextmanager
@@ -603,6 +604,256 @@ class CliTests(unittest.TestCase):
             self.assertIn("legacy issue:", text)
             self.assertIn("blockers:\n- none", text)
             self.assertIn("next step: Complete the loop contract", text)
+
+    def test_shell_status_reports_not_initialized_initialized_and_current_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["shell", "--command", "/status"]), 0)
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(main(["shell", "--command", "/status"]), 0)
+                self.assertEqual(main(["run", "--task", "Add shell status"]), 0)
+                self.assertEqual(main(["shell", "--command", "/status"]), 0)
+
+            text = output.getvalue()
+            self.assertIn("state: not initialized", text)
+            self.assertIn("state: initialized", text)
+            self.assertIn("task: Add shell status", text)
+            self.assertIn("loop status: loop_contract_draft", text)
+
+    def test_shell_plain_text_creates_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(main(["shell", "--command", "Add an interactive task"]), 0)
+
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+            run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            self.assertEqual(run_json["task"], "Add an interactive task")
+            self.assertIn("LoopForge run created", output.getvalue())
+
+    def test_shell_script_runs_native_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+            script = workspace / "commands.loopforge"
+            script.write_text(
+                "\n".join(
+                    [
+                        "/init",
+                        '/run --task "Scripted loop" --success-check "contract validates"',
+                        "/continue",
+                        '/learn --note "Fact: this repo uses unittest"',
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["shell", "--script", str(script)]), 0)
+
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+            run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            self.assertEqual(run_json["status"], "loop_contract_ready")
+            self.assertTrue((run_dir / "artifacts" / "memory" / "proposals.json").exists())
+            text = output.getvalue()
+            self.assertIn("Loop contract accepted", text)
+            self.assertIn("proposals:", text)
+
+    def test_shell_verify_runs_pack_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True, text=True)
+            (repo / ".gitignore").write_text(".loopforge/\n", encoding="utf-8")
+            (repo / "README.md").write_text("# Project\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "add", ".gitignore", "README.md"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=LoopForge Tests",
+                    "-c",
+                    "user.email=loopforge@example.invalid",
+                    "commit",
+                    "-m",
+                    "initial",
+                ],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                run_command = (
+                    '/run --task "Update README interactively" '
+                    '--success-check "README changed"'
+                )
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(main(["shell", "--command", run_command]), 0)
+                (repo / "README.md").write_text("# Project\n\nUpdated.\n", encoding="utf-8")
+                self.assertEqual(main(["shell", "--command", "/verify"]), 0)
+
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+            run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            self.assertEqual(run_json["status"], "verified")
+            self.assertIn("verification: passed", output.getvalue())
+
+    def test_shell_context_and_compact(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(main(["run", "--task", "Summarize context"]), 0)
+                self.assertEqual(main(["shell", "--command", "/context"]), 0)
+                self.assertEqual(main(["shell", "--command", "/compact focus on verification"]), 0)
+
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+            compact_path = run_dir / "artifacts" / "context" / "compact.md"
+            self.assertTrue(compact_path.exists())
+            compact = compact_path.read_text(encoding="utf-8")
+            self.assertIn("# LoopForge Compact Context", compact)
+            self.assertIn("Focus: focus on verification", compact)
+            text = output.getvalue()
+            self.assertIn("LoopForge context", text)
+            self.assertIn("compact path:", text)
+
+    def test_shell_runs_and_resume(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(main(["run", "--task", "First run"]), 0)
+                config_text = (repo / ".loopforge" / "config.json").read_text(encoding="utf-8")
+                first = json.loads(config_text)["current_run_id"]
+                self.assertEqual(main(["run", "--task", "Second run"]), 0)
+                self.assertEqual(main(["shell", "--command", "/runs"]), 0)
+                self.assertEqual(main(["shell", "--command", f"/resume {first}"]), 0)
+
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            self.assertEqual(config["current_run_id"], first)
+            text = output.getvalue()
+            self.assertIn("First run", text)
+            self.assertIn("Second run", text)
+            self.assertIn("LoopForge resumed run", text)
+
+    def test_shell_catalog_and_unsupported_commands_are_honest(self) -> None:
+        commands = available_commands()
+        for name in (
+            "status",
+            "context",
+            "compact",
+            "model",
+            "permissions",
+            "mcp",
+            "review",
+            "security-review",
+            "statusline",
+            "keymap",
+        ):
+            self.assertIn(name, commands)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = io.StringIO()
+            with working_directory(Path(temp_dir)), contextlib.redirect_stdout(output):
+                self.assertEqual(main(["shell", "--command", "/model"]), 0)
+
+            text = output.getvalue()
+            self.assertIn("/model is recognized but not supported yet", text)
+            self.assertIn("Model selection is owned", text)
+
+    def test_shell_doctor_reports_missing_tui_dependencies(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = io.StringIO()
+            with (
+                mock.patch(
+                    "loopforge.interactive.importlib.util.find_spec",
+                    return_value=None,
+                ),
+                working_directory(Path(temp_dir)),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["shell", "--command", "/doctor"]), 0)
+
+            text = output.getvalue()
+            self.assertIn("prompt_toolkit: missing", text)
+            self.assertIn("rich: missing", text)
+            self.assertEqual(tui_dependency_state()["prompt_toolkit"], True)
+
+    def test_no_args_in_non_interactive_mode_prints_help(self) -> None:
+        error = io.StringIO()
+        with contextlib.redirect_stderr(error):
+            self.assertEqual(main([]), 2)
+        self.assertIn("usage: loopforge", error.getvalue())
+
+    def test_shell_without_command_requires_tty(self) -> None:
+        error = io.StringIO()
+        with contextlib.redirect_stderr(error):
+            self.assertEqual(main(["shell"]), 2)
+        self.assertIn("requires an interactive terminal", error.getvalue())
 
     def test_run_records_success_checks_and_continue_accepts_contract_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -120,7 +120,7 @@ def print_pack_contract(run: dict[str, object]) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="loopforge")
-    subcommands = parser.add_subparsers(dest="command", required=True)
+    subcommands = parser.add_subparsers(dest="command")
 
     init_parser = subcommands.add_parser(
         "init",
@@ -234,12 +234,53 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    shell_parser = subcommands.add_parser(
+        "shell",
+        aliases=("interactive",),
+        help="Start the LoopForge interactive shell.",
+    )
+    shell_parser.add_argument(
+        "--command",
+        dest="shell_command",
+        help="Run a single interactive command, such as '/status', then exit.",
+    )
+    shell_parser.add_argument(
+        "--script",
+        type=Path,
+        help="Run interactive commands from a UTF-8 script file, then exit.",
+    )
+
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
+    if argv is None:
+        argv = sys.argv[1:]
+    if not argv:
+        if sys.stdin.isatty() and sys.stdout.isatty():
+            from loopforge.interactive import run_interactive
+
+            return run_interactive(Path.cwd())
+        parser.print_help(sys.stderr)
+        return 2
     args = parser.parse_args(argv)
+    if args.command in {"shell", "interactive"}:
+        from loopforge.interactive import run_interactive
+
+        if args.shell_command is None and args.script is None:
+            if not sys.stdin.isatty() or not sys.stdout.isatty():
+                print(
+                    "LoopForge shell requires an interactive terminal, "
+                    "or use --command/--script.",
+                    file=sys.stderr,
+                )
+                return 2
+        return run_interactive(
+            Path.cwd(),
+            command=args.shell_command,
+            script=args.script,
+        )
     if args.command == "init":
         result = initialize_project(Path.cwd(), profile=args.profile)
         if result.created:
