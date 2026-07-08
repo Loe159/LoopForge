@@ -1541,6 +1541,189 @@ class CliTests(unittest.TestCase):
 
             self.assertIn("Loop contract accepted", output.getvalue())
 
+    def test_assist_profile_blocks_adapter_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            error = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init", "--profile", "assist"]), 0)
+                self.assertEqual(
+                    main(
+                        [
+                            "run",
+                            "--task",
+                            "Update README",
+                            "--success-check",
+                            "README contains the update",
+                        ]
+                    ),
+                    0,
+                )
+                with contextlib.redirect_stderr(error):
+                    self.assertEqual(
+                        main(
+                            [
+                                "continue",
+                                "--adapter",
+                                "local-adapter-fixture",
+                                "--",
+                                fixture_python(),
+                                "-c",
+                                "from pathlib import Path; Path('README.md').write_text('changed')",
+                            ]
+                        ),
+                        1,
+                    )
+
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+            run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+
+            self.assertEqual(run_json["profile"], "assist")
+            self.assertEqual(run_json["attempt_count"], 0)
+            self.assertFalse((repo / "README.md").exists())
+            self.assertIn("assist profile blocks adapter attempt", error.getvalue())
+
+    def test_autonomous_profile_stops_on_publication_request(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            error = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init", "--profile", "autonomous"]), 0)
+                self.assertEqual(
+                    main(
+                        [
+                            "run",
+                            "--task",
+                            "Publish the release notes",
+                            "--success-check",
+                            "release notes contain the version",
+                        ]
+                    ),
+                    0,
+                )
+                with contextlib.redirect_stderr(error):
+                    self.assertEqual(
+                        main(["continue", "--adapter", "local-adapter-fixture", "--", fixture_python(), "-c", "print('unused')"]),
+                        1,
+                    )
+
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+            run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+
+            self.assertEqual(run_json["attempt_count"], 0)
+            self.assertIn("autonomous profile stops before publication", error.getvalue())
+
+    def test_strict_profile_requires_confirm_for_verify_and_memory_promotion(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True, text=True)
+            (repo / ".gitignore").write_text(".loopforge/\n", encoding="utf-8")
+            (repo / "README.md").write_text("# Project\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "add", ".gitignore", "README.md"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=LoopForge Tests",
+                    "-c",
+                    "user.email=loopforge@example.invalid",
+                    "commit",
+                    "-m",
+                    "initial",
+                ],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            verify_error = io.StringIO()
+            learn_error = io.StringIO()
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["init", "--profile", "strict"]), 0)
+                self.assertEqual(
+                    main(
+                        [
+                            "run",
+                            "--task",
+                            "Update README",
+                            "--success-check",
+                            "README contains the update",
+                        ]
+                    ),
+                    0,
+                )
+                (repo / "README.md").write_text("# Project\n\nUpdated.\n", encoding="utf-8")
+                with contextlib.redirect_stderr(verify_error):
+                    self.assertEqual(main(["verify"]), 1)
+                self.assertEqual(main(["verify", "--confirm"]), 0)
+                with contextlib.redirect_stderr(learn_error):
+                    self.assertEqual(
+                        main(
+                            [
+                                "learn",
+                                "--approve",
+                                "--note",
+                                "Fact: Tests use unittest discovery.",
+                            ]
+                        ),
+                        1,
+                    )
+                self.assertEqual(
+                    main(
+                        [
+                            "learn",
+                            "--approve",
+                            "--confirm",
+                            "--note",
+                            "Fact: Tests use unittest discovery.",
+                        ]
+                    ),
+                    0,
+                )
+
+            durable = (repo / ".loopforge" / "memory.md").read_text(encoding="utf-8")
+            self.assertIn("- Tests use unittest discovery.", durable)
+            self.assertIn("strict profile requires --confirm before verification", verify_error.getvalue())
+            self.assertIn(
+                "strict profile requires --confirm before memory promotion",
+                learn_error.getvalue(),
+            )
+            self.assertIn("profile allows:", output.getvalue())
+
     def test_continue_fixture_adapter_records_completed_attempt(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)

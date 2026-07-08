@@ -17,6 +17,7 @@ from loopforge.engine import (
     discover_pack_contracts,
     initialize_project,
     learn_run,
+    profile_permission_lines,
     verify_run,
 )
 
@@ -142,6 +143,13 @@ def print_pack_contract(run: dict[str, object]) -> None:
             print(f"- {skill}")
 
 
+def print_profile_policy(profile: object, *, file=None) -> None:
+    if file is None:
+        file = sys.stdout
+    for line in profile_permission_lines(profile):
+        print(line, file=file)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="loopforge")
     subcommands = parser.add_subparsers(dest="command")
@@ -233,14 +241,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Adapter to use for a bounded Phase 4 attempt.",
     )
     continue_parser.add_argument(
+        "--confirm",
+        action="store_true",
+        help="Confirm a mutating transition when the strict profile requires it.",
+    )
+    continue_parser.add_argument(
         "adapter_args",
         nargs=argparse.REMAINDER,
         help="Arguments passed to the adapter command after --.",
     )
 
-    subcommands.add_parser(
+    verify_parser = subcommands.add_parser(
         "verify",
         help="Generate a complete patch and run deterministic pack verification.",
+    )
+    verify_parser.add_argument(
+        "--confirm",
+        action="store_true",
+        help="Confirm verification artifact generation when the strict profile requires it.",
     )
 
     learn_parser = subcommands.add_parser(
@@ -251,6 +269,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--approve",
         action="store_true",
         help="Promote safe proposals to durable project memory with human approval.",
+    )
+    learn_parser.add_argument(
+        "--confirm",
+        action="store_true",
+        help="Confirm durable memory promotion when the strict profile requires it.",
     )
     learn_parser.add_argument(
         "--note",
@@ -320,6 +343,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"LoopForge {action}: {result.config_path}")
         print(f"project: {result.config['project_name']}")
         print(f"profile: {result.config['profile']}")
+        print_profile_policy(result.config["profile"])
         print(f"run root: {result.config['run_root']}")
         return 0
     if args.command == "run":
@@ -344,6 +368,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"base commit: {result.run['base_commit'] or 'none'}")
         print(f"status: {result.run['status']}")
         print(f"pack: {result.run['pack']}")
+        print_profile_policy(result.run["profile"])
         print(f"loop contract: {result.run['loop_contract']['path']}")
         if result.run["loop_contract"]["subjective"] and not args.rubric:
             print("rubric: needed before autonomous attempts")
@@ -379,6 +404,7 @@ def main(argv: list[str] | None = None) -> int:
         assert result.config is not None
         print("state: initialized")
         print(f"profile: {result.config['profile']}")
+        print_profile_policy(result.config["profile"])
         print(f"run root: {result.config['run_root']}")
 
         if result.run is None:
@@ -427,7 +453,12 @@ def main(argv: list[str] | None = None) -> int:
         adapter_args = args.adapter_args
         if adapter_args and adapter_args[0] == "--":
             adapter_args = adapter_args[1:]
-        result = continue_run(Path.cwd(), adapter=args.adapter, adapter_args=adapter_args)
+        result = continue_run(
+            Path.cwd(),
+            adapter=args.adapter,
+            adapter_args=adapter_args,
+            confirmed=args.confirm,
+        )
         output = sys.stdout if result.ok else sys.stderr
         print(result.message, file=output)
         if result.run_dir is not None:
@@ -435,6 +466,8 @@ def main(argv: list[str] | None = None) -> int:
         if result.contract is not None:
             print(f"loop contract: {result.contract['status']}", file=output)
             print(f"success checks: {len(result.contract.get('success_checks', []))}", file=output)
+        if result.run is not None:
+            print_profile_policy(result.run.get("profile"), file=output)
         if result.attempt is not None:
             print(f"attempt: {result.attempt['id']}", file=output)
             print(f"adapter: {result.attempt['adapter']}", file=output)
@@ -449,11 +482,13 @@ def main(argv: list[str] | None = None) -> int:
         print_guidance(Path.cwd(), concise=True)
         return 0 if result.ok else 1
     if args.command == "verify":
-        result = verify_run(Path.cwd())
+        result = verify_run(Path.cwd(), confirmed=args.confirm)
         output = sys.stdout if result.ok else sys.stderr
         print(result.message, file=output)
         if result.run_dir is not None:
             print(f"run directory: {result.run_dir}", file=output)
+        if result.run is not None:
+            print_profile_policy(result.run.get("profile"), file=output)
         if result.verification is not None:
             patch = result.verification.get("patch", {})
             diff_policy = result.verification.get("diff_policy", {})
@@ -481,11 +516,18 @@ def main(argv: list[str] | None = None) -> int:
         print_guidance(Path.cwd(), concise=True)
         return 0 if result.ok else 1
     if args.command == "learn":
-        result = learn_run(Path.cwd(), approve=args.approve, notes=args.note)
+        result = learn_run(
+            Path.cwd(),
+            approve=args.approve,
+            notes=args.note,
+            confirmed=args.confirm,
+        )
         output = sys.stdout if result.ok else sys.stderr
         print(result.message, file=output)
         if result.run_dir is not None:
             print(f"run directory: {result.run_dir}", file=output)
+        if result.run is not None:
+            print_profile_policy(result.run.get("profile"), file=output)
         if result.proposal_path is not None:
             print(f"proposal path: {result.proposal_path}", file=output)
         print(f"proposals: {len(result.proposals)}", file=output)

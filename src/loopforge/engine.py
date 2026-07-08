@@ -40,6 +40,45 @@ SUPPORTED_ADAPTERS = (
     "local-adapter-fixture",
 )
 
+SUPPORTED_PROFILES = (
+    "assist",
+    "supervised",
+    "autonomous",
+    "strict",
+)
+
+PROFILE_POLICIES: dict[str, dict[str, Any]] = {
+    "assist": {
+        "summary": (
+            "read-only assistance plus LoopForge bookkeeping; adapter execution, "
+            "verification artifacts, and durable memory promotion are blocked"
+        ),
+        "mutation": "blocked for workspace-changing transitions",
+        "attempts": "disabled",
+        "memory": "proposals only; promotion blocked",
+    },
+    "supervised": {
+        "summary": "bounded mutation is allowed; major transitions are surfaced for review",
+        "mutation": "allowed for bounded attempts and verification",
+        "attempts": "one bounded adapter attempt at a time",
+        "memory": "promotion requires approval or a pack rule",
+    },
+    "autonomous": {
+        "summary": (
+            "bounded attempts may proceed only with objective checks and no stop-condition risk"
+        ),
+        "mutation": "allowed while checks are objective and stop conditions are absent",
+        "attempts": "bounded by contract limits and stagnation checks",
+        "memory": "promotion still requires approval or a pack rule",
+    },
+    "strict": {
+        "summary": "explicit confirmation is required before mutation or memory promotion",
+        "mutation": "requires --confirm for adapter execution and verification",
+        "attempts": "requires explicit confirmation before each adapter attempt",
+        "memory": "approval plus --confirm is required for promotion",
+    },
+}
+
 AGENT_COMMANDS = {
     "codex": "codex",
     "claude-code": "claude",
@@ -161,6 +200,55 @@ UNTRUSTED_TEXT_MARKERS = (
     "comment body",
     "untrusted body",
 )
+
+AUTONOMOUS_STOP_MARKERS: dict[str, tuple[str, ...]] = {
+    "publication": (
+        "deploy",
+        "publish",
+        "release",
+        "send email",
+        "open pull request",
+        "create pull request",
+        "push",
+        "upload",
+    ),
+    "deletion": (
+        "delete",
+        "destroy",
+        "drop database",
+        "remove files",
+        "rm -rf",
+        "wipe",
+    ),
+    "secrets": (
+        "api key",
+        "credential",
+        "expose secret",
+        "password",
+        "private key",
+        "secret",
+        "token",
+    ),
+    "money": (
+        "billing",
+        "buy",
+        "charge",
+        "pay ",
+        "purchase",
+        "spend money",
+    ),
+    "external side effects": (
+        "call external",
+        "cloud",
+        "external api",
+        "http://",
+        "https://",
+        "network",
+        "production",
+        "remote side effect",
+        "webhook",
+    ),
+}
 
 TEMPLATES: dict[str, str] = {
     "templates/loop.md": """---
@@ -968,6 +1056,7 @@ def loop_contract_state(loop_path: Path) -> dict[str, Any]:
             "path": str(loop_path),
             "missing_fields": list(REQUIRED_LOOP_SECTIONS),
             "success_checks": [],
+            "allowed_tools": [],
             "subjective": False,
             "rubric": "",
             "errors": [f"loop contract not found: {loop_path}"],
@@ -980,6 +1069,7 @@ def loop_contract_state(loop_path: Path) -> dict[str, Any]:
         name for name in REQUIRED_LOOP_SECTIONS if not section_text(sections, name)
     ]
     success_checks = bullet_items(section_text(sections, "Success Checks"))
+    allowed_tools = bullet_items(section_text(sections, "Allowed Tools"))
     rubric = section_text(sections, "Subjective Rubric")
     if rubric.lower().startswith("none recorded"):
         rubric = ""
@@ -995,11 +1085,97 @@ def loop_contract_state(loop_path: Path) -> dict[str, Any]:
         "path": str(loop_path),
         "missing_fields": missing_fields,
         "success_checks": success_checks,
+        "allowed_tools": allowed_tools,
         "subjective": subjective,
         "rubric": rubric,
         "limits": limits,
         "errors": errors,
     }
+
+
+def text_matches_any_marker(text: str, markers: tuple[str, ...]) -> bool:
+    lowered = text.lower()
+    return any(marker in lowered for marker in markers)
+
+
+def autonomous_stop_reasons(run: dict[str, Any], contract: dict[str, Any]) -> list[str]:
+    reasons: list[str] = []
+    if not contract.get("success_checks"):
+        reasons.append("autonomous profile requires objective success checks.")
+    if contract.get("subjective") and not contract.get("rubric"):
+        reasons.append("autonomous profile requires a rubric for subjective work.")
+
+    verification = verification_state(run)
+    if isinstance(verification, dict) and verification.get("stagnated"):
+        reasons.append("autonomous profile stops after repeated equivalent failure.")
+    raw_blockers = run.get("blockers", [])
+    blockers = raw_blockers if isinstance(raw_blockers, list) else []
+    for blocker in blockers:
+        if "stagnation:" in str(blocker).lower():
+            append_unique(reasons, "autonomous profile stops after repeated equivalent failure.")
+
+    scanned_text = "\n".join(
+        [
+            str(run.get("task") or ""),
+            *[str(item) for item in contract.get("allowed_tools", []) if item],
+        ]
+    )
+    for category, markers in AUTONOMOUS_STOP_MARKERS.items():
+        if text_matches_any_marker(scanned_text, markers):
+            reasons.append(
+                f"autonomous profile stops before {category}; human review is required."
+            )
+    return reasons
+
+
+def adapter_result_stop_reasons(result: dict[str, Any]) -> list[str]:
+    reasons: list[str] = []
+    if result.get("publication_requested"):
+        reasons.append("adapter requested publication; human review is required.")
+    if result.get("network_requested"):
+        reasons.append("adapter requested network or external side effects; human review is required.")
+    summary = str(result.get("summary") or "")
+    for category, markers in AUTONOMOUS_STOP_MARKERS.items():
+        if text_matches_any_marker(summary, markers):
+            reasons.append(
+                f"adapter result mentions {category}; human review is required."
+            )
+    return reasons
+
+
+def profile_transition_blockers(
+    *,
+    profile: object,
+    action: str,
+    confirmed: bool = False,
+    run: dict[str, Any] | None = None,
+    contract: dict[str, Any] | None = None,
+) -> list[str]:
+    normalized = normalize_profile(profile)
+    if normalized == "assist" and action in {
+        "adapter_attempt",
+        "verification",
+        "memory_promotion",
+    }:
+        return [
+            f"assist profile blocks {action.replace('_', ' ')}; switch profile or review manually."
+        ]
+    if normalized == "strict" and action in {
+        "adapter_attempt",
+        "verification",
+        "memory_promotion",
+    } and not confirmed:
+        return [
+            f"strict profile requires --confirm before {action.replace('_', ' ')}."
+        ]
+    if normalized == "autonomous" and run is not None and contract is not None:
+        if action == "adapter_attempt":
+            return autonomous_stop_reasons(run, contract)
+        if action == "verification":
+            verification = verification_state(run)
+            if isinstance(verification, dict) and verification.get("stagnated"):
+                return ["autonomous profile stops after repeated equivalent failure."]
+    return []
 
 
 def parse_loop_limits(text: str) -> dict[str, int | None]:
@@ -1106,9 +1282,10 @@ def new_config(
     home: Path | None = None,
 ) -> dict[str, Any]:
     now = utc_now()
+    normalized_profile = normalize_profile(profile)
     return {
         "project_name": project_name(project_dir),
-        "profile": profile,
+        "profile": normalized_profile,
         "run_root": str(default_run_root(project_dir, home=home)),
         "current_run_id": None,
         "default_adapter": DEFAULT_ADAPTER,
@@ -1140,8 +1317,9 @@ def normalize_config(
         ]
     if "project_name" not in config:
         config["project_name"] = project_name(project_dir)
-    if "profile" not in config:
-        config["profile"] = profile
+    normalized_profile = normalize_profile(config.get("profile", profile))
+    if config.get("profile") != normalized_profile:
+        config["profile"] = normalized_profile
     if "run_root" not in config:
         config["run_root"] = str(default_run_root(project_dir, home=home))
     if "updated_at" not in config:
@@ -1298,6 +1476,30 @@ def normalize_nonempty_strings(values: list[str] | None) -> list[str]:
     if values is None:
         return []
     return [value.strip() for value in values if value.strip()]
+
+
+def normalize_profile(profile: object) -> str:
+    value = str(profile or "").strip().lower()
+    if value in SUPPORTED_PROFILES:
+        return value
+    return DEFAULT_PROFILE
+
+
+def profile_policy(profile: object) -> dict[str, Any]:
+    normalized = normalize_profile(profile)
+    policy = dict(PROFILE_POLICIES[normalized])
+    policy["name"] = normalized
+    return policy
+
+
+def profile_permission_lines(profile: object) -> list[str]:
+    policy = profile_policy(profile)
+    return [
+        f"profile allows: {policy['summary']}",
+        f"profile mutation: {policy['mutation']}",
+        f"profile attempts: {policy['attempts']}",
+        f"profile memory: {policy['memory']}",
+    ]
 
 
 def append_unique(items: list[str], value: str) -> None:
@@ -1788,6 +1990,7 @@ def learn_run(
     *,
     approve: bool = False,
     notes: list[str] | None = None,
+    confirmed: bool = False,
 ) -> LearnResult:
     status = current_status(project_dir)
     if not status.initialized:
@@ -1840,38 +2043,60 @@ def learn_run(
     else:
         rule_error = ""
 
+    promotion_requested = approve or any(
+        proposal.get("status") != "rejected" and pack_rule_allows_promotion(rules, proposal)
+        for proposal in proposals
+    )
+    profile_blockers = (
+        profile_transition_blockers(
+            profile=status.run.get("profile", DEFAULT_PROFILE),
+            action="memory_promotion",
+            confirmed=confirmed,
+            run=status.run,
+            contract=status.loop_contract,
+        )
+        if promotion_requested
+        else []
+    )
+
     promoted: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
-    for proposal in proposals:
-        if proposal["status"] == "rejected":
-            rejected.append(proposal)
-            continue
-        promotion_reason = ""
-        if approve:
-            promotion_reason = "human_approved"
-        elif pack_rule_allows_promotion(rules, proposal):
-            promotion_reason = f"pack_rule:{rules.get('source') or 'unknown'}"
-        if not promotion_reason:
-            continue
-        changed = promote_memory_candidate(
-            status.project_dir,
-            proposal,
-            reason=promotion_reason,
-            run_id=str(status.run.get("run_id") or ""),
-        )
-        proposal["status"] = "promoted" if changed else "already_present"
-        proposal["promotion_reason"] = promotion_reason
-        if changed:
-            promoted.append(proposal)
+    if profile_blockers:
+        for proposal in proposals:
+            if proposal["status"] == "rejected":
+                rejected.append(proposal)
+    else:
+        for proposal in proposals:
+            if proposal["status"] == "rejected":
+                rejected.append(proposal)
+                continue
+            promotion_reason = ""
+            if approve:
+                promotion_reason = "human_approved"
+            elif pack_rule_allows_promotion(rules, proposal):
+                promotion_reason = f"pack_rule:{rules.get('source') or 'unknown'}"
+            if not promotion_reason:
+                continue
+            changed = promote_memory_candidate(
+                status.project_dir,
+                proposal,
+                reason=promotion_reason,
+                run_id=str(status.run.get("run_id") or ""),
+            )
+            proposal["status"] = "promoted" if changed else "already_present"
+            proposal["promotion_reason"] = promotion_reason
+            if changed:
+                promoted.append(proposal)
 
     created = utc_now()
     proposal_data = {
         "version": 1,
         "created_at": created,
         "run_id": status.run.get("run_id"),
-        "approval": approve,
+        "approval": approve and not profile_blockers,
         "pack": pack,
         "pack_rule_source": rules.get("source"),
+        "profile_blockers": profile_blockers,
         "proposals": proposals,
     }
     if rule_error:
@@ -1901,9 +2126,12 @@ def learn_run(
         write_json_atomic(status.run_json_path, updated_run)
 
     blockers = [rule_error] if rule_error else []
+    blockers.extend(profile_blockers)
     message = "LoopForge memory proposals written."
     if promoted:
         message = "LoopForge memory updated."
+    if profile_blockers:
+        message = "LoopForge memory promotion refused by the autonomy profile."
     return LearnResult(
         project_dir=status.project_dir,
         run_dir=status.run_dir,
@@ -2113,6 +2341,7 @@ def current_guidance(project_dir: Path) -> GuidanceResult:
 
     run = status.run
     run_status = str(run.get("status") or "unknown")
+    profile = normalize_profile(run.get("profile", status.config.get("profile")))
     run_id = str(run.get("run_id") or "")
     task = str(run.get("task") or "")
     evidence.extend(
@@ -2128,6 +2357,9 @@ def current_guidance(project_dir: Path) -> GuidanceResult:
         diagnostics.append(
             f"success checks: {len(status.loop_contract.get('success_checks', []))}"
         )
+        if profile == "autonomous":
+            for reason in autonomous_stop_reasons(run, status.loop_contract):
+                append_unique(blocked_reasons, reason)
     if status.memory is not None:
         pending = int(status.memory.get("pending", 0) or 0)
         if pending:
@@ -2169,16 +2401,38 @@ def current_guidance(project_dir: Path) -> GuidanceResult:
         summary = "The current run needs a complete loop contract before execution."
         priority = "complete_contract"
     elif run_status == LOOP_CONTRACT_READY:
-        actions.append(
-            guided_action(
-                "continue",
-                f"Run a bounded attempt with {adapter}",
-                f"loopforge continue --adapter {adapter}",
-                risk="adapter-execution",
-                requires_confirmation=True,
-                why="The contract is ready and an adapter attempt is the next bounded step.",
+        if profile == "assist":
+            actions.append(
+                guided_action(
+                    "review-contract",
+                    "Review the ready loop contract",
+                    "loopforge shell --command \"/plan\"",
+                    why="Assist profile blocks workspace-changing adapter execution.",
+                )
             )
-        )
+        elif profile == "autonomous" and blocked_reasons:
+            actions.append(
+                guided_action(
+                    "review-autonomy-stop",
+                    "Review autonomy stop conditions",
+                    "loopforge status",
+                    why="Autonomous execution stops until a human resolves the listed condition.",
+                )
+            )
+        else:
+            actions.append(
+                guided_action(
+                    "continue",
+                    f"Run a bounded attempt with {adapter}",
+                    f"loopforge continue --adapter {adapter}",
+                    risk="adapter-execution",
+                    requires_confirmation=profile != "autonomous",
+                    why=(
+                        "The contract is ready and the autonomy profile allows a bounded "
+                        "adapter attempt."
+                    ),
+                )
+            )
         summary = "The run is ready for an adapter attempt."
         priority = "execute_attempt"
     elif run_status == ADAPTER_BLOCKED:
@@ -2206,6 +2460,8 @@ def current_guidance(project_dir: Path) -> GuidanceResult:
                 "verify",
                 "Generate patch and run verification",
                 "loopforge verify",
+                risk="verification",
+                requires_confirmation=profile == "strict",
                 why="The workspace changed; deterministic checks should verify the result.",
             )
         )
@@ -2601,6 +2857,7 @@ def create_run(
             raise ValueError("pack must not be empty")
         pack_contract = load_pack_contract(project_dir, selected_pack)
         pack_detection = "explicit"
+    run_profile = normalize_profile(config["profile"])
     pack_skills = pack_skill_entries(pack_contract)
     normalized_skills = normalize_unique_strings(
         [*pack_skills, *normalize_nonempty_strings(selected_skills)]
@@ -2612,7 +2869,7 @@ def create_run(
     subjective = task_looks_subjective(task)
     contract_status = loop_contract_status(
         success_checks=normalized_success_checks,
-        profile=str(config["profile"]),
+        profile=run_profile,
         subjective=subjective,
         subjective_rubric=normalized_rubric,
     )
@@ -2622,7 +2879,8 @@ def create_run(
         "task": task.strip(),
         "project_root": str(project_dir),
         "base_commit": base_commit,
-        "profile": config["profile"],
+        "profile": run_profile,
+        "profile_policy": profile_policy(run_profile),
         "pack": selected_pack,
         "pack_contract": {
             "name": selected_pack,
@@ -2652,7 +2910,7 @@ def create_run(
             "version": 1,
             "status": contract_status,
             "subjective": subjective,
-            "requires_rubric": str(config["profile"]) == "autonomous" and subjective,
+            "requires_rubric": run_profile == "autonomous" and subjective,
         },
         "memory": {
             "durable_project_memory": str(project_memory),
@@ -2693,7 +2951,7 @@ def create_run(
             task_id=task_id,
             project_dir=project_dir,
             base_commit=base_commit,
-            profile=str(config["profile"]),
+            profile=run_profile,
             pack=selected_pack,
             skills=normalized_skills,
             allowed_tools=normalized_allowed_tools,
@@ -3137,6 +3395,17 @@ def execute_attempt(
         if "summary" not in result:
             result["summary"] = f"Adapter reported {status}."
 
+    profile_stop_reasons: list[str] = []
+    if normalize_profile(run.get("profile")) == "autonomous":
+        profile_stop_reasons = adapter_result_stop_reasons(result)
+        if profile_stop_reasons and status == "completed":
+            status = "blocked"
+            result["status"] = status
+            result["summary"] = (
+                str(result.get("summary", "")).rstrip()
+                + " Autonomy profile stopped for human review."
+            ).strip()
+
     stdout_path = attempt_dir / "adapter.stdout"
     stderr_path = attempt_dir / "adapter.stderr"
     result_path = attempt_dir / "result.json"
@@ -3158,6 +3427,9 @@ def execute_attempt(
         "returncode": returncode,
         "timed_out": timed_out,
         "output_limit_exceeded": output_limit_exceeded,
+        "profile_stop_reasons": profile_stop_reasons,
+        "publication_requested": bool(result.get("publication_requested", False)),
+        "network_requested": bool(result.get("network_requested", False)),
         "attempt_dir": str(attempt_dir),
         "expected_session_path": relative_to_run(run_dir, expected_session_path),
         "stdout_path": relative_to_run(run_dir, stdout_path),
@@ -3189,10 +3461,13 @@ def update_run_after_attempt(
         updated["blockers"] = []
     else:
         updated["status"] = ADAPTER_BLOCKED
-        updated["blockers"] = [
+        blockers = [
             f"attempt {attempt['id']} with adapter {attempt['adapter']} "
             f"reported {attempt['status']}: {attempt['summary']}"
         ]
+        for reason in attempt.get("profile_stop_reasons", []):
+            blockers.append(str(reason))
+        updated["blockers"] = blockers
     write_json_atomic(run_json_path, updated)
     return updated
 
@@ -3556,7 +3831,7 @@ def update_loop_diagnostic(run_dir: Path, verification: dict[str, Any]) -> None:
     loop_path.write_text(before + "\n\n" + diagnostic, encoding="utf-8")
 
 
-def verify_run(project_dir: Path) -> VerifyResult:
+def verify_run(project_dir: Path, *, confirmed: bool = False) -> VerifyResult:
     status = current_status(project_dir)
     if not status.initialized:
         return VerifyResult(
@@ -3580,6 +3855,23 @@ def verify_run(project_dir: Path) -> VerifyResult:
     run = status.run
     run_dir = status.run_dir
     run_json_path = status.run_json_path or (run_dir / "run.json")
+    profile_blockers = profile_transition_blockers(
+        profile=run.get("profile", DEFAULT_PROFILE),
+        action="verification",
+        confirmed=confirmed,
+        run=run,
+        contract=status.loop_contract,
+    )
+    if profile_blockers:
+        return VerifyResult(
+            project_dir=status.project_dir,
+            run_dir=run_dir,
+            run=run,
+            ok=False,
+            message="LoopForge verification refused by the autonomy profile.",
+            blockers=profile_blockers,
+            verification=verification_state(run),
+        )
     started = utc_now()
     patch_dir = run_dir / "artifacts" / "patches"
     patch_path = patch_dir / "complete.patch"
@@ -3827,6 +4119,7 @@ def continue_run(
     *,
     adapter: str | None = None,
     adapter_args: list[str] | None = None,
+    confirmed: bool = False,
 ) -> ContinueResult:
     status = current_status(project_dir)
     if not status.initialized:
@@ -3886,17 +4179,46 @@ def continue_run(
         )
 
     if adapter is None:
+        profile_blockers = profile_transition_blockers(
+            profile=status.run.get("profile", DEFAULT_PROFILE),
+            action="adapter_attempt",
+            confirmed=confirmed,
+            run=status.run,
+            contract=contract,
+        )
+        if profile_blockers:
+            message = "Loop contract accepted; profile policy blocks adapter execution."
+        else:
+            message = (
+                "Loop contract accepted; Phase 4 adapter execution is available "
+                "with `loopforge continue --adapter <adapter>`."
+            )
         return ContinueResult(
             project_dir=status.project_dir,
             run_dir=status.run_dir,
             run=status.run,
             contract=contract,
             ok=True,
-            message=(
-                "Loop contract accepted; Phase 4 adapter execution is available "
-                "with `loopforge continue --adapter <adapter>`."
-            ),
-            blockers=[],
+            message=message,
+            blockers=profile_blockers,
+        )
+
+    profile_blockers = profile_transition_blockers(
+        profile=status.run.get("profile", DEFAULT_PROFILE),
+        action="adapter_attempt",
+        confirmed=confirmed,
+        run=status.run,
+        contract=contract,
+    )
+    if profile_blockers:
+        return ContinueResult(
+            project_dir=status.project_dir,
+            run_dir=status.run_dir,
+            run=status.run,
+            contract=contract,
+            ok=False,
+            message="LoopForge continue refused by the autonomy profile.",
+            blockers=profile_blockers,
         )
 
     try:

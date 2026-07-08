@@ -410,8 +410,13 @@ Implementation notes:
 - Current validation: `PYTHONPATH=src python -m unittest discover -s tests`
   passes with tests for auto-detection, project-local pack skills, pack CLI
   listing/detection, pack risk-rule contribution, and existing check loading.
+- Revalidated on 2026-07-08: the full unit suite still passes, `loopforge pack
+  list` reports the five initial packs, and `loopforge pack detect` selects the
+  Python pack for this repository.
 
 ## Phase 8: Autonomy Profiles
+
+Status: completed on 2026-07-08.
 
 Implement four profiles:
 
@@ -422,10 +427,39 @@ Implement four profiles:
 
 Done when:
 
-- profile is stored in `run.json`;
-- each command reports what the profile allows;
-- autonomous mode stops on unclear success criteria, repeated failure,
+- [x] profile is stored in `run.json`;
+- [x] each command reports what the profile allows;
+- [x] autonomous mode stops on unclear success criteria, repeated failure,
   publication, deletion, secrets, money, or external side effects.
+
+Implementation notes:
+
+- Autonomy profiles are normalized through a shared engine policy and stored in
+  both project config and new `run.json` files, including a readable
+  `profile_policy` summary for each run.
+- CLI and interactive outputs now report profile permissions for initialization,
+  run creation, status, continuation, verification, and learning flows.
+- `assist` blocks adapter execution, verification artifact generation, and
+  durable memory promotion while still allowing review-oriented LoopForge
+  bookkeeping.
+- `strict` requires `--confirm` before adapter execution, verification, and
+  durable memory promotion; the interactive shell can ask for confirmation only
+  in interactive mode.
+- `autonomous` allows bounded adapter attempts only when the loop contract has
+  objective success checks, subjective work has a rubric, stagnation has not
+  occurred, and the task/contract does not request publication, deletion,
+  secrets, money, network, or external side effects.
+- Adapter protocol results that request publication or network/external side
+  effects keep autonomous runs in a blocked human-review state instead of moving
+  them to verification.
+- Guided actions respect the selected profile: assist recommends review,
+  autonomous can recommend an unconfirmed bounded attempt only when stop
+  conditions are clear, and strict marks mutating transitions as requiring
+  confirmation.
+- Current validation: `PYTHONPATH=src python -m unittest discover -s tests`
+  passes with 58 tests, including coverage for assist blocking adapter
+  execution, autonomous publication stop conditions, and strict confirmation for
+  verification and memory promotion.
 
 ## Phase 9: Metrics
 

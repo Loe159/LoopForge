@@ -42,6 +42,7 @@ from loopforge.engine import (
     update_project_config,
     verify_run,
     learn_run,
+    profile_permission_lines,
 )
 
 
@@ -324,6 +325,12 @@ class InteractiveShell:
             self.write(f"Could not parse arguments: {error}", error=True)
             return None
 
+    def confirm_if_available(self, prompt: str) -> bool:
+        if not self.allow_confirmation:
+            return False
+        answer = input(f"{prompt} Type yes to continue: ")
+        return answer.strip().lower() == "yes"
+
     def refresh_session_config(self) -> None:
         status = current_status(self.project_dir)
         if status.config is None:
@@ -443,6 +450,7 @@ class InteractiveShell:
             [
                 "state: initialized",
                 f"profile: {result.config['profile']}",
+                *profile_permission_lines(result.config["profile"]),
                 f"run root: {result.config['run_root']}",
                 f"default adapter: {result.config.get('default_adapter')}",
                 "default adapter args: "
@@ -495,6 +503,7 @@ class InteractiveShell:
             lines.extend(
                 [
                     f"profile: {result.config.get('profile')}",
+                    *profile_permission_lines(result.config.get("profile")),
                     f"run root: {result.config.get('run_root')}",
                 ]
             )
@@ -760,6 +769,8 @@ class InteractiveShell:
         self.write(f"run id: {result.run['run_id']}")
         self.write(f"status: {result.run['status']}")
         self.write(f"pack: {result.run['pack']}")
+        for line in profile_permission_lines(result.run["profile"]):
+            self.write(line)
         self.write_guidance(concise=True)
         return DispatchResult(0)
 
@@ -773,6 +784,7 @@ class InteractiveShell:
         parser = argparse.ArgumentParser(prog="/continue", add_help=False)
         parser.add_argument("--adapter", choices=SUPPORTED_ADAPTERS)
         parser.add_argument("--check", action="store_true")
+        parser.add_argument("--confirm", action="store_true")
         parser.add_argument("adapter_args", nargs=argparse.REMAINDER)
         tokens = self.split_args(raw)
         if tokens is None:
@@ -794,7 +806,18 @@ class InteractiveShell:
         if adapter is not None:
             self.write(f"adapter: {adapter}")
             self.write("adapter args: " + " ".join(chosen_args))
-        result = continue_run(self.project_dir, adapter=adapter, adapter_args=chosen_args)
+        confirmed = args.confirm
+        if adapter is not None and not confirmed:
+            status = current_status(self.project_dir)
+            profile = status.run.get("profile") if status.run is not None else None
+            if profile == "strict":
+                confirmed = self.confirm_if_available("Strict profile requires confirmation.")
+        result = continue_run(
+            self.project_dir,
+            adapter=adapter,
+            adapter_args=chosen_args,
+            confirmed=confirmed,
+        )
         self.write(result.message, error=not result.ok)
         if result.run_dir is not None:
             self.write(f"run directory: {result.run_dir}", error=not result.ok)
@@ -809,6 +832,8 @@ class InteractiveShell:
             for blocker in result.blockers:
                 self.write(f"- {blocker}", error=not result.ok)
         if result.run is not None:
+            for line in profile_permission_lines(result.run.get("profile")):
+                self.write(line, error=not result.ok)
             self.write(
                 f"next step: {current_status(self.project_dir).next_step}",
                 error=not result.ok,
@@ -817,11 +842,28 @@ class InteractiveShell:
         return DispatchResult(0 if result.ok else 1)
 
     def cmd_verify(self, raw: str = "") -> DispatchResult:
-        del raw
-        result = verify_run(self.project_dir)
+        parser = argparse.ArgumentParser(prog="/verify", add_help=False)
+        parser.add_argument("--confirm", action="store_true")
+        tokens = self.split_args(raw)
+        if tokens is None:
+            return DispatchResult(2)
+        try:
+            args = parser.parse_args(tokens)
+        except SystemExit:
+            return DispatchResult(2)
+        confirmed = args.confirm
+        if not confirmed:
+            status = current_status(self.project_dir)
+            profile = status.run.get("profile") if status.run is not None else None
+            if profile == "strict":
+                confirmed = self.confirm_if_available("Strict profile requires confirmation.")
+        result = verify_run(self.project_dir, confirmed=confirmed)
         self.write(result.message, error=not result.ok)
         if result.run_dir is not None:
             self.write(f"run directory: {result.run_dir}", error=not result.ok)
+        if result.run is not None:
+            for line in profile_permission_lines(result.run.get("profile")):
+                self.write(line, error=not result.ok)
         if result.verification is not None:
             self.write(f"verification: {result.verification['status']}", error=not result.ok)
             self.write(
@@ -839,6 +881,7 @@ class InteractiveShell:
     def cmd_learn(self, raw: str) -> DispatchResult:
         parser = argparse.ArgumentParser(prog="/learn", add_help=False)
         parser.add_argument("--approve", action="store_true")
+        parser.add_argument("--confirm", action="store_true")
         parser.add_argument("--note", action="append", default=[])
         tokens = self.split_args(raw)
         if tokens is None:
@@ -847,10 +890,24 @@ class InteractiveShell:
             args = parser.parse_args(tokens)
         except SystemExit:
             return DispatchResult(2)
-        result = learn_run(self.project_dir, approve=args.approve, notes=args.note)
+        confirmed = args.confirm
+        if args.approve and not confirmed:
+            status = current_status(self.project_dir)
+            profile = status.run.get("profile") if status.run is not None else None
+            if profile == "strict":
+                confirmed = self.confirm_if_available("Strict profile requires confirmation.")
+        result = learn_run(
+            self.project_dir,
+            approve=args.approve,
+            notes=args.note,
+            confirmed=confirmed,
+        )
         self.write(result.message, error=not result.ok)
         if result.proposal_path is not None:
             self.write(f"proposal path: {result.proposal_path}", error=not result.ok)
+        if result.run is not None:
+            for line in profile_permission_lines(result.run.get("profile")):
+                self.write(line, error=not result.ok)
         self.write(f"proposals: {len(result.proposals)}", error=not result.ok)
         self.write(f"promoted: {len(result.promoted)}", error=not result.ok)
         self.write(f"rejected: {len(result.rejected)}", error=not result.ok)
