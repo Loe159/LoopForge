@@ -380,6 +380,28 @@ class ConfigUpdateResult:
     blockers: list[str]
 
 
+@dataclass(frozen=True)
+class GuidedAction:
+    id: str
+    label: str
+    command: str
+    risk: str
+    requires_confirmation: bool
+    why: str
+
+
+@dataclass(frozen=True)
+class GuidanceResult:
+    project_dir: Path
+    state: str
+    summary: str
+    priority: str
+    diagnostics: list[str]
+    recommended_actions: list[GuidedAction]
+    blocked_reasons: list[str]
+    evidence: list[str]
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -1999,6 +2021,260 @@ def current_status(project_dir: Path) -> StatusResult:
         memory=memory_state(project_dir, run_dir),
         next_step=describe_next_step(run),
         blockers=blockers,
+    )
+
+
+def guided_action(
+    action_id: str,
+    label: str,
+    command: str,
+    *,
+    risk: str = "low",
+    requires_confirmation: bool = False,
+    why: str,
+) -> GuidedAction:
+    return GuidedAction(
+        id=action_id,
+        label=label,
+        command=command,
+        risk=risk,
+        requires_confirmation=requires_confirmation,
+        why=why,
+    )
+
+
+def current_guidance(project_dir: Path) -> GuidanceResult:
+    status = current_status(project_dir)
+    actions: list[GuidedAction] = []
+    diagnostics: list[str] = []
+    evidence: list[str] = [f"project: {status.project_dir}"]
+    blocked_reasons = list(status.blockers)
+
+    if not status.initialized:
+        return GuidanceResult(
+            project_dir=status.project_dir,
+            state="not_initialized",
+            summary="LoopForge is not initialized for this project yet.",
+            priority="setup",
+            diagnostics=[
+                f"Expected config is missing: {status.config_path}",
+                "Create project metadata before starting a run.",
+            ],
+            recommended_actions=[
+                guided_action(
+                    "init",
+                    "Initialize LoopForge metadata",
+                    "loopforge init",
+                    why="The project needs .loopforge/config.json before runs can be created.",
+                )
+            ],
+            blocked_reasons=[],
+            evidence=evidence,
+        )
+
+    assert status.config is not None
+    adapter = str(status.config.get("default_adapter") or DEFAULT_ADAPTER)
+    adapter_args = status.config.get("default_adapter_args", [])
+    if adapter not in SUPPORTED_ADAPTERS:
+        diagnostics.append(f"default adapter is invalid: {adapter}")
+        blocked_reasons.append(f"unsupported default adapter: {adapter}")
+        actions.append(
+            guided_action(
+                "choose-adapter",
+                "Choose a supported adapter",
+                f"loopforge shell --command \"/adapter {DEFAULT_ADAPTER}\"",
+                why="A valid adapter is required before LoopForge can execute an attempt.",
+            )
+        )
+    else:
+        evidence.append(f"default adapter: {adapter}")
+        if isinstance(adapter_args, list) and adapter_args:
+            evidence.append("default adapter args: " + " ".join(str(arg) for arg in adapter_args))
+
+    if status.run is None:
+        actions.append(
+            guided_action(
+                "create-run",
+                "Create a run for the task",
+                'loopforge run --task "Describe the task" --success-check "Describe the proof"',
+                why="LoopForge needs a concrete task and objective success check to guide work.",
+            )
+        )
+        return GuidanceResult(
+            project_dir=status.project_dir,
+            state="ready_for_run",
+            summary="LoopForge is initialized, but there is no current run.",
+            priority="next_task",
+            diagnostics=diagnostics or ["No active run is selected."],
+            recommended_actions=actions,
+            blocked_reasons=blocked_reasons,
+            evidence=evidence + [f"run root: {status.config.get('run_root')}"],
+        )
+
+    run = status.run
+    run_status = str(run.get("status") or "unknown")
+    run_id = str(run.get("run_id") or "")
+    task = str(run.get("task") or "")
+    evidence.extend(
+        [
+            f"run: {run_id}",
+            f"task: {task}",
+            f"run status: {run_status}",
+            f"run directory: {status.run_dir}",
+        ]
+    )
+    if status.loop_contract is not None:
+        evidence.append(f"loop contract: {status.loop_contract.get('status')}")
+        diagnostics.append(
+            f"success checks: {len(status.loop_contract.get('success_checks', []))}"
+        )
+    if status.memory is not None:
+        pending = int(status.memory.get("pending", 0) or 0)
+        if pending:
+            diagnostics.append(f"memory proposals pending: {pending}")
+            actions.append(
+                guided_action(
+                    "approve-memory",
+                    "Review and approve safe memory proposals",
+                    "loopforge learn --approve",
+                    risk="memory",
+                    requires_confirmation=True,
+                    why="Durable memory changes should be explicitly reviewed before promotion.",
+                )
+            )
+
+    if blocked_reasons:
+        diagnostics.extend(blocked_reasons)
+
+    if run_status == LOOP_CONTRACT_DRAFT:
+        checks = status.loop_contract.get("success_checks", []) if status.loop_contract else []
+        if not checks:
+            blocked_reasons.append("the loop contract has no objective success checks")
+            actions.append(
+                guided_action(
+                    "show-plan",
+                    "Open the loop contract and add success checks",
+                    "loopforge shell --command \"/plan\"",
+                    why="Autonomous attempts need objective checks so progress can be verified.",
+                )
+            )
+        actions.append(
+            guided_action(
+                "check-contract",
+                "Re-check the loop contract",
+                "loopforge continue",
+                why="This validates whether the run is ready for an adapter attempt.",
+            )
+        )
+        summary = "The current run needs a complete loop contract before execution."
+        priority = "complete_contract"
+    elif run_status == LOOP_CONTRACT_READY:
+        actions.append(
+            guided_action(
+                "continue",
+                f"Run a bounded attempt with {adapter}",
+                f"loopforge continue --adapter {adapter}",
+                risk="adapter-execution",
+                requires_confirmation=True,
+                why="The contract is ready and an adapter attempt is the next bounded step.",
+            )
+        )
+        summary = "The run is ready for an adapter attempt."
+        priority = "execute_attempt"
+    elif run_status == ADAPTER_BLOCKED:
+        actions.append(
+            guided_action(
+                "inspect-attempt",
+                "Inspect the latest attempt stderr",
+                "loopforge shell --command \"/raw latest stderr\"",
+                why="The latest attempt artifact usually contains the actionable error.",
+            )
+        )
+        actions.append(
+            guided_action(
+                "tasks",
+                "Review recorded attempts",
+                "loopforge shell --command \"/tasks\"",
+                why="Attempt history shows what was tried and where it stopped.",
+            )
+        )
+        summary = "The last adapter attempt is blocked and needs diagnosis."
+        priority = "resolve_blocker"
+    elif run_status == READY_FOR_VERIFICATION:
+        actions.append(
+            guided_action(
+                "verify",
+                "Generate patch and run verification",
+                "loopforge verify",
+                why="The workspace changed; deterministic checks should verify the result.",
+            )
+        )
+        summary = "The attempt completed; verification is the next step."
+        priority = "verify_work"
+    elif run_status == VERIFICATION_FAILED:
+        actions.append(
+            guided_action(
+                "inspect-verification",
+                "Inspect verification diagnostics",
+                "loopforge shell --command \"/export plan\"",
+                why="The verification report and blockers explain what must be fixed.",
+            )
+        )
+        actions.append(
+            guided_action(
+                "retry-verify",
+                "Run verification again after fixing blockers",
+                "loopforge verify",
+                why="Re-running verification confirms whether the diagnostic was resolved.",
+            )
+        )
+        summary = "Verification failed; inspect diagnostics, fix the issue, then verify again."
+        priority = "fix_verification"
+    elif run_status == VERIFIED:
+        actions.append(
+            guided_action(
+                "compact",
+                "Write a compact handoff",
+                "loopforge shell --command \"/compact\"",
+                why="A compact handoff records the verified state for review or continuation.",
+            )
+        )
+        actions.append(
+            guided_action(
+                "review",
+                "Review verified patch and decide handoff",
+                "loopforge shell --command \"/review\"",
+                why=(
+                    "Verification is evidence, not publication authority; "
+                    "a human decision remains."
+                ),
+            )
+        )
+        summary = "The run is verified and ready for review or handoff."
+        priority = "review_verified_work"
+    else:
+        actions.append(
+            guided_action(
+                "status",
+                "Inspect current status",
+                "loopforge status",
+                why="The run is in an unfamiliar state, so status is the safest first check.",
+            )
+        )
+        summary = "LoopForge found a run state that needs human inspection."
+        priority = "inspect_state"
+
+    if not diagnostics:
+        diagnostics.append(status.next_step)
+    return GuidanceResult(
+        project_dir=status.project_dir,
+        state=run_status,
+        summary=summary,
+        priority=priority,
+        diagnostics=diagnostics,
+        recommended_actions=actions,
+        blocked_reasons=blocked_reasons,
+        evidence=evidence,
     )
 
 

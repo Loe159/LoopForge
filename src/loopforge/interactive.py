@@ -23,11 +23,13 @@ except ImportError:  # pragma: no cover - exercised only in minimal installs.
 from loopforge.engine import (
     DEFAULT_ADAPTER,
     DEFAULT_PROFILE,
+    GuidedAction,
     SUPPORTED_ADAPTERS,
     archive_current_run,
     compact_current_context,
     continue_run,
     create_run,
+    current_guidance,
     current_status,
     detect_project_pack,
     directory_file_sizes,
@@ -47,6 +49,7 @@ SUPPORTED_COMMANDS = {
     "add-dir": "Add a session-only context directory.",
     "adapter": "Show or select the default adapter for this project.",
     "adapters": "List supported adapters and the selected default.",
+    "actions": "List guided actions available for the current state.",
     "allowed-tools": "Show allowed tools from the current loop contract.",
     "approve": "Approve safe memory proposals for the current run.",
     "archive": "Mark the current run as archived without deleting artifacts.",
@@ -64,10 +67,12 @@ SUPPORTED_COMMANDS = {
     "debug-config": "Show LoopForge configuration diagnostics.",
     "diff": "Show current Git working tree status and diff summary.",
     "doctor": "Run local environment diagnostics.",
+    "do": "Execute a guided action by id when it is safe or confirmed.",
     "exit": "Exit the interactive shell.",
     "export": "Export status, context, compact, or plan text under run artifacts.",
     "fork": "Create a new run based on the current run's contract defaults.",
     "goal": "Show the current LoopForge run objective.",
+    "guide": "Explain the current workflow state and recommended next actions.",
     "help": "Show command help.",
     "init": "Initialize LoopForge metadata for this project.",
     "keymap": "Show or change the session editing mode.",
@@ -76,6 +81,7 @@ SUPPORTED_COMMANDS = {
     "memory": "Show durable and proposed memory state.",
     "mention": "Add a session-only file mention to context.",
     "new": "Create a new run.",
+    "next": "Show the single best next action.",
     "pack": "List or detect project packs.",
     "permissions": "Show loop permission guidance and allowed tools.",
     "plugins": "List local packs and explain external plugin limits.",
@@ -102,6 +108,7 @@ SUPPORTED_COMMANDS = {
     "usage": "Show local usage status without inventing unavailable values.",
     "verify": "Generate a patch and run deterministic pack checks.",
     "vim": "Toggle vim-style editing mode for the session.",
+    "why": "Explain why LoopForge recommends the next action.",
 }
 
 
@@ -247,11 +254,13 @@ class InteractiveShell:
         *,
         output: TextIO | None = None,
         error: TextIO | None = None,
+        allow_confirmation: bool = True,
     ) -> None:
         self.project_dir = project_dir.resolve()
         self.output = output or sys.stdout
         self.error = error or sys.stderr
         self.running = True
+        self.allow_confirmation = allow_confirmation
         self.statusline = "full"
         self.theme = "default"
         self.renderer_mode = "auto"
@@ -333,6 +342,89 @@ class InteractiveShell:
 
     def write_panel(self, title: str, lines: list[str]) -> None:
         self.renderer.panel(title, lines)
+
+    def guidance_lines(self) -> list[str]:
+        guidance = current_guidance(self.project_dir)
+        lines = [
+            f"now: {guidance.summary}",
+            f"state: {guidance.state}",
+            f"priority: {guidance.priority}",
+        ]
+        if guidance.blocked_reasons:
+            lines.append("problem:")
+            lines.extend(f"- {reason}" for reason in guidance.blocked_reasons)
+        if guidance.diagnostics:
+            lines.append("diagnostics:")
+            lines.extend(f"- {diagnostic}" for diagnostic in guidance.diagnostics)
+        if guidance.recommended_actions:
+            first = guidance.recommended_actions[0]
+            lines.extend(
+                [
+                    "recommended next action:",
+                    f"[{first.id}] {first.label}",
+                    f"command: {first.command}",
+                    f"why: {first.why}",
+                ]
+            )
+        return lines
+
+    def write_guidance(self, *, concise: bool = False) -> None:
+        guidance = current_guidance(self.project_dir)
+        if concise:
+            lines = [f"now: {guidance.summary}"]
+            if guidance.recommended_actions:
+                first = guidance.recommended_actions[0]
+                lines.append(f"next: [{first.id}] {first.command}")
+                lines.append(f"why: {first.why}")
+            self.write_panel("LoopForge guidance", lines)
+            return
+        self.write_panel("LoopForge guidance", self.guidance_lines())
+        if guidance.recommended_actions:
+            self.write_actions(guidance.recommended_actions)
+
+    def write_actions(self, actions: list[GuidedAction]) -> None:
+        rows = [
+            [
+                action.id,
+                action.risk,
+                "yes" if action.requires_confirmation else "no",
+                action.command,
+                action.why,
+            ]
+            for action in actions
+        ]
+        self.write_table("Guided actions", ["ID", "Risk", "Confirm", "Command", "Why"], rows)
+
+    def guidance_action(self, action_id: str) -> GuidedAction | None:
+        for action in current_guidance(self.project_dir).recommended_actions:
+            if action.id == action_id:
+                return action
+        return None
+
+    def dispatch_guided_command(self, command: str) -> DispatchResult:
+        if command == "loopforge init":
+            return self.cmd_init("")
+        if command.startswith("loopforge run "):
+            self.write("This action needs a real task. Use /run <task>.", error=True)
+            return DispatchResult(2)
+        if command == "loopforge continue":
+            return self.cmd_continue("--check")
+        if command.startswith("loopforge continue --adapter "):
+            adapter = command.rsplit(" ", 1)[-1]
+            return self.cmd_continue(f"--adapter {adapter}")
+        if command == "loopforge verify":
+            return self.cmd_verify("")
+        if command == "loopforge learn --approve":
+            return self.cmd_learn("--approve")
+        if command.startswith("loopforge shell --command "):
+            raw = command.removeprefix("loopforge shell --command ").strip()
+            if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in {'"', "'"}:
+                raw = raw[1:-1]
+            return self.dispatch(raw)
+        if command == "loopforge status":
+            return self.cmd_status("")
+        self.write(f"Cannot execute guided command yet: {command}", error=True)
+        return DispatchResult(2)
 
     def status_lines(self) -> list[str]:
         result = current_status(self.project_dir)
@@ -668,11 +760,13 @@ class InteractiveShell:
         self.write(f"run id: {result.run['run_id']}")
         self.write(f"status: {result.run['status']}")
         self.write(f"pack: {result.run['pack']}")
+        self.write_guidance(concise=True)
         return DispatchResult(0)
 
     def cmd_status(self, raw: str = "") -> DispatchResult:
         del raw
         self.write_panel("LoopForge status", self.status_lines())
+        self.write_guidance(concise=True)
         return DispatchResult(0)
 
     def cmd_continue(self, raw: str) -> DispatchResult:
@@ -719,6 +813,7 @@ class InteractiveShell:
                 f"next step: {current_status(self.project_dir).next_step}",
                 error=not result.ok,
             )
+        self.write_guidance(concise=True)
         return DispatchResult(0 if result.ok else 1)
 
     def cmd_verify(self, raw: str = "") -> DispatchResult:
@@ -738,6 +833,7 @@ class InteractiveShell:
             self.write("blockers:", error=not result.ok)
             for blocker in result.blockers:
                 self.write(f"- {blocker}", error=not result.ok)
+        self.write_guidance(concise=True)
         return DispatchResult(0 if result.ok else 1)
 
     def cmd_learn(self, raw: str) -> DispatchResult:
@@ -762,6 +858,7 @@ class InteractiveShell:
             self.write("blockers:", error=not result.ok)
             for blocker in result.blockers:
                 self.write(f"- {blocker}", error=not result.ok)
+        self.write_guidance(concise=True)
         return DispatchResult(0 if result.ok else 1)
 
     def cmd_pack(self, raw: str) -> DispatchResult:
@@ -907,6 +1004,71 @@ class InteractiveShell:
         self.write(f"status: {result.run.get('status')}")
         return DispatchResult(0)
 
+    def cmd_guide(self, raw: str = "") -> DispatchResult:
+        del raw
+        self.write_guidance()
+        return DispatchResult(0)
+
+    def cmd_actions(self, raw: str = "") -> DispatchResult:
+        del raw
+        guidance = current_guidance(self.project_dir)
+        if not guidance.recommended_actions:
+            self.write("No guided actions are available.")
+            return DispatchResult(0)
+        self.write_actions(guidance.recommended_actions)
+        return DispatchResult(0)
+
+    def cmd_next(self, raw: str = "") -> DispatchResult:
+        del raw
+        guidance = current_guidance(self.project_dir)
+        if not guidance.recommended_actions:
+            self.write("next: no recommended action")
+            return DispatchResult(0)
+        action = guidance.recommended_actions[0]
+        self.write(f"next: [{action.id}] {action.label}")
+        self.write(f"command: {action.command}")
+        self.write(f"risk: {action.risk}")
+        self.write(f"requires confirmation: {action.requires_confirmation}")
+        return DispatchResult(0)
+
+    def cmd_why(self, raw: str = "") -> DispatchResult:
+        action_id = raw.strip()
+        guidance = current_guidance(self.project_dir)
+        action = (
+            self.guidance_action(action_id)
+            if action_id
+            else guidance.recommended_actions[0] if guidance.recommended_actions else None
+        )
+        if action is None:
+            self.write("No matching guided action is available.", error=True)
+            return DispatchResult(1)
+        self.write(f"why [{action.id}]: {action.why}")
+        self.write(f"command: {action.command}")
+        return DispatchResult(0)
+
+    def cmd_do(self, raw: str) -> DispatchResult:
+        action_id = raw.strip()
+        if not action_id:
+            self.write("usage: /do <action-id>", error=True)
+            return DispatchResult(2)
+        action = self.guidance_action(action_id)
+        if action is None:
+            self.write(f"unknown guided action: {action_id}", error=True)
+            return DispatchResult(1)
+        if action.requires_confirmation:
+            if not self.allow_confirmation:
+                self.write(
+                    f"action '{action.id}' requires confirmation; run {action.command} explicitly.",
+                    error=True,
+                )
+                return DispatchResult(1)
+            answer = input(f"Run '{action.command}'? Type yes to continue: ")
+            if answer.strip().lower() != "yes":
+                self.write("cancelled")
+                return DispatchResult(1)
+        self.write(f"doing [{action.id}]: {action.label}")
+        return self.dispatch_guided_command(action.command)
+
     def cmd_config(self, raw: str) -> DispatchResult:
         tokens = self.split_args(raw)
         if tokens is None:
@@ -1051,6 +1213,22 @@ class InteractiveShell:
                 "LoopForge attempts",
                 ["Attempt", "Adapter", "Status", "Summary"],
                 rows,
+            )
+        guidance = current_guidance(self.project_dir)
+        if guidance.recommended_actions:
+            action_rows = [
+                [
+                    "blocked" if action.requires_confirmation else "do now",
+                    action.id,
+                    action.label,
+                    action.command,
+                ]
+                for action in guidance.recommended_actions
+            ]
+            self.write_table(
+                "Open actions",
+                ["Kind", "ID", "Action", "Command"],
+                action_rows,
             )
         self.write(f"next step: {current_status(self.project_dir).next_step}")
         return DispatchResult(0)
@@ -1475,7 +1653,12 @@ def run_interactive(
     output: TextIO | None = None,
     error: TextIO | None = None,
 ) -> int:
-    shell = InteractiveShell(project_dir, output=output, error=error)
+    shell = InteractiveShell(
+        project_dir,
+        output=output,
+        error=error,
+        allow_confirmation=command is None and script is None,
+    )
     if command is not None:
         return shell.dispatch(command).exit_code
     if script is not None:

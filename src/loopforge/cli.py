@@ -11,6 +11,7 @@ from loopforge.engine import (
     SUPPORTED_ADAPTERS,
     continue_run,
     create_run,
+    current_guidance,
     current_status,
     detect_project_pack,
     discover_pack_contracts,
@@ -18,6 +19,29 @@ from loopforge.engine import (
     learn_run,
     verify_run,
 )
+
+
+def print_guidance(project_dir: Path, *, concise: bool = False) -> None:
+    guidance = current_guidance(project_dir)
+    print("guidance:")
+    print(f"now: {guidance.summary}")
+    if guidance.blocked_reasons:
+        print("problem:")
+        for reason in guidance.blocked_reasons:
+            print(f"- {reason}")
+    elif guidance.diagnostics and not concise:
+        print("diagnostics:")
+        for diagnostic in guidance.diagnostics:
+            print(f"- {diagnostic}")
+    if guidance.recommended_actions:
+        first = guidance.recommended_actions[0]
+        print(f"recommended next action: [{first.id}] {first.label}")
+        print(f"command: {first.command}")
+        print(f"why: {first.why}")
+    if not concise and len(guidance.recommended_actions) > 1:
+        print("useful commands:")
+        for action in guidance.recommended_actions[1:]:
+            print(f"- [{action.id}] {action.command} ({action.why})")
 
 
 def print_native_artifacts(state: dict[str, object] | None) -> None:
@@ -186,6 +210,10 @@ def build_parser() -> argparse.ArgumentParser:
         "status",
         help="Show the current LoopForge loop state.",
     )
+    subcommands.add_parser(
+        "guide",
+        help="Explain the current workflow state and recommended next actions.",
+    )
 
     pack_parser = subcommands.add_parser(
         "pack",
@@ -319,6 +347,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"loop contract: {result.run['loop_contract']['path']}")
         if result.run["loop_contract"]["subjective"] and not args.rubric:
             print("rubric: needed before autonomous attempts")
+        print_guidance(Path.cwd(), concise=True)
         return 0
     if args.command == "pack":
         if args.pack_command == "list":
@@ -344,6 +373,7 @@ def main(argv: list[str] | None = None) -> int:
             print("state: not initialized")
             print(f"config: {result.config_path}")
             print(f"next step: {result.next_step}")
+            print_guidance(Path.cwd())
             return 0
 
         assert result.config is not None
@@ -364,6 +394,7 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 print("- none")
             print(f"next step: {result.next_step}")
+            print_guidance(Path.cwd())
             return 0
 
         run = result.run
@@ -387,6 +418,10 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print("- none")
         print(f"next step: {result.next_step}")
+        print_guidance(Path.cwd())
+        return 0
+    if args.command == "guide":
+        print_guidance(Path.cwd())
         return 0
     if args.command == "continue":
         adapter_args = args.adapter_args
@@ -411,6 +446,7 @@ def main(argv: list[str] | None = None) -> int:
             print("blockers:", file=output)
             for blocker in result.blockers:
                 print(f"- {blocker}", file=output)
+        print_guidance(Path.cwd(), concise=True)
         return 0 if result.ok else 1
     if args.command == "verify":
         result = verify_run(Path.cwd())
@@ -442,6 +478,7 @@ def main(argv: list[str] | None = None) -> int:
             print("blockers:", file=output)
             for blocker in result.blockers:
                 print(f"- {blocker}", file=output)
+        print_guidance(Path.cwd(), concise=True)
         return 0 if result.ok else 1
     if args.command == "learn":
         result = learn_run(Path.cwd(), approve=args.approve, notes=args.note)
@@ -460,6 +497,7 @@ def main(argv: list[str] | None = None) -> int:
             print("blockers:", file=output)
             for blocker in result.blockers:
                 print(f"- {blocker}", file=output)
+        print_guidance(Path.cwd(), concise=True)
         return 0 if result.ok else 1
     parser.error(f"unknown command: {args.command}")
     return 2

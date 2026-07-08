@@ -19,17 +19,20 @@ loopforge status
 loopforge continue
 loopforge verify
 loopforge learn
+loopforge guide
 loopforge shell
 ```
 
 `loopforge shell` starts an interactive prompt with slash commands such as
-`/status`, `/context`, `/compact`, `/adapter`, `/continue`, `/runs`, and
-`/resume`. The shell keeps a project default adapter in `.loopforge/config.json`
-and uses it when `/continue` is run without `--adapter`.
+`/status`, `/guide`, `/actions`, `/next`, `/do`, `/context`, `/compact`,
+`/adapter`, `/continue`, `/runs`, and `/resume`. The shell keeps a project
+default adapter in `.loopforge/config.json` and uses it when `/continue` is run
+without `--adapter`.
 
 For scripts and tests, use:
 
 ```text
+loopforge guide
 loopforge shell --command "/adapter codex -- -m gpt-5"
 loopforge shell --command "/export context"
 loopforge shell --script commands.loopforge

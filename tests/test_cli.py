@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest import mock
 
 from loopforge.cli import main
-from loopforge.engine import usable_python_executable
+from loopforge.engine import current_guidance, usable_python_executable
 from loopforge.interactive import (
     InteractiveShell,
     SlashCommandCompleter,
@@ -838,6 +838,192 @@ class CliTests(unittest.TestCase):
         completer = SlashCommandCompleter(available_commands())
 
         self.assertTrue(hasattr(completer, "get_completions_async"))
+
+    def test_guidance_reports_not_initialized_and_cli_guide(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            guidance = current_guidance(repo)
+            output = io.StringIO()
+
+            with working_directory(repo), contextlib.redirect_stdout(output):
+                self.assertEqual(main(["guide"]), 0)
+                self.assertEqual(main(["status"]), 0)
+
+            self.assertEqual(guidance.state, "not_initialized")
+            self.assertEqual(guidance.recommended_actions[0].id, "init")
+            text = output.getvalue()
+            self.assertIn("guidance:", text)
+            self.assertIn("recommended next action: [init]", text)
+            self.assertIn("loopforge init", text)
+
+    def test_guidance_reports_initialized_without_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+
+            with working_directory(repo), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(main(["init"]), 0)
+
+            guidance = current_guidance(repo)
+            self.assertEqual(guidance.state, "ready_for_run")
+            self.assertEqual(guidance.recommended_actions[0].id, "create-run")
+            self.assertIn("loopforge run --task", guidance.recommended_actions[0].command)
+
+    def test_guidance_reports_draft_ready_blocked_verify_failed_and_verified_states(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(main(["run", "--task", "Draft run"]), 0)
+                self.assertEqual(current_guidance(repo).recommended_actions[0].id, "show-plan")
+
+                self.assertEqual(
+                    main(["run", "--task", "Ready run", "--success-check", "proof exists"]),
+                    0,
+                )
+                ready = current_guidance(repo)
+                self.assertEqual(ready.state, "loop_contract_ready")
+                self.assertEqual(ready.recommended_actions[0].id, "continue")
+
+                self.assertEqual(
+                    main(
+                        [
+                            "continue",
+                            "--adapter",
+                            "local-adapter-fixture",
+                            "--",
+                            fixture_python(),
+                            "-c",
+                            "import sys; print('blocked', file=sys.stderr); sys.exit(3)",
+                        ]
+                    ),
+                    1,
+                )
+                blocked = current_guidance(repo)
+                self.assertEqual(blocked.state, "adapter_blocked")
+                self.assertEqual(blocked.recommended_actions[0].id, "inspect-attempt")
+
+                self.assertEqual(
+                    main(["run", "--task", "Verify run", "--success-check", "README changed"]),
+                    0,
+                )
+                (repo / "README.md").write_text("# Project\n\nChanged.\n", encoding="utf-8")
+                run_dir = loopforge_home / "runs" / repo.name / json.loads(
+                    (repo / ".loopforge" / "config.json").read_text(encoding="utf-8")
+                )["current_run_id"]
+                run_json_path = run_dir / "run.json"
+                run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+                run_json["status"] = "ready_for_verification"
+                run_json_path.write_text(json.dumps(run_json), encoding="utf-8")
+                self.assertEqual(current_guidance(repo).recommended_actions[0].id, "verify")
+
+                self.assertEqual(main(["verify"]), 1)
+                failed = current_guidance(repo)
+                self.assertEqual(failed.state, "verification_failed")
+                self.assertEqual(failed.recommended_actions[0].id, "inspect-verification")
+
+                subprocess.run(
+                    ["git", "init"],
+                    cwd=repo,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                (repo / ".gitignore").write_text(".loopforge/\n", encoding="utf-8")
+                subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
+                subprocess.run(["git", "add", ".gitignore"], cwd=repo, check=True)
+                subprocess.run(
+                    [
+                        "git",
+                        "-c",
+                        "user.name=LoopForge Tests",
+                        "-c",
+                        "user.email=loopforge@example.invalid",
+                        "commit",
+                        "-m",
+                        "baseline",
+                    ],
+                    cwd=repo,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(
+                    main(["run", "--task", "Verified run", "--success-check", "README changed"]),
+                    0,
+                )
+                (repo / "README.md").write_text("# Project\n\nVerified.\n", encoding="utf-8")
+                self.assertEqual(main(["verify"]), 0)
+                verified = current_guidance(repo)
+                self.assertEqual(verified.state, "verified")
+                self.assertEqual(verified.recommended_actions[0].id, "compact")
+
+    def test_guidance_reports_pending_memory_proposals(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(["run", "--task", "Remember fact", "--success-check", "proposal exists"]),
+                    0,
+                )
+                self.assertEqual(main(["learn", "--note", "Fact: this repo uses unittest"]), 0)
+
+            guidance = current_guidance(repo)
+            self.assertTrue(
+                any(action.id == "approve-memory" for action in guidance.recommended_actions)
+            )
+
+    def test_shell_guidance_commands_and_do_safety(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+            output = io.StringIO()
+            error = io.StringIO()
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+                contextlib.redirect_stderr(error),
+            ):
+                self.assertEqual(main(["shell", "--command", "/actions"]), 0)
+                self.assertEqual(main(["shell", "--command", "/next"]), 0)
+                self.assertEqual(main(["shell", "--command", "/why"]), 0)
+                self.assertEqual(main(["shell", "--command", "/do init"]), 0)
+                self.assertEqual(
+                    main(["run", "--task", "Ready action", "--success-check", "proof exists"]),
+                    0,
+                )
+                self.assertEqual(main(["shell", "--command", "/guide"]), 0)
+                self.assertEqual(main(["shell", "--command", "/do continue"]), 1)
+                self.assertEqual(main(["shell", "--command", "/do missing"]), 1)
+
+            self.assertTrue((repo / ".loopforge" / "config.json").exists())
+            text = output.getvalue()
+            self.assertIn("Guided actions", text)
+            self.assertIn("next:", text)
+            self.assertIn("why [", text)
+            self.assertIn("LoopForge guidance", text)
+            self.assertIn("requires confirmation", error.getvalue())
 
     def test_init_repairs_legacy_config_with_adapter_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
