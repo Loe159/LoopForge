@@ -14,7 +14,12 @@ from unittest import mock
 
 from loopforge.cli import main
 from loopforge.engine import usable_python_executable
-from loopforge.interactive import SlashCommandCompleter, available_commands, tui_dependency_state
+from loopforge.interactive import (
+    InteractiveShell,
+    SlashCommandCompleter,
+    available_commands,
+    tui_dependency_state,
+)
 
 
 @contextlib.contextmanager
@@ -64,6 +69,8 @@ class CliTests(unittest.TestCase):
                     "profile",
                     "run_root",
                     "current_run_id",
+                    "default_adapter",
+                    "default_adapter_args",
                     "created_at",
                     "updated_at",
                 },
@@ -75,6 +82,8 @@ class CliTests(unittest.TestCase):
                 str(Path.home() / "LoopForge" / "runs" / repo.name),
             )
             self.assertIsNone(config["current_run_id"])
+            self.assertEqual(config["default_adapter"], "codex")
+            self.assertEqual(config["default_adapter_args"], [])
             self.assertTrue((repo / ".loopforge" / "templates" / "loop.md").exists())
             self.assertTrue((repo / ".loopforge" / "templates" / "memory.md").exists())
             self.assertTrue((repo / ".loopforge" / "templates" / "scratch.md").exists())
@@ -664,7 +673,7 @@ class CliTests(unittest.TestCase):
                     [
                         "/init",
                         '/run --task "Scripted loop" --success-check "contract validates"',
-                        "/continue",
+                        "/continue --check",
                         '/learn --note "Fact: this repo uses unittest"',
                     ]
                 ),
@@ -829,6 +838,363 @@ class CliTests(unittest.TestCase):
         completer = SlashCommandCompleter(available_commands())
 
         self.assertTrue(hasattr(completer, "get_completions_async"))
+
+    def test_init_repairs_legacy_config_with_adapter_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            config_dir = repo / ".loopforge"
+            config_dir.mkdir()
+            config_path = config_dir / "config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "project_name": repo.name,
+                        "profile": "supervised",
+                        "run_root": str(repo / "runs"),
+                        "current_run_id": None,
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "updated_at": "2026-01-01T00:00:00Z",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with working_directory(repo), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(main(["init"]), 0)
+
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            self.assertEqual(config["default_adapter"], "codex")
+            self.assertEqual(config["default_adapter_args"], [])
+
+    def test_shell_adapter_selection_persists_adapter_and_args(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            output = io.StringIO()
+
+            with working_directory(repo), contextlib.redirect_stdout(output):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(
+                        [
+                            "shell",
+                            "--command",
+                            "/adapter local-adapter-fixture -- python -c pass",
+                        ]
+                    ),
+                    0,
+                )
+                self.assertEqual(main(["shell", "--command", "/adapters"]), 0)
+
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            self.assertEqual(config["default_adapter"], "local-adapter-fixture")
+            self.assertEqual(config["default_adapter_args"], ["python", "-c", "pass"])
+            text = output.getvalue()
+            self.assertIn("selected adapter: local-adapter-fixture", text)
+            self.assertIn("local-adapter-fixture", text)
+
+    def test_shell_continue_uses_selected_adapter_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+            fixture_code = (
+                "from pathlib import Path; "
+                "Path('default-adapter.txt').write_text('ok\\n', encoding='utf-8')"
+            )
+            adapter_command = (
+                f"/adapter local-adapter-fixture -- {fixture_python()!r} "
+                f"-c {fixture_code!r}"
+            )
+
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(
+                        [
+                            "shell",
+                            "--command",
+                            adapter_command,
+                        ]
+                    ),
+                    0,
+                )
+                self.assertEqual(
+                    main(
+                        [
+                            "run",
+                            "--task",
+                            "Use the selected adapter",
+                            "--success-check",
+                            "default-adapter.txt exists",
+                        ]
+                    ),
+                    0,
+                )
+                self.assertEqual(main(["shell", "--command", "/continue"]), 0)
+
+            self.assertEqual((repo / "default-adapter.txt").read_text(encoding="utf-8"), "ok\n")
+            self.assertIn("adapter: local-adapter-fixture", output.getvalue())
+
+    def test_shell_config_and_session_preferences(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            script = repo / "prefs.loopforge"
+            script.write_text(
+                "\n".join(
+                    [
+                        "/init",
+                        "/config set profile strict",
+                        "/config set default-adapter claude-code",
+                        "/config set adapter-args --dangerously-skip-permissions",
+                        "/theme dark",
+                        "/tui plain",
+                        "/keymap vim",
+                        "/statusline compact",
+                        "/title Focus",
+                        "/config show",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            output = io.StringIO()
+            with working_directory(repo), contextlib.redirect_stdout(output):
+                self.assertEqual(main(["shell", "--script", str(script)]), 0)
+
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            self.assertEqual(config["profile"], "strict")
+            self.assertEqual(config["default_adapter"], "claude-code")
+            self.assertEqual(config["default_adapter_args"], ["--dangerously-skip-permissions"])
+            text = output.getvalue()
+            self.assertIn("theme: dark", text)
+            self.assertIn("tui: plain", text)
+            self.assertIn("keymap: vim", text)
+            self.assertIn("statusline: compact", text)
+            self.assertIn("title: Focus", text)
+
+    def test_shell_stats_tasks_usage_cost_and_raw(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+            fixture_code = (
+                "from pathlib import Path; "
+                "Path('raw-output.txt').write_text('ok\\n', encoding='utf-8'); "
+                "print('raw hello')"
+            )
+
+            output = io.StringIO()
+            adapter_command = (
+                f"/adapter local-adapter-fixture -- {fixture_python()!r} "
+                f"-c {fixture_code!r}"
+            )
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(
+                        [
+                            "shell",
+                            "--command",
+                            adapter_command,
+                        ]
+                    ),
+                    0,
+                )
+                self.assertEqual(
+                    main(["run", "--task", "Record raw output", "--success-check", "adapter runs"]),
+                    0,
+                )
+                self.assertEqual(main(["shell", "--command", "/continue"]), 0)
+                self.assertEqual(main(["shell", "--command", "/stats"]), 0)
+                self.assertEqual(main(["shell", "--command", "/usage"]), 0)
+                self.assertEqual(main(["shell", "--command", "/cost"]), 0)
+                self.assertEqual(main(["shell", "--command", "/tasks"]), 0)
+                self.assertEqual(main(["shell", "--command", "/ps"]), 0)
+                self.assertEqual(main(["shell", "--command", "/raw latest stdout"]), 0)
+
+            text = output.getvalue()
+            self.assertIn("tokens", text)
+            self.assertIn("unavailable", text)
+            self.assertIn("LoopForge attempts", text)
+            self.assertIn("raw hello", text)
+
+    def test_shell_memory_skills_permissions_and_review(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(
+                        [
+                            "run",
+                            "--task",
+                            "Review shell evidence",
+                            "--allow-tool",
+                            "git",
+                            "--success-check",
+                            "evidence is printed",
+                        ]
+                    ),
+                    0,
+                )
+                for command in (
+                    "/memory",
+                    "/skills",
+                    "/plugins",
+                    "/permissions",
+                    "/allowed-tools",
+                    "/sandbox",
+                    "/review",
+                    "/code-review",
+                    "/security-review",
+                    "/simplify",
+                ):
+                    self.assertEqual(main(["shell", "--command", command]), 0)
+
+            text = output.getvalue()
+            self.assertIn("LoopForge memory", text)
+            self.assertIn("LoopForge skills", text)
+            self.assertIn("allowed tools:", text)
+            self.assertIn("- git", text)
+            self.assertIn("local review evidence", text)
+
+    def test_shell_copy_falls_back_to_export_and_export_writes_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                mock.patch.object(InteractiveShell, "copy_to_clipboard", return_value=False),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(main(["run", "--task", "Export context"]), 0)
+                self.assertEqual(main(["shell", "--command", "/export context"]), 0)
+                self.assertEqual(main(["shell", "--command", "/copy compact"]), 0)
+
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+            self.assertTrue((run_dir / "artifacts" / "exports" / "context.txt").exists())
+            self.assertTrue((run_dir / "artifacts" / "exports" / "compact.txt").exists())
+            self.assertIn("clipboard unavailable; exported instead", output.getvalue())
+
+    def test_shell_fork_archive_and_branch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True, text=True)
+            (repo / "README.md").write_text("# Project\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=LoopForge Tests",
+                    "-c",
+                    "user.email=loopforge@example.invalid",
+                    "commit",
+                    "-m",
+                    "initial",
+                ],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(["run", "--task", "Base run", "--success-check", "base check"]),
+                    0,
+                )
+                self.assertEqual(main(["shell", "--command", "/fork Forked run"]), 0)
+                self.assertEqual(main(["shell", "--command", "/archive"]), 0)
+                self.assertEqual(main(["shell", "--command", "/branch"]), 0)
+                self.assertEqual(main(["shell", "--command", "/branch create shell-test"]), 0)
+
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_json_path = (
+                loopforge_home
+                / "runs"
+                / repo.name
+                / config["current_run_id"]
+                / "run.json"
+            )
+            run_json = json.loads(
+                run_json_path.read_text(encoding="utf-8")
+            )
+            self.assertEqual(run_json["task"], "Forked run")
+            self.assertEqual(run_json["success_checks"], ["base check"])
+            self.assertTrue(run_json["archived"])
+            self.assertIn("LoopForge fork created", output.getvalue())
+            self.assertIn("LoopForge archived run", output.getvalue())
+
+    def test_shell_cd_add_dir_mention_and_context(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            extra = repo / "extra"
+            extra.mkdir()
+            mentioned = repo / "README.md"
+            mentioned.write_text("# Project\n", encoding="utf-8")
+            script = workspace / "context.loopforge"
+            script.write_text(
+                "\n".join(
+                    [
+                        "/cd project",
+                        "/add-dir extra",
+                        "/mention README.md",
+                        "/context",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            output = io.StringIO()
+            with working_directory(workspace), contextlib.redirect_stdout(output):
+                self.assertEqual(main(["shell", "--script", str(script)]), 0)
+
+            text = output.getvalue()
+            self.assertIn(f"project dir: {repo}", text)
+            self.assertIn(f"added context dir: {extra}", text)
+            self.assertIn(f"mentioned: {mentioned}", text)
+            self.assertIn("session context dirs:", text)
+            self.assertIn("session mentions:", text)
 
     def test_shell_doctor_reports_missing_tui_dependencies(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

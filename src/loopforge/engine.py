@@ -22,6 +22,7 @@ CONFIG_FILE = "config.json"
 PROJECT_MEMORY_FILE = "memory.md"
 DEFAULT_PROFILE = "supervised"
 DEFAULT_PACK = "generic-code"
+DEFAULT_ADAPTER = "codex"
 READY_FOR_VERIFICATION = "ready_for_verification"
 ADAPTER_BLOCKED = "adapter_blocked"
 LOOP_CONTRACT_DRAFT = "loop_contract_draft"
@@ -52,6 +53,8 @@ CONFIG_KEYS = (
     "profile",
     "run_root",
     "current_run_id",
+    "default_adapter",
+    "default_adapter_args",
     "created_at",
     "updated_at",
 )
@@ -364,6 +367,16 @@ class CompactContextResult:
     ok: bool
     message: str
     summary: str
+    blockers: list[str]
+
+
+@dataclass(frozen=True)
+class ConfigUpdateResult:
+    project_dir: Path
+    config_path: Path
+    config: dict[str, Any] | None
+    ok: bool
+    message: str
     blockers: list[str]
 
 
@@ -1076,6 +1089,8 @@ def new_config(
         "profile": profile,
         "run_root": str(default_run_root(project_dir, home=home)),
         "current_run_id": None,
+        "default_adapter": DEFAULT_ADAPTER,
+        "default_adapter_args": [],
         "created_at": now,
         "updated_at": now,
     }
@@ -1093,6 +1108,14 @@ def normalize_config(
         config["created_at"] = now
     if "current_run_id" not in config:
         config["current_run_id"] = None
+    if config.get("default_adapter") not in SUPPORTED_ADAPTERS:
+        config["default_adapter"] = DEFAULT_ADAPTER
+    if not isinstance(config.get("default_adapter_args"), list):
+        config["default_adapter_args"] = []
+    else:
+        config["default_adapter_args"] = [
+            str(value) for value in config["default_adapter_args"]
+        ]
     if "project_name" not in config:
         config["project_name"] = project_name(project_dir)
     if "profile" not in config:
@@ -1144,6 +1167,88 @@ def initialize_project(
         config=config,
         created=True,
         repaired=False,
+    )
+
+
+def update_project_config(project_dir: Path, updates: dict[str, Any]) -> ConfigUpdateResult:
+    status = current_status(project_dir)
+    if not status.initialized or status.config is None:
+        return ConfigUpdateResult(
+            project_dir=status.project_dir,
+            config_path=status.config_path,
+            config=None,
+            ok=False,
+            message="LoopForge config update failed.",
+            blockers=[status.next_step],
+        )
+
+    config = dict(status.config)
+    for key, value in updates.items():
+        config[key] = value
+    config["updated_at"] = utc_now()
+    normalized, _ = normalize_config(status.project_dir, config)
+    write_json_atomic(status.config_path, normalized)
+    return ConfigUpdateResult(
+        project_dir=status.project_dir,
+        config_path=status.config_path,
+        config=normalized,
+        ok=True,
+        message=f"LoopForge config updated: {status.config_path}",
+        blockers=[],
+    )
+
+
+def set_default_adapter(
+    project_dir: Path,
+    adapter: str,
+    adapter_args: list[str] | None = None,
+) -> ConfigUpdateResult:
+    if adapter not in SUPPORTED_ADAPTERS:
+        return ConfigUpdateResult(
+            project_dir=project_dir.resolve(),
+            config_path=project_config_path(project_dir.resolve()),
+            config=None,
+            ok=False,
+            message="LoopForge adapter update failed.",
+            blockers=[f"unsupported adapter: {adapter}"],
+        )
+    updates: dict[str, Any] = {"default_adapter": adapter}
+    if adapter_args is not None:
+        updates["default_adapter_args"] = [str(value) for value in adapter_args]
+    return update_project_config(project_dir, updates)
+
+
+def archive_current_run(project_dir: Path) -> ConfigUpdateResult:
+    status = current_status(project_dir)
+    if not status.initialized or status.config is None:
+        return ConfigUpdateResult(
+            project_dir=status.project_dir,
+            config_path=status.config_path,
+            config=None,
+            ok=False,
+            message="LoopForge archive failed.",
+            blockers=[status.next_step],
+        )
+    if status.run is None or status.run_dir is None:
+        return ConfigUpdateResult(
+            project_dir=status.project_dir,
+            config_path=status.config_path,
+            config=status.config,
+            ok=False,
+            message="LoopForge archive failed.",
+            blockers=[status.next_step],
+        )
+    updated_run = dict(status.run)
+    updated_run["archived"] = True
+    updated_run["archived_at"] = utc_now()
+    write_json_atomic(status.run_json_path or (status.run_dir / "run.json"), updated_run)
+    return ConfigUpdateResult(
+        project_dir=status.project_dir,
+        config_path=status.config_path,
+        config=status.config,
+        ok=True,
+        message=f"LoopForge archived run: {updated_run.get('run_id')}",
+        blockers=[],
     )
 
 
