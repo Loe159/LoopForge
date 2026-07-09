@@ -14,7 +14,6 @@ from loopforge.engine import (
     current_guidance,
     current_status,
     dashboard_snapshot,
-    dashboard_text_lines,
     detect_project_pack,
     discover_pack_contracts,
     initialize_project,
@@ -24,6 +23,7 @@ from loopforge.engine import (
     summarize_run_metrics,
     verify_run,
 )
+from loopforge.ui import TerminalRenderer, render_dashboard, render_status
 
 
 def print_guidance(project_dir: Path, *, concise: bool = False) -> None:
@@ -267,11 +267,6 @@ def print_metrics_summary(summary: dict[str, object]) -> None:
             )
 
 
-def print_dashboard(snapshot: dict[str, object]) -> None:
-    for line in dashboard_text_lines(snapshot):
-        print(line)
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="loopforge")
     subcommands = parser.add_subparsers(dest="command")
@@ -336,9 +331,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Subjective quality rubric required before autonomous subjective work.",
     )
 
-    subcommands.add_parser(
+    status_parser = subcommands.add_parser(
         "status",
         help="Show the current LoopForge loop state.",
+    )
+    status_parser.add_argument(
+        "--details",
+        action="store_true",
+        help="Show detailed paths, profile policy, artifacts, and verification evidence.",
     )
     subcommands.add_parser(
         "guide",
@@ -476,6 +476,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
+    renderer = TerminalRenderer(sys.stdout)
     if argv is None:
         argv = sys.argv[1:]
     if not argv:
@@ -518,17 +519,18 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "run":
         try:
-            result = create_run(
-                Path.cwd(),
-                task=args.task,
-                pack=args.pack,
-                success_checks=args.success_check,
-                selected_skills=args.skill,
-                allowed_tools=args.allow_tool,
-                max_attempts=args.max_attempts,
-                timeout_seconds=args.timeout,
-                subjective_rubric=args.rubric,
-            )
+            with renderer.loading("Creating LoopForge run..."):
+                result = create_run(
+                    Path.cwd(),
+                    task=args.task,
+                    pack=args.pack,
+                    success_checks=args.success_check,
+                    selected_skills=args.skill,
+                    allowed_tools=args.allow_tool,
+                    max_attempts=args.max_attempts,
+                    timeout_seconds=args.timeout,
+                    subjective_rubric=args.rubric,
+                )
         except (FileNotFoundError, ValueError) as error:
             print(f"LoopForge run failed: {error}", file=sys.stderr)
             return 1
@@ -619,59 +621,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if result.ok else 1
     if args.command == "status":
         result = current_status(Path.cwd())
-        print(f"project: {result.project_dir.name}")
-        if not result.initialized:
-            print("state: not initialized")
-            print(f"config: {result.config_path}")
-            print(f"next step: {result.next_step}")
-            print_guidance(Path.cwd())
-            return 0
-
-        assert result.config is not None
-        print("state: initialized")
-        print(f"profile: {result.config['profile']}")
-        print_profile_policy(result.config["profile"])
-        print(f"run root: {result.config['run_root']}")
-
-        if result.run is None:
-            print(f"current run: {result.config.get('current_run_id') or 'none'}")
-            if result.run_dir is not None:
-                print(f"run directory: {result.run_dir}")
-                print_native_artifacts(result.native_artifacts)
-            print_memory(result.memory)
-            print("blockers:")
-            if result.blockers:
-                for blocker in result.blockers:
-                    print(f"- {blocker}")
-            else:
-                print("- none")
-            print(f"next step: {result.next_step}")
-            print_guidance(Path.cwd())
-            return 0
-
-        run = result.run
-        print(f"current run: {run['run_id']}")
-        print(f"task: {run['task']}")
-        print(f"loop status: {run['status']}")
-        print(f"attempts: {run.get('attempt_count', len(run.get('attempts', [])))}")
-        print(f"pack: {run['pack']}")
-        print_pack_contract(run)
-        print_workspace(run)
-        print(f"base commit: {run.get('base_commit') or 'none'}")
-        print(f"run directory: {result.run_dir}")
-        print_native_artifacts(result.native_artifacts)
-        print_loop_contract(result.loop_contract)
-        print_legacy_artifacts(result.legacy_artifacts)
-        print_verification(result.verification)
-        print_memory(result.memory)
-        print("blockers:")
-        if result.blockers:
-            for blocker in result.blockers:
-                print(f"- {blocker}")
-        else:
-            print("- none")
-        print(f"next step: {result.next_step}")
-        print_guidance(Path.cwd())
+        guidance = current_guidance(Path.cwd())
+        render_status(renderer, result, guidance, details=args.details)
         return 0
     if args.command == "guide":
         print_guidance(Path.cwd())
@@ -686,18 +637,19 @@ def main(argv: list[str] | None = None) -> int:
             }
             print_json_payload(payload)
         else:
-            print_dashboard(result.snapshot)
+            render_dashboard(renderer, result.snapshot)
         return 0
     if args.command == "continue":
         adapter_args = args.adapter_args
         if adapter_args and adapter_args[0] == "--":
             adapter_args = adapter_args[1:]
-        result = continue_run(
-            Path.cwd(),
-            adapter=args.adapter,
-            adapter_args=adapter_args,
-            confirmed=args.confirm,
-        )
+        with renderer.loading("Continuing LoopForge run..."):
+            result = continue_run(
+                Path.cwd(),
+                adapter=args.adapter,
+                adapter_args=adapter_args,
+                confirmed=args.confirm,
+            )
         output = sys.stdout if result.ok else sys.stderr
         print(result.message, file=output)
         if result.run_dir is not None:
@@ -721,7 +673,8 @@ def main(argv: list[str] | None = None) -> int:
         print_guidance(Path.cwd(), concise=True)
         return 0 if result.ok else 1
     if args.command == "verify":
-        result = verify_run(Path.cwd(), confirmed=args.confirm)
+        with renderer.loading("Generating patch and running verification..."):
+            result = verify_run(Path.cwd(), confirmed=args.confirm)
         output = sys.stdout if result.ok else sys.stderr
         print(result.message, file=output)
         if result.run_dir is not None:
@@ -755,12 +708,13 @@ def main(argv: list[str] | None = None) -> int:
         print_guidance(Path.cwd(), concise=True)
         return 0 if result.ok else 1
     if args.command == "learn":
-        result = learn_run(
-            Path.cwd(),
-            approve=args.approve,
-            notes=args.note,
-            confirmed=args.confirm,
-        )
+        with renderer.loading("Updating LoopForge memory proposals..."):
+            result = learn_run(
+                Path.cwd(),
+                approve=args.approve,
+                notes=args.note,
+                confirmed=args.confirm,
+            )
         output = sys.stdout if result.ok else sys.stderr
         print(result.message, file=output)
         if result.run_dir is not None:

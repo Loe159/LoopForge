@@ -21,6 +21,7 @@ from loopforge.interactive import (
     available_commands,
     tui_dependency_state,
 )
+from loopforge.ui import TerminalRenderer
 
 
 @contextlib.contextmanager
@@ -49,6 +50,11 @@ def fixture_python() -> str:
     if bundled.exists():
         return str(bundled)
     return str(executable)
+
+
+class TtyStringIO(io.StringIO):
+    def isatty(self) -> bool:
+        return True
 
 
 class CliTests(unittest.TestCase):
@@ -318,7 +324,7 @@ class CliTests(unittest.TestCase):
                     main(["run", "--task", "Update Python package metadata"]),
                     0,
                 )
-                self.assertEqual(main(["status"]), 0)
+                self.assertEqual(main(["status", "--details"]), 0)
 
             config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
             run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
@@ -518,7 +524,7 @@ class CliTests(unittest.TestCase):
                     ),
                     0,
                 )
-                self.assertEqual(main(["status"]), 0)
+                self.assertEqual(main(["status", "--details"]), 0)
 
             durable = (repo / ".loopforge" / "memory.md").read_text(encoding="utf-8")
             self.assertIn(
@@ -611,7 +617,7 @@ class CliTests(unittest.TestCase):
             ):
                 self.assertEqual(main(["init"]), 0)
                 self.assertEqual(main(["run", "--task", "Add status output"]), 0)
-                self.assertEqual(main(["status"]), 0)
+                self.assertEqual(main(["status", "--details"]), 0)
 
             config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
             text = output.getvalue()
@@ -645,12 +651,14 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(main(["shell", "--command", "/status"]), 0)
                 self.assertEqual(main(["run", "--task", "Add shell status"]), 0)
                 self.assertEqual(main(["shell", "--command", "/status"]), 0)
+                self.assertEqual(main(["shell", "--command", "/status details"]), 0)
 
             text = output.getvalue()
             self.assertIn("state: not initialized", text)
             self.assertIn("state: initialized", text)
             self.assertIn("task: Add shell status", text)
             self.assertIn("loop status: loop_contract_draft", text)
+            self.assertIn("native artifacts: complete", text)
 
     def test_shell_plain_text_creates_run(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -841,9 +849,15 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             output = io.StringIO()
             with working_directory(Path(temp_dir)), contextlib.redirect_stdout(output):
+                self.assertEqual(main(["shell", "--command", "/commands"]), 0)
+                self.assertEqual(main(["shell", "--command", "/commands all"]), 0)
                 self.assertEqual(main(["shell", "--command", "/model"]), 0)
 
             text = output.getvalue()
+            useful_catalog, full_catalog = text.split("Run /commands all", 1)
+            self.assertIn("/status", useful_catalog)
+            self.assertNotIn("/model", useful_catalog)
+            self.assertIn("/model", full_catalog)
             self.assertIn("/model is recognized but not supported yet", text)
             self.assertIn("Model selection is owned", text)
 
@@ -851,6 +865,35 @@ class CliTests(unittest.TestCase):
         completer = SlashCommandCompleter(available_commands())
 
         self.assertTrue(hasattr(completer, "get_completions_async"))
+
+    def test_renderer_plain_mode_does_not_emit_ansi(self) -> None:
+        output = io.StringIO()
+        renderer = TerminalRenderer(output, mode="plain")
+
+        renderer.panel("LoopForge status", ["state: initialized"])
+
+        text = output.getvalue()
+        self.assertIn("LoopForge status", text)
+        self.assertNotIn("\x1b[", text)
+
+    def test_renderer_rich_mode_forces_styles_for_tests(self) -> None:
+        output = io.StringIO()
+        renderer = TerminalRenderer(output, mode="rich")
+
+        renderer.panel("LoopForge status", ["state: initialized"])
+
+        self.assertIn("\x1b[", output.getvalue())
+
+    def test_renderer_auto_mode_respects_no_color(self) -> None:
+        output = TtyStringIO()
+
+        with mock.patch.dict(os.environ, {"NO_COLOR": "1"}):
+            renderer = TerminalRenderer(output, mode="auto")
+            renderer.panel("LoopForge status", ["state: initialized"])
+
+        text = output.getvalue()
+        self.assertIn("LoopForge status", text)
+        self.assertNotIn("\x1b[", text)
 
     def test_guidance_reports_not_initialized_and_cli_guide(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -860,7 +903,7 @@ class CliTests(unittest.TestCase):
 
             with working_directory(repo), contextlib.redirect_stdout(output):
                 self.assertEqual(main(["guide"]), 0)
-                self.assertEqual(main(["status"]), 0)
+                self.assertEqual(main(["status", "--details"]), 0)
 
             self.assertEqual(guidance.state, "not_initialized")
             self.assertEqual(guidance.recommended_actions[0].id, "init")
@@ -2522,7 +2565,7 @@ class CliTests(unittest.TestCase):
                     encoding="utf-8",
                 )
                 self.assertEqual(main(["verify"]), 0)
-                self.assertEqual(main(["status"]), 0)
+                self.assertEqual(main(["status", "--details"]), 0)
 
             config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
             run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
@@ -3015,7 +3058,7 @@ class CliTests(unittest.TestCase):
             ):
                 self.assertEqual(main(["init"]), 0)
                 self.assertEqual(main(["run", "--task", "Write docs without GitHub"]), 0)
-                self.assertEqual(main(["status"]), 0)
+                self.assertEqual(main(["status", "--details"]), 0)
 
             config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
             run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
@@ -3048,7 +3091,7 @@ class CliTests(unittest.TestCase):
 
             output = io.StringIO()
             with working_directory(repo), contextlib.redirect_stdout(output):
-                self.assertEqual(main(["status"]), 0)
+                self.assertEqual(main(["status", "--details"]), 0)
 
             text = output.getvalue()
             self.assertIn("native artifacts: complete", text)

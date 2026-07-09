@@ -32,7 +32,6 @@ from loopforge.engine import (
     current_guidance,
     current_status,
     dashboard_snapshot,
-    dashboard_text_lines,
     detect_project_pack,
     directory_file_sizes,
     discover_pack_contracts,
@@ -45,6 +44,12 @@ from loopforge.engine import (
     verify_run,
     learn_run,
     profile_permission_lines,
+)
+from loopforge.ui import (
+    TerminalRenderer,
+    format_status_lines,
+    render_dashboard,
+    render_status,
 )
 
 
@@ -161,6 +166,14 @@ ALIASES = {
     "q": "quit",
 }
 
+COMMAND_GROUPS = {
+    "Start": ("init", "run", "new", "fork", "resume", "runs"),
+    "Work Loop": ("status", "next", "guide", "actions", "do", "continue", "verify", "learn"),
+    "Review": ("dashboard", "plan", "tasks", "diff", "review", "code-review", "security-review"),
+    "Context": ("context", "compact", "copy", "export", "memory", "raw", "allowed-tools"),
+    "Settings": ("adapter", "adapters", "config", "theme", "tui", "statusline", "keymap", "doctor"),
+}
+
 
 @dataclass(frozen=True)
 class DispatchResult:
@@ -177,58 +190,6 @@ def tui_dependency_state() -> dict[str, bool]:
 
 def available_commands() -> dict[str, str]:
     return COMMANDS.copy()
-
-
-class ShellRenderer:
-    def __init__(self, output: TextIO, *, mode: str = "auto", theme: str = "default") -> None:
-        self.output = output
-        self.mode = mode
-        self.theme = theme
-        self.rich_available = importlib.util.find_spec("rich") is not None
-        self.use_rich = mode == "rich" or (
-            mode == "auto" and self.rich_available and output.isatty()
-        )
-        self.console = None
-        if self.use_rich:
-            from rich.console import Console
-
-            self.console = Console(file=output, highlight=False)
-
-    def set_mode(self, mode: str) -> None:
-        self.mode = mode
-        self.use_rich = mode == "rich" or (
-            mode == "auto" and self.rich_available and self.output.isatty()
-        )
-        if self.use_rich and self.console is None:
-            from rich.console import Console
-
-            self.console = Console(file=self.output, highlight=False)
-
-    def panel(self, title: str, lines: list[str]) -> None:
-        if self.use_rich and self.console is not None:
-            from rich.panel import Panel
-
-            self.console.print(Panel("\n".join(lines), title=title, border_style="cyan"))
-            return
-        print(title, file=self.output)
-        for line in lines:
-            print(line, file=self.output)
-
-    def table(self, title: str, columns: list[str], rows: list[list[str]]) -> None:
-        if self.use_rich and self.console is not None:
-            from rich.table import Table
-
-            table = Table(title=title)
-            for column in columns:
-                table.add_column(column)
-            for row in rows:
-                table.add_row(*row)
-            self.console.print(table)
-            return
-        print(title, file=self.output)
-        print(" | ".join(columns), file=self.output)
-        for row in rows:
-            print(" | ".join(row), file=self.output)
 
 
 class SlashCommandCompleter(Completer):
@@ -268,7 +229,7 @@ class InteractiveShell:
         self.statusline = "full"
         self.theme = "default"
         self.renderer_mode = "auto"
-        self.renderer = ShellRenderer(self.output, mode=self.renderer_mode, theme=self.theme)
+        self.renderer = TerminalRenderer(self.output, mode=self.renderer_mode, theme=self.theme)
         self.extra_context_dirs: list[Path] = []
         self.mentioned_paths: list[Path] = []
         self.editing_mode = "emacs"
@@ -436,66 +397,10 @@ class InteractiveShell:
         self.write(f"Cannot execute guided command yet: {command}", error=True)
         return DispatchResult(2)
 
-    def status_lines(self) -> list[str]:
+    def status_lines(self, *, details: bool = False) -> list[str]:
         result = current_status(self.project_dir)
-        lines = [f"project: {result.project_dir.name}"]
-        if not result.initialized:
-            lines.extend(
-                [
-                    "state: not initialized",
-                    f"config: {result.config_path}",
-                    f"next step: {result.next_step}",
-                ]
-            )
-            return lines
-        assert result.config is not None
-        lines.extend(
-            [
-                "state: initialized",
-                f"profile: {result.config['profile']}",
-                *profile_permission_lines(result.config["profile"]),
-                f"run root: {result.config['run_root']}",
-                f"default adapter: {result.config.get('default_adapter')}",
-                "default adapter args: "
-                + " ".join(result.config.get("default_adapter_args", [])),
-            ]
-        )
-        if result.run is None:
-            lines.append(f"current run: {result.config.get('current_run_id') or 'none'}")
-            lines.append(f"next step: {result.next_step}")
-            return lines
-        run = result.run
-        lines.extend(
-            [
-                f"current run: {run['run_id']}",
-                f"task: {run['task']}",
-                f"loop status: {run['status']}",
-                f"attempts: {run.get('attempt_count', len(run.get('attempts', [])))}",
-                f"pack: {run['pack']}",
-                f"run directory: {result.run_dir}",
-            ]
-        )
-        workspace = run.get("workspace", {})
-        if isinstance(workspace, dict) and workspace:
-            lines.append(f"workspace mode: {workspace.get('mode') or 'unknown'}")
-            lines.append(f"workspace: {workspace.get('path') or 'none'}")
-        if result.loop_contract is not None:
-            lines.append(f"loop contract: {result.loop_contract['status']}")
-            lines.append(
-                f"success checks: {len(result.loop_contract.get('success_checks', []))}"
-            )
-        if result.verification is not None:
-            lines.append(f"verification: {result.verification.get('status', 'unknown')}")
-        if result.memory is not None:
-            lines.append(f"durable memory: {result.memory.get('durable_items', 0)} items")
-            lines.append(f"memory proposals: {result.memory.get('pending', 0)} pending")
-        lines.append("blockers:")
-        if result.blockers:
-            lines.extend(f"- {blocker}" for blocker in result.blockers)
-        else:
-            lines.append("- none")
-        lines.append(f"next step: {result.next_step}")
-        return lines
+        guidance = current_guidance(self.project_dir)
+        return format_status_lines(result, guidance, details=details)
 
     def context_lines(self) -> list[str]:
         result = current_status(self.project_dir)
@@ -642,16 +547,33 @@ class InteractiveShell:
         self.write(
             "Useful commands: /status, /context, /compact, /run, /continue, /verify, /learn."
         )
-        self.write("Run /commands for the full catalog.")
+        self.write("Run /commands for useful commands, or /commands all for the full catalog.")
         return DispatchResult(0)
 
     def cmd_commands(self, raw: str = "") -> DispatchResult:
-        del raw
-        rows = []
-        for command, description in COMMANDS.items():
-            state = "local" if command in SUPPORTED_COMMANDS else "not supported yet"
-            rows.append([f"/{command}", state, description])
-        self.write_table("LoopForge commands", ["Command", "Status", "Description"], rows)
+        show_all = raw.strip().lower() == "all"
+        if show_all:
+            rows = []
+            for command, description in COMMANDS.items():
+                state = "local" if command in SUPPORTED_COMMANDS else "not supported yet"
+                rows.append([f"/{command}", state, description])
+            self.write_table("LoopForge commands", ["Command", "Status", "Description"], rows)
+            return DispatchResult(0)
+
+        shown: set[str] = set()
+        for group, commands in COMMAND_GROUPS.items():
+            rows = []
+            for command in commands:
+                if command in SUPPORTED_COMMANDS:
+                    shown.add(command)
+                    rows.append([f"/{command}", SUPPORTED_COMMANDS[command]])
+            if rows:
+                self.write_table(group, ["Command", "Use"], rows)
+        remaining = sorted(set(SUPPORTED_COMMANDS) - shown)
+        if remaining:
+            rows = [[f"/{command}", SUPPORTED_COMMANDS[command]] for command in remaining]
+            self.write_table("More", ["Command", "Use"], rows)
+        self.write("Run /commands all to include commands that are recognized but not supported yet.")
         return DispatchResult(0)
 
     def cmd_adapters(self, raw: str = "") -> DispatchResult:
@@ -758,17 +680,18 @@ class InteractiveShell:
             self.write("Usage: /run <task> or /run --task \"...\"", error=True)
             return DispatchResult(2)
         try:
-            result = create_run(
-                self.project_dir,
-                task=task,
-                pack=pack,
-                success_checks=success_checks,
-                selected_skills=selected_skills,
-                allowed_tools=allowed_tools,
-                max_attempts=max_attempts,
-                timeout_seconds=timeout_seconds,
-                subjective_rubric=rubric,
-            )
+            with self.renderer.loading("Creating LoopForge run..."):
+                result = create_run(
+                    self.project_dir,
+                    task=task,
+                    pack=pack,
+                    success_checks=success_checks,
+                    selected_skills=selected_skills,
+                    allowed_tools=allowed_tools,
+                    max_attempts=max_attempts,
+                    timeout_seconds=timeout_seconds,
+                    subjective_rubric=rubric,
+                )
         except (FileNotFoundError, ValueError) as error:
             self.write(f"LoopForge run failed: {error}", error=True)
             return DispatchResult(1)
@@ -776,21 +699,23 @@ class InteractiveShell:
         self.write(f"run id: {result.run['run_id']}")
         self.write(f"status: {result.run['status']}")
         self.write(f"pack: {result.run['pack']}")
-        for line in profile_permission_lines(result.run["profile"]):
-            self.write(line)
         self.write_guidance(concise=True)
         return DispatchResult(0)
 
     def cmd_status(self, raw: str = "") -> DispatchResult:
-        del raw
-        self.write_panel("LoopForge status", self.status_lines())
-        self.write_guidance(concise=True)
+        details = raw.strip().lower() == "details"
+        if raw.strip() and not details:
+            self.write("usage: /status [details]", error=True)
+            return DispatchResult(2)
+        result = current_status(self.project_dir)
+        guidance = current_guidance(self.project_dir)
+        render_status(self.renderer, result, guidance, details=details)
         return DispatchResult(0)
 
     def cmd_dashboard(self, raw: str = "") -> DispatchResult:
         del raw
         result = dashboard_snapshot(self.project_dir)
-        self.write_panel("LoopForge dashboard", dashboard_text_lines(result.snapshot))
+        render_dashboard(self.renderer, result.snapshot)
         return DispatchResult(0)
 
     def cmd_continue(self, raw: str) -> DispatchResult:
@@ -825,12 +750,13 @@ class InteractiveShell:
             profile = status.run.get("profile") if status.run is not None else None
             if profile == "strict":
                 confirmed = self.confirm_if_available("Strict profile requires confirmation.")
-        result = continue_run(
-            self.project_dir,
-            adapter=adapter,
-            adapter_args=chosen_args,
-            confirmed=confirmed,
-        )
+        with self.renderer.loading("Continuing LoopForge run..."):
+            result = continue_run(
+                self.project_dir,
+                adapter=adapter,
+                adapter_args=chosen_args,
+                confirmed=confirmed,
+            )
         self.write(result.message, error=not result.ok)
         if result.run_dir is not None:
             self.write(f"run directory: {result.run_dir}", error=not result.ok)
@@ -845,8 +771,6 @@ class InteractiveShell:
             for blocker in result.blockers:
                 self.write(f"- {blocker}", error=not result.ok)
         if result.run is not None:
-            for line in profile_permission_lines(result.run.get("profile")):
-                self.write(line, error=not result.ok)
             self.write(
                 f"next step: {current_status(self.project_dir).next_step}",
                 error=not result.ok,
@@ -870,13 +794,11 @@ class InteractiveShell:
             profile = status.run.get("profile") if status.run is not None else None
             if profile == "strict":
                 confirmed = self.confirm_if_available("Strict profile requires confirmation.")
-        result = verify_run(self.project_dir, confirmed=confirmed)
+        with self.renderer.loading("Generating patch and running verification..."):
+            result = verify_run(self.project_dir, confirmed=confirmed)
         self.write(result.message, error=not result.ok)
         if result.run_dir is not None:
             self.write(f"run directory: {result.run_dir}", error=not result.ok)
-        if result.run is not None:
-            for line in profile_permission_lines(result.run.get("profile")):
-                self.write(line, error=not result.ok)
         if result.verification is not None:
             self.write(f"verification: {result.verification['status']}", error=not result.ok)
             self.write(
@@ -909,18 +831,16 @@ class InteractiveShell:
             profile = status.run.get("profile") if status.run is not None else None
             if profile == "strict":
                 confirmed = self.confirm_if_available("Strict profile requires confirmation.")
-        result = learn_run(
-            self.project_dir,
-            approve=args.approve,
-            notes=args.note,
-            confirmed=confirmed,
-        )
+        with self.renderer.loading("Updating LoopForge memory proposals..."):
+            result = learn_run(
+                self.project_dir,
+                approve=args.approve,
+                notes=args.note,
+                confirmed=confirmed,
+            )
         self.write(result.message, error=not result.ok)
         if result.proposal_path is not None:
             self.write(f"proposal path: {result.proposal_path}", error=not result.ok)
-        if result.run is not None:
-            for line in profile_permission_lines(result.run.get("profile")):
-                self.write(line, error=not result.ok)
         self.write(f"proposals: {len(result.proposals)}", error=not result.ok)
         self.write(f"promoted: {len(result.promoted)}", error=not result.ok)
         self.write(f"rejected: {len(result.rejected)}", error=not result.ok)
