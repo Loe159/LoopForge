@@ -3993,6 +3993,7 @@ def create_run(
     max_attempts: int = 3,
     timeout_seconds: int = 1800,
     subjective_rubric: str = "",
+    source_metadata: dict[str, Any] | None = None,
 ) -> RunResult:
     if not task.strip():
         raise ValueError("task must not be empty")
@@ -4130,6 +4131,8 @@ def create_run(
             "validator": str(legacy_artifact_validator()),
         },
     }
+    if source_metadata:
+        run_data["evidence"] = {"source": source_metadata}
 
     write_json_atomic(run_dir / "run.json", run_data)
     (run_dir / "task.md").write_text(f"# Task\n\n{task.strip()}\n", encoding="utf-8")
@@ -4252,13 +4255,25 @@ def command_for_attempt(
     *,
     adapter: str,
     adapter_args: list[str],
+    workspace_dir: Path | None = None,
+    run_dir: Path | None = None,
 ) -> list[str]:
     if adapter == "codex":
         args = list(adapter_args)
         if not args:
-            args = ["exec", "-s", "workspace-write"]
+            args = ["exec"]
         elif args[0] not in {"exec", "e"}:
             args = ["exec", *args]
+        if "-s" not in args and "--sandbox" not in args:
+            args[1:1] = ["-s", "workspace-write"]
+        if workspace_dir is not None and "-C" not in args and "--cd" not in args:
+            args[1:1] = ["--cd", str(workspace_dir)]
+        if run_dir is not None and "--add-dir" not in args:
+            args[1:1] = ["--add-dir", str(run_dir)]
+        if "--color" not in args:
+            args[1:1] = ["--color", "never"]
+        if "--json" not in args:
+            args[1:1] = ["--json"]
         if "-" not in args:
             args.append("-")
         return ["codex", *args]
@@ -4694,10 +4709,15 @@ def execute_attempt(
 ) -> dict[str, Any]:
     if adapter not in SUPPORTED_ADAPTERS:
         raise ValueError(f"unsupported adapter: {adapter}")
-    command = command_for_attempt(adapter=adapter, adapter_args=adapter_args)
     workspace_dir = run_workspace_path(run, project_dir)
     if not workspace_dir.exists() or not workspace_dir.is_dir():
         raise ValueError(f"run workspace is not available: {workspace_dir}")
+    command = command_for_attempt(
+        adapter=adapter,
+        adapter_args=adapter_args,
+        workspace_dir=workspace_dir,
+        run_dir=run_dir,
+    )
     attempts = attempt_records(run)
     number = len(attempts) + 1
     attempt_id = f"attempt-{number:03d}"

@@ -9,6 +9,9 @@ import io
 import json
 import os
 import platform
+import re
+import shutil
+import subprocess
 import sys
 import traceback
 from dataclasses import dataclass
@@ -17,6 +20,7 @@ from typing import Any, Sequence
 
 from loopforge import __version__
 from loopforge.engine import (
+    DEFAULT_ALLOWED_TOOLS,
     DEFAULT_ADAPTER,
     DEFAULT_PROFILE,
     SUPPORTED_ADAPTERS,
@@ -30,13 +34,16 @@ from loopforge.engine import (
     initialize_project,
     learn_run,
     list_runs,
+    load_pack_checks,
     loopforge_home,
+    normalize_profile,
     platform_cache_home,
     profile_permission_lines,
     project_config_path,
     record_run_metrics,
     repository_root,
     summarize_run_metrics,
+    task_looks_subjective,
     verify_run,
 )
 from loopforge.ui import (
@@ -78,6 +85,534 @@ class CliOptions:
     debug: bool = False
     version: bool = False
     json: bool = False
+
+
+@dataclass(frozen=True)
+class GitHubIssueRef:
+    owner: str
+    repo: str
+    number: int
+    url: str
+
+
+@dataclass
+class RunIntake:
+    task: str
+    success_checks: list[str]
+    allowed_tools: list[str]
+    subjective_rubric: str = ""
+    source_metadata: dict[str, Any] | None = None
+    notes: list[str] | None = None
+
+
+@dataclass
+class IssueReadResult:
+    ok: bool
+    issue: dict[str, Any] | None = None
+    reason: str = ""
+
+
+def prompt_text(label: str, *, default: str = "", required: bool = True) -> str:
+    prompt = f"{label}"
+    if default:
+        prompt += f" [{default}]"
+    prompt += ": "
+    while True:
+        value = input(prompt).strip()
+        if value:
+            return value
+        if default:
+            return default
+        if not required:
+            return ""
+        print("Please enter a value.")
+
+
+def prompt_yes_no(label: str, *, default: bool = False) -> bool:
+    suffix = "Y/n" if default else "y/N"
+    value = input(f"{label} [{suffix}]: ").strip().lower()
+    if not value:
+        return default
+    return value in {"y", "yes"}
+
+
+def split_csv_prompt(value: str) -> list[str]:
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def configured_adapter(config: dict[str, Any]) -> tuple[str, list[str]]:
+    adapter = str(config.get("default_adapter") or DEFAULT_ADAPTER)
+    if adapter not in SUPPORTED_ADAPTERS:
+        adapter = DEFAULT_ADAPTER
+    raw_args = config.get("default_adapter_args", [])
+    adapter_args = [str(value) for value in raw_args] if isinstance(raw_args, list) else []
+    return adapter, adapter_args
+
+
+def adapter_continue_command(adapter: str, adapter_args: list[str] | None = None) -> str:
+    command = f"loopforge continue --adapter {adapter}"
+    if adapter_args:
+        command += " -- " + subprocess.list2cmdline([str(arg) for arg in adapter_args])
+    return command
+
+
+def current_project_profile(project_dir: Path) -> str:
+    try:
+        config = json.loads(project_config_path(project_dir).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return DEFAULT_PROFILE
+    return normalize_profile(config.get("profile", DEFAULT_PROFILE))
+
+
+def parse_github_remote(remote: str) -> tuple[str, str] | None:
+    patterns = (
+        r"^https?://github\.com/(?P<owner>[^/\s]+)/(?P<repo>[^/\s]+?)(?:\.git)?/?$",
+        r"^git@github\.com:(?P<owner>[^/\s]+)/(?P<repo>[^/\s]+?)(?:\.git)?$",
+        r"^ssh://git@github\.com/(?P<owner>[^/\s]+)/(?P<repo>[^/\s]+?)(?:\.git)?/?$",
+    )
+    for pattern in patterns:
+        match = re.match(pattern, remote.strip())
+        if match:
+            return match.group("owner"), match.group("repo")
+    return None
+
+
+def github_repo_from_remote(project_dir: Path) -> tuple[str, str] | None:
+    try:
+        result = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            cwd=project_dir,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    return parse_github_remote(result.stdout.strip())
+
+
+def parse_github_issue_url(source: str) -> GitHubIssueRef | None:
+    match = re.match(
+        r"^https?://github\.com/(?P<owner>[^/\s]+)/(?P<repo>[^/\s]+)/issues/(?P<number>\d+)(?:[/?#].*)?$",
+        source.strip(),
+    )
+    if not match:
+        return None
+    owner = match.group("owner")
+    repo = match.group("repo")
+    number = int(match.group("number"))
+    return GitHubIssueRef(
+        owner=owner,
+        repo=repo,
+        number=number,
+        url=f"https://github.com/{owner}/{repo}/issues/{number}",
+    )
+
+
+def resolve_github_issue_ref(project_dir: Path, source: str) -> tuple[GitHubIssueRef | None, str]:
+    parsed = parse_github_issue_url(source)
+    if parsed is not None:
+        return parsed, ""
+    if source.strip().isdigit():
+        repo = github_repo_from_remote(project_dir)
+        if repo is None:
+            return None, "GitHub issue ID could not be resolved because the origin remote is missing or not GitHub."
+        owner, name = repo
+        number = int(source.strip())
+        return (
+            GitHubIssueRef(
+                owner=owner,
+                repo=name,
+                number=number,
+                url=f"https://github.com/{owner}/{name}/issues/{number}",
+            ),
+            "",
+        )
+    return None, "Only GitHub issue URLs and numeric issue IDs are supported right now."
+
+
+def gh_issue_view(ref: GitHubIssueRef) -> IssueReadResult:
+    if shutil.which("gh") is None:
+        return IssueReadResult(False, reason="GitHub CLI (`gh`) is not available.")
+    try:
+        result = subprocess.run(
+            [
+                "gh",
+                "issue",
+                "view",
+                str(ref.number),
+                "--repo",
+                f"{ref.owner}/{ref.repo}",
+                "--json",
+                "number,title,body,url,labels",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        return IssueReadResult(False, reason=f"GitHub issue read failed: {error}")
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        return IssueReadResult(False, reason=detail or "GitHub issue read failed.")
+    try:
+        issue = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return IssueReadResult(False, reason="GitHub returned unreadable issue data.")
+    issue.setdefault("url", ref.url)
+    issue.setdefault("number", ref.number)
+    return IssueReadResult(True, issue=issue)
+
+
+def gh_issue_list(project_dir: Path) -> IssueReadResult:
+    repo = github_repo_from_remote(project_dir)
+    if repo is None:
+        return IssueReadResult(False, reason="Open issues require a GitHub origin remote.")
+    if shutil.which("gh") is None:
+        return IssueReadResult(False, reason="GitHub CLI (`gh`) is not available.")
+    owner, name = repo
+    try:
+        result = subprocess.run(
+            [
+                "gh",
+                "issue",
+                "list",
+                "--repo",
+                f"{owner}/{name}",
+                "--state",
+                "open",
+                "--limit",
+                "20",
+                "--json",
+                "number,title,url,labels",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        return IssueReadResult(False, reason=f"GitHub issue list failed: {error}")
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        return IssueReadResult(False, reason=detail or "GitHub issue list failed.")
+    try:
+        issues = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return IssueReadResult(False, reason="GitHub returned unreadable issue data.")
+    return IssueReadResult(True, issue={"issues": issues})
+
+
+def issue_task_summary(issue: dict[str, Any]) -> str:
+    title = str(issue.get("title") or "").strip()
+    number = issue.get("number")
+    if number:
+        return f"Resolve GitHub issue #{number}: {title}" if title else f"Resolve GitHub issue #{number}"
+    return title or "Resolve GitHub issue"
+
+
+def issue_source_metadata(ref: GitHubIssueRef, issue: dict[str, Any] | None = None) -> dict[str, Any]:
+    title = str((issue or {}).get("title") or "").strip()
+    return {
+        "type": "github_issue",
+        "provider": "github",
+        "reference": f"{ref.owner}/{ref.repo}#{ref.number}",
+        "url": ref.url,
+        "title": title,
+        "trust": "untrusted_provider_input",
+        "memory": "not_promoted_to_durable_memory",
+    }
+
+
+def pack_check_suggestions(project_dir: Path, pack: str | None) -> list[tuple[str, str]]:
+    contract = detect_project_pack(project_dir) if pack is None else {"name": pack}
+    pack_name = str(contract.get("name") or pack or "")
+    try:
+        checks = load_pack_checks(project_dir, pack_name).get("checks", [])
+    except ValueError:
+        checks = []
+    suggestions: list[tuple[str, str]] = []
+    for check in checks[:3]:
+        if not isinstance(check, dict):
+            continue
+        name = str(check.get("name") or "pack check").strip()
+        command = check.get("command", [])
+        command_text = " ".join(str(part) for part in command) if isinstance(command, list) else ""
+        suggestions.append(
+            (
+                f"Pack check `{name}` passes",
+                f"Selected because the detected `{pack_name}` pack defines `{command_text}`.",
+            )
+        )
+    if not suggestions:
+        suggestions.append(
+            (
+                "Run the relevant local deterministic checks before verification",
+                "Selected because no pack-specific check command is configured.",
+            )
+        )
+    return suggestions
+
+
+def permission_suggestions() -> list[tuple[str, str]]:
+    return [
+        (tool, "Default LoopForge run permission; bounded by the run workspace and profile policy.")
+        for tool in DEFAULT_ALLOWED_TOOLS
+    ]
+
+
+def confirm_or_edit_list(
+    title: str,
+    suggestions: list[tuple[str, str]],
+    *,
+    default_values: list[str] | None = None,
+) -> list[str]:
+    print(title)
+    for index, (value, reason) in enumerate(suggestions, start=1):
+        print(f"{index}. {value}")
+        print(f"   why: {reason}")
+    values = default_values if default_values is not None else [value for value, _ in suggestions]
+    if prompt_yes_no("Use these", default=True):
+        return values
+    edited = prompt_text("Enter replacements separated by commas", required=False)
+    return split_csv_prompt(edited) or values
+
+
+def build_manual_intake(
+    project_dir: Path,
+    args: argparse.Namespace,
+    *,
+    default_task: str = "",
+    source_metadata: dict[str, Any] | None = None,
+    notes: list[str] | None = None,
+) -> RunIntake:
+    task = prompt_text("Title or goal", default=default_task)
+    context = prompt_text("Bug context", required=False)
+    proof = prompt_text("Proof of success")
+    task_text = task if not context else f"{task}\n\nContext: {context}"
+    checks = [proof, *list(args.success_check)]
+    pack_checks = pack_check_suggestions(project_dir, args.pack)
+    if args.success_check:
+        print("Using checks from --success-check.")
+    else:
+        checks.extend(
+            confirm_or_edit_list(
+                "Suggested checks",
+                pack_checks,
+                default_values=[value for value, _ in pack_checks],
+            )
+        )
+    if args.allow_tool:
+        allowed_tools = list(args.allow_tool)
+        print("Using permissions from --allow-tool.")
+    else:
+        allowed_tools = confirm_or_edit_list("Suggested permissions", permission_suggestions())
+    profile = current_project_profile(project_dir)
+    rubric = args.rubric
+    if profile == "autonomous" and task_looks_subjective(task_text) and not rubric:
+        rubric = prompt_text("Subjective quality rubric")
+    return RunIntake(
+        task=task_text,
+        success_checks=checks,
+        allowed_tools=allowed_tools,
+        subjective_rubric=rubric,
+        source_metadata=source_metadata,
+        notes=notes or [],
+    )
+
+
+def build_issue_intake(
+    project_dir: Path,
+    args: argparse.Namespace,
+    ref: GitHubIssueRef,
+    issue: dict[str, Any],
+) -> RunIntake:
+    default_task = issue_task_summary(issue)
+    task = prompt_text("Run goal", default=default_task)
+    proof_default = f"The behavior described in GitHub issue #{ref.number} is fixed or implemented."
+    proof = prompt_text("Proof of success", default=proof_default)
+    pack_checks = pack_check_suggestions(project_dir, args.pack)
+    checks = [proof, *list(args.success_check)]
+    if args.success_check:
+        print("Using checks from --success-check.")
+    else:
+        checks.extend(confirm_or_edit_list("Suggested checks", pack_checks))
+    if args.allow_tool:
+        allowed_tools = list(args.allow_tool)
+        print("Using permissions from --allow-tool.")
+    else:
+        allowed_tools = confirm_or_edit_list("Suggested permissions", permission_suggestions())
+    profile = current_project_profile(project_dir)
+    rubric = args.rubric
+    if profile == "autonomous" and task_looks_subjective(task) and not rubric:
+        rubric = prompt_text("Subjective quality rubric")
+    return RunIntake(
+        task=task,
+        success_checks=checks,
+        allowed_tools=allowed_tools,
+        subjective_rubric=rubric,
+        source_metadata=issue_source_metadata(ref, issue),
+        notes=["Issue text is treated as untrusted input and was not promoted to durable memory."],
+    )
+
+
+def build_noninteractive_issue_intake(
+    project_dir: Path,
+    args: argparse.Namespace,
+    ref: GitHubIssueRef,
+    issue: dict[str, Any],
+) -> RunIntake:
+    task = args.task or issue_task_summary(issue)
+    checks = list(args.success_check)
+    if not checks:
+        checks = [f"The behavior described in GitHub issue #{ref.number} is fixed or implemented."]
+    allowed_tools = list(args.allow_tool)
+    return RunIntake(
+        task=task,
+        success_checks=checks,
+        allowed_tools=allowed_tools,
+        subjective_rubric=args.rubric,
+        source_metadata=issue_source_metadata(ref, issue),
+    )
+
+
+def choose_issue_from_list(project_dir: Path) -> tuple[GitHubIssueRef | None, dict[str, Any] | None, str]:
+    listed = gh_issue_list(project_dir)
+    if not listed.ok:
+        return None, None, listed.reason
+    issues = (listed.issue or {}).get("issues", [])
+    if not isinstance(issues, list) or not issues:
+        return None, None, "No open GitHub issues were returned."
+    print("Open GitHub issues")
+    for index, issue in enumerate(issues, start=1):
+        print(f"{index}. #{issue.get('number')} {issue.get('title')}")
+    choice = prompt_text("Select issue number from this list", required=False)
+    if not choice.isdigit():
+        return None, None, "No issue was selected."
+    selected_index = int(choice)
+    if selected_index < 1 or selected_index > len(issues):
+        return None, None, "Issue selection was outside the displayed range."
+    selected = issues[selected_index - 1]
+    parsed = parse_github_issue_url(str(selected.get("url") or ""))
+    if parsed is None:
+        return None, None, "Selected issue did not include a supported GitHub URL."
+    return parsed, selected, ""
+
+
+def interactive_run_intake(project_dir: Path, args: argparse.Namespace) -> RunIntake:
+    source = str(getattr(args, "issue_source", "") or "").strip()
+    notes: list[str] = []
+    if source:
+        ref, reason = resolve_github_issue_ref(project_dir, source)
+        if ref is not None:
+            read = gh_issue_view(ref)
+            if read.ok and read.issue is not None:
+                return build_issue_intake(project_dir, args, ref, read.issue)
+            notes.append(f"GitHub issue could not be read: {read.reason}")
+            print(notes[-1])
+            return build_manual_intake(
+                project_dir,
+                args,
+                default_task=f"Resolve GitHub issue {ref.url}",
+                source_metadata=issue_source_metadata(ref),
+                notes=notes,
+            )
+        notes.append(reason)
+        print(reason)
+        return build_manual_intake(project_dir, args, notes=notes)
+
+    print("Create a run")
+    print("1. Work from an existing GitHub issue")
+    print("2. Report a new bug or task")
+    choice = prompt_text("Choose", default="2")
+    if choice == "1":
+        entered = prompt_text("GitHub issue URL or number, or leave blank to list open issues", required=False)
+        if entered:
+            ref, reason = resolve_github_issue_ref(project_dir, entered)
+            if ref is not None:
+                read = gh_issue_view(ref)
+                if read.ok and read.issue is not None:
+                    return build_issue_intake(project_dir, args, ref, read.issue)
+                notes.append(f"GitHub issue could not be read: {read.reason}")
+                print(notes[-1])
+                return build_manual_intake(
+                    project_dir,
+                    args,
+                    default_task=f"Resolve GitHub issue {ref.url}",
+                    source_metadata=issue_source_metadata(ref),
+                    notes=notes,
+                )
+            notes.append(reason)
+            print(reason)
+            return build_manual_intake(project_dir, args, notes=notes)
+        ref, issue, reason = choose_issue_from_list(project_dir)
+        if ref is not None and issue is not None:
+            return build_issue_intake(project_dir, args, ref, issue)
+        notes.append(reason)
+        print(f"Manual fallback: {reason}")
+    return build_manual_intake(project_dir, args, notes=notes)
+
+
+def noninteractive_run_intake(project_dir: Path, args: argparse.Namespace) -> RunIntake:
+    source = str(getattr(args, "issue_source", "") or "").strip()
+    if source:
+        ref, reason = resolve_github_issue_ref(project_dir, source)
+        if ref is None:
+            if args.task:
+                return RunIntake(
+                    task=str(args.task).strip(),
+                    success_checks=list(args.success_check),
+                    allowed_tools=list(args.allow_tool),
+                    subjective_rubric=args.rubric,
+                    source_metadata={
+                        "type": "manual",
+                        "source": source,
+                        "trust": "operator_supplied_input",
+                        "note": reason,
+                    },
+                )
+            raise CliUsageError(
+                "LF_ISSUE_SOURCE_UNRESOLVED",
+                "Issue source could not be resolved",
+                reason,
+                fix='Pass a full GitHub issue URL or use `loopforge run --task "..."`.',
+            )
+        read = gh_issue_view(ref)
+        if not read.ok or read.issue is None:
+            if args.task:
+                return RunIntake(
+                    task=str(args.task).strip(),
+                    success_checks=list(args.success_check),
+                    allowed_tools=list(args.allow_tool),
+                    subjective_rubric=args.rubric,
+                    source_metadata=issue_source_metadata(ref),
+                    notes=[f"GitHub issue could not be read: {read.reason}"],
+                )
+            raise CliUsageError(
+                "LF_ISSUE_SOURCE_UNAVAILABLE",
+                "Issue source could not be read",
+                read.reason,
+                fix='Pass `--task "..."` with the issue summary or run interactively for manual fallback.',
+            )
+        return build_noninteractive_issue_intake(project_dir, args, ref, read.issue)
+    task = str(args.task or "").strip()
+    if not task:
+        raise CliUsageError(
+            "LF_INPUT_REQUIRED",
+            "Task description is required",
+            "`loopforge run` needs a task in non-interactive mode.",
+            fix='Run `loopforge run --task "Describe the task"`.',
+        )
+    return RunIntake(
+        task=task,
+        success_checks=list(args.success_check),
+        allowed_tools=list(args.allow_tool),
+        subjective_rubric=args.rubric,
+    )
 
 
 class CliError(Exception):
@@ -893,16 +1428,75 @@ def print_latest_adapter_error(result: object, *, output) -> None:
     if not stderr_path:
         return
     path = Path(str(run_dir)) / str(stderr_path)
-    print(f"adapter stderr path: {path}", file=output)
     try:
         text = path.read_text(encoding="utf-8", errors="replace").strip()
     except OSError:
         return
-    if text:
-        lines = text.splitlines()[-8:]
-        print("adapter stderr tail:", file=output)
-        for line in lines:
-            print(f"> {line}", file=output)
+    if not text:
+        return
+    print("", file=output)
+    print("Adapter diagnostic", file=output)
+    print(f"log      {path}", file=output)
+    print(f"summary  {adapter_error_summary(text)}", file=output)
+    useful_lines = useful_adapter_error_lines(text)
+    if useful_lines:
+        print("signals", file=output)
+        for line in useful_lines:
+            print(f"- {line}", file=output)
+    print("raw      loopforge shell --command \"/raw latest stderr\"", file=output)
+
+
+def adapter_error_summary(text: str) -> str:
+    lowered = text.lower()
+    if "sandbox" in lowered and "approval policy" in lowered:
+        return "The adapter hit a sandbox boundary while approval escalation was disabled."
+    if "sandbox" in lowered:
+        return "The adapter hit a sandbox boundary."
+    if "permission" in lowered or "access is denied" in lowered or "denied" in lowered:
+        return "The adapter hit a filesystem permission boundary."
+    if "could not" in lowered or "cannot" in lowered or "failed" in lowered:
+        return "The adapter reported an execution failure."
+    return "The adapter wrote diagnostics to stderr."
+
+
+def useful_adapter_error_lines(text: str, *, limit: int = 4) -> list[str]:
+    markers = (
+        "access is denied",
+        "approval",
+        "blocked",
+        "cannot",
+        "could not",
+        "denied",
+        "error",
+        "failed",
+        "not allowed",
+        "permission",
+        "sandbox",
+        "traceback",
+    )
+    lines: list[str] = []
+    for raw_line in text.splitlines():
+        line = " ".join(raw_line.strip().lstrip("> ").split())
+        if not line:
+            continue
+        lowered = line.lower()
+        if any(marker in lowered for marker in markers):
+            lines.append(compact_text(line, limit=130))
+    if not lines:
+        for raw_line in text.splitlines()[-limit:]:
+            line = " ".join(raw_line.strip().lstrip("> ").split())
+            if line and "tokens used" not in line.lower():
+                lines.append(compact_text(line, limit=130))
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for line in lines:
+        if line in seen:
+            continue
+        seen.add(line)
+        deduped.append(line)
+        if len(deduped) >= limit:
+            break
+    return deduped
 
 
 def format_metric_value(value: object) -> str:
@@ -1064,6 +1658,11 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     topics[("run",)] = run_parser
+    run_parser.add_argument(
+        "issue_source",
+        nargs="?",
+        help="Optional GitHub issue URL or issue ID inferred from the current git remote.",
+    )
     run_parser.add_argument(
         "--task",
         help="Task description for the run.",
@@ -1458,35 +2057,31 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "run":
             fmt = normalize_format(output_format(args, options), allowed=("text", "json"), command="loopforge run")
-            task = args.task
-            if not task:
-                if options.no_input or not sys.stdin.isatty():
-                    raise CliUsageError(
-                        "LF_INPUT_REQUIRED",
-                        "Task description is required",
-                        "`loopforge run` needs a task in non-interactive mode.",
-                        fix='Run `loopforge run --task "Describe the task"`.',
-                    )
-                task = input("Task: ").strip()
-                if not task:
-                    raise CliUsageError(
-                        "LF_INPUT_REQUIRED",
-                        "Task description is required",
-                        "The task prompt was left empty.",
-                        fix='Run `loopforge run --task "Describe the task"`.',
-                    )
+            init_result = initialize_project(Path.cwd())
+            selected_adapter, selected_adapter_args = configured_adapter(init_result.config)
+            selected_adapter_command = adapter_continue_command(
+                selected_adapter,
+                selected_adapter_args,
+            )
+            can_prompt = not options.no_input and fmt == "text" and sys.stdin.isatty()
+            wizard_used = can_prompt and (not args.task or bool(args.issue_source))
+            if wizard_used:
+                intake = interactive_run_intake(Path.cwd(), args)
+            else:
+                intake = noninteractive_run_intake(Path.cwd(), args)
             try:
                 with renderer.loading("Creating LoopForge run..."):
                     result = create_run(
                         Path.cwd(),
-                        task=task,
+                        task=intake.task,
                         pack=args.pack,
-                        success_checks=args.success_check,
+                        success_checks=intake.success_checks,
                         selected_skills=args.skill,
-                        allowed_tools=args.allow_tool,
+                        allowed_tools=intake.allowed_tools,
                         max_attempts=args.max_attempts,
                         timeout_seconds=args.timeout,
-                        subjective_rubric=args.rubric,
+                        subjective_rubric=intake.subjective_rubric,
+                        source_metadata=intake.source_metadata,
                     )
             except (FileNotFoundError, ValueError) as error:
                 raise CliRuntimeError(
@@ -1501,12 +2096,27 @@ def main(argv: list[str] | None = None) -> int:
             if options.quiet:
                 return 0
             extra = []
-            if not args.success_check:
+            if init_result.created:
+                extra.append("Project")
+                extra.append("Initialized LoopForge metadata before creating the run.")
+            elif init_result.repaired:
+                extra.append("Project")
+                extra.append("Repaired LoopForge metadata before creating the run.")
+            if intake.notes:
+                extra.append("Notes")
+                extra.extend(str(note) for note in intake.notes)
+            if not intake.success_checks:
                 extra.append("Warning")
                 extra.append("No success check was provided; autonomous attempts may pause for contract completion.")
-            if result.run["loop_contract"]["subjective"] and not args.rubric:
+            if result.run["loop_contract"]["subjective"] and not intake.subjective_rubric:
                 extra.append("Rubric")
                 extra.append("Subjective work needs a rubric before autonomous attempts.")
+            if intake.success_checks:
+                extra.append("Selected checks")
+                extra.extend(f"- {check}" for check in intake.success_checks[:5])
+            if intake.allowed_tools:
+                extra.append("Selected permissions")
+                extra.extend(f"- {tool}" for tool in intake.allowed_tools[:5])
             render_summary_table(
                 renderer,
                 "Run created",
@@ -1517,8 +2127,24 @@ def main(argv: list[str] | None = None) -> int:
                     ("contract", result.run["loop_contract"]["status"]),
                 ],
                 extra_lines=extra,
-                next_command="loopforge continue",
+                next_command=selected_adapter_command,
             )
+            if wizard_used:
+                if prompt_yes_no(f"Launch adapter {selected_adapter} now", default=False):
+                    with renderer.loading(f"Launching adapter {selected_adapter}..."):
+                        continue_result = continue_run(
+                            Path.cwd(),
+                            adapter=selected_adapter,
+                            adapter_args=selected_adapter_args,
+                            confirmed=True,
+                        )
+                    render_continue_result(
+                        renderer if continue_result.ok else TerminalRenderer(sys.stderr, no_color=options.no_color),
+                        continue_result,
+                        details=False,
+                    )
+                    return 0 if continue_result.ok else 1
+                print(f"Continue later with: {selected_adapter_command}")
             return 0
         if args.command == "pack":
             if args.pack_command == "list":

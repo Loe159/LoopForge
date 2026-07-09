@@ -142,6 +142,142 @@ def bounded_text(value: bytes, limit: int) -> str:
     return text
 
 
+def compact_stream_text(value: object, limit: int = 180) -> str:
+    if isinstance(value, list):
+        text = " ".join(str(part) for part in value)
+    else:
+        text = str(value or "")
+    text = " ".join(text.replace("\r", "\n").split())
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)].rstrip() + "..."
+
+
+def is_codex_command(command: Sequence[str]) -> bool:
+    return command_basename(command) in {"codex", "codex.exe"}
+
+
+def is_codex_json_stream(command: Sequence[str]) -> bool:
+    return is_codex_command(command) and "--json" in command
+
+
+def nested_value(value: object, names: set[str]) -> object | None:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if str(key) in names:
+                return item
+        for item in value.values():
+            found = nested_value(item, names)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for item in value:
+            found = nested_value(item, names)
+            if found is not None:
+                return found
+    return None
+
+
+def collect_text(value: object) -> list[str]:
+    texts: list[str] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in {"text", "message", "summary", "output_text"} and isinstance(item, str):
+                if item.strip():
+                    texts.append(item.strip())
+            elif key in {"content", "delta", "item", "payload", "output"}:
+                texts.extend(collect_text(item))
+    elif isinstance(value, list):
+        for item in value:
+            texts.extend(collect_text(item))
+    return texts
+
+
+def codex_event_lines(event: dict[str, Any], state: dict[str, str]) -> list[str]:
+    event_type = str(event.get("type") or event.get("event") or "").lower()
+    event_blob = json.dumps(event, sort_keys=True).lower()
+    if "reason" in event_type or "thinking" in event_type or "reasoning" in event_blob:
+        if state.get("last") != "thinking":
+            state["last"] = "thinking"
+            return ["Reflexion en cours..."]
+        return []
+    if "error" in event_type or "error" in event:
+        state["last"] = "error"
+        detail = (
+            nested_value(event, {"message", "error", "detail"})
+            or event_type
+            or "unknown error"
+        )
+        return [f"Erreur adaptateur: {compact_stream_text(detail)}"]
+    if any(marker in event_type for marker in ("tool", "exec", "command", "function_call")):
+        command_value = nested_value(event, {"command", "cmd", "name"})
+        if command_value is None:
+            command_value = event_type.replace("_", " ")
+        state["last"] = "tool"
+        return [f"Outil: {compact_stream_text(command_value)}"]
+    if "message" in event_type or "response" in event_type or "agent" in event_type:
+        texts = [text for text in collect_text(event) if text.strip()]
+        if texts:
+            state["last"] = "message"
+            lines = ["Message"]
+            for text in texts[:3]:
+                lines.extend(f"  {line}" for line in text.splitlines() if line.strip())
+            return lines
+    return []
+
+
+class StreamPresenter:
+    def __init__(  # type: ignore[no-untyped-def]
+        self,
+        target,
+        *,
+        parse_codex_json: bool = False,
+        codex_text: bool = False,
+    ):
+        self.target = target
+        self.parse_codex_json = parse_codex_json
+        self.codex_text = codex_text
+        self.buffer = ""
+        self.state: dict[str, str] = {}
+        self.noted_diagnostic = False
+
+    def write(self, chunk: bytes) -> None:
+        if not self.parse_codex_json and not self.codex_text:
+            self.target.buffer.write(chunk)
+            self.target.buffer.flush()
+            return
+        text = chunk.decode("utf-8", errors="replace")
+        self.buffer += text
+        while "\n" in self.buffer:
+            line, self.buffer = self.buffer.split("\n", 1)
+            self.write_line(line.rstrip("\r"))
+
+    def write_line(self, line: str) -> None:
+        stripped = line.strip()
+        if not stripped:
+            return
+        if self.parse_codex_json:
+            try:
+                event = json.loads(stripped)
+            except json.JSONDecodeError:
+                if not self.noted_diagnostic:
+                    print(f"Adapter: {compact_stream_text(stripped)}", file=self.target, flush=True)
+                    self.noted_diagnostic = True
+                return
+            if isinstance(event, dict):
+                for rendered in codex_event_lines(event, self.state):
+                    print(rendered, file=self.target, flush=True)
+            return
+        if not self.noted_diagnostic:
+            print(f"Adapter: {compact_stream_text(stripped)}", file=self.target, flush=True)
+            self.noted_diagnostic = True
+
+    def close(self) -> None:
+        if self.buffer:
+            self.write_line(self.buffer)
+            self.buffer = ""
+
+
 def summary_for(
     status: str,
     completed: subprocess.CompletedProcess[bytes] | None,
@@ -232,13 +368,20 @@ def run_adapter(
         )
         stdout_buffer = bytearray()
         stderr_buffer = bytearray()
+        present_codex_json = is_codex_json_stream(command)
+        present_codex_text = is_codex_command(command) and not present_codex_json
 
         def read_available(source) -> bytes:  # type: ignore[no-untyped-def]
             if hasattr(source, "read1"):
                 return source.read1(4096)
             return source.read(1)
 
-        def pump(source, target, buffer: bytearray) -> None:  # type: ignore[no-untyped-def]
+        def pump(  # type: ignore[no-untyped-def]
+            source,
+            target,
+            buffer: bytearray,
+            presenter: StreamPresenter,
+        ) -> None:
             try:
                 while True:
                     chunk = read_available(source)
@@ -246,19 +389,33 @@ def run_adapter(
                         break
                     buffer.extend(chunk)
                     if stream_output and policy["stream_child_output"]:
-                        target.buffer.write(chunk)
-                        target.buffer.flush()
+                        presenter.write(chunk)
             finally:
+                presenter.close()
                 source.close()
 
         stdout_thread = threading.Thread(
             target=pump,
-            args=(process.stdout, sys.stdout, stdout_buffer),
+            args=(
+                process.stdout,
+                sys.stdout,
+                stdout_buffer,
+                StreamPresenter(
+                    sys.stdout,
+                    parse_codex_json=present_codex_json,
+                    codex_text=present_codex_text,
+                ),
+            ),
             daemon=True,
         )
         stderr_thread = threading.Thread(
             target=pump,
-            args=(process.stderr, sys.stderr, stderr_buffer),
+            args=(
+                process.stderr,
+                sys.stderr,
+                stderr_buffer,
+                StreamPresenter(sys.stderr, codex_text=present_codex_text or present_codex_json),
+            ),
             daemon=True,
         )
         stdout_thread.start()

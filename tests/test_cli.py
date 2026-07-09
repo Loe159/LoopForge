@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import io
+import importlib.util
 import json
 import os
 import subprocess
@@ -13,13 +14,14 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from loopforge.cli import main
+from loopforge.cli import IssueReadResult, main
 from loopforge.engine import (
     command_for_attempt,
     current_guidance,
     loopforge_home,
     platform_cache_home,
     run_streaming_process,
+    set_default_adapter,
     usable_python_executable,
 )
 from loopforge.interactive import (
@@ -578,12 +580,17 @@ class CliTests(unittest.TestCase):
             self.assertNotIn("abc123", durable)
             self.assertRegex(output.getvalue(), r"rejected\s+1")
 
-    def test_run_requires_init(self) -> None:
+    def test_run_auto_initializes_project(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
             output = io.StringIO()
-            with working_directory(Path(temp_dir)), contextlib.redirect_stderr(output):
-                self.assertEqual(main(["run", "--task", "Do the thing"]), 1)
-            self.assertIn("run `loopforge init` first", output.getvalue())
+            with working_directory(repo), contextlib.redirect_stdout(output):
+                self.assertEqual(main(["run", "--task", "Do the thing"]), 0)
+            config_path = repo / ".loopforge" / "config.json"
+            self.assertTrue(config_path.exists())
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            self.assertIsInstance(config["current_run_id"], str)
+            self.assertIn("Initialized LoopForge metadata", output.getvalue())
 
     def test_status_reports_not_initialized(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1019,10 +1026,21 @@ class CliTests(unittest.TestCase):
             repo = Path(temp_dir)
             loopforge_home = repo / "home"
             output = io.StringIO()
+            answers = iter(
+                [
+                    "2",
+                    "Prompted task",
+                    "Fails on startup",
+                    "Startup test passes",
+                    "y",
+                    "y",
+                    "n",
+                ]
+            )
             with (
                 mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
                 mock.patch("sys.stdin", TtyStringIO()),
-                mock.patch("builtins.input", return_value="Prompted task"),
+                mock.patch("builtins.input", side_effect=lambda _: next(answers)),
                 working_directory(repo),
                 contextlib.redirect_stdout(output),
             ):
@@ -1031,7 +1049,189 @@ class CliTests(unittest.TestCase):
             config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
             run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
             run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
-            self.assertEqual(run_json["task"], "Prompted task")
+            self.assertEqual(run_json["task"], "Prompted task\n\nContext: Fails on startup")
+            self.assertIn("Startup test passes", run_json["success_checks"])
+            self.assertIn("Continue later with: loopforge continue --adapter codex", output.getvalue())
+
+    def test_run_wizard_uses_selected_default_adapter(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            loopforge_home = repo / "home"
+            output = io.StringIO()
+            answers = iter(
+                [
+                    "2",
+                    "Adapter-neutral task",
+                    "",
+                    "Proof exists",
+                    "y",
+                    "y",
+                    "n",
+                ]
+            )
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                mock.patch("sys.stdin", TtyStringIO()),
+                mock.patch("builtins.input", side_effect=lambda _: next(answers)),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                update = set_default_adapter(
+                    repo,
+                    "claude-code",
+                    ["--dangerously-skip-permissions"],
+                )
+                self.assertTrue(update.ok, update.message)
+                self.assertEqual(main(["run"]), 0)
+
+            text = output.getvalue()
+            self.assertIn(
+                "Continue later with: loopforge continue --adapter claude-code -- --dangerously-skip-permissions",
+                text,
+            )
+            self.assertNotIn("Launch Codex now", text)
+
+    def test_run_with_task_remains_prompt_free_when_interactive(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            loopforge_home = repo / "home"
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                mock.patch("sys.stdin", TtyStringIO()),
+                mock.patch("builtins.input", side_effect=AssertionError("unexpected prompt")),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(
+                        [
+                            "run",
+                            "--task",
+                            "Scripted task",
+                            "--success-check",
+                            "tests pass",
+                            "--allow-tool",
+                            "Run tests only",
+                        ]
+                    ),
+                    0,
+                )
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+            run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            self.assertEqual(run_json["task"], "Scripted task")
+            self.assertEqual(run_json["success_checks"], ["tests pass"])
+
+    def test_run_issue_id_uses_inferred_github_remote_when_configured(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            loopforge_home = repo / "home"
+            issue = {
+                "number": 42,
+                "title": "Broken startup",
+                "body": "Untrusted issue text",
+                "url": "https://github.com/acme/app/issues/42",
+                "labels": [],
+            }
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                mock.patch("loopforge.cli.github_repo_from_remote", return_value=("acme", "app")),
+                mock.patch("loopforge.cli.gh_issue_view", return_value=IssueReadResult(True, issue=issue)),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(main(["run", "42", "--no-input"]), 0)
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+            run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            self.assertEqual(run_json["task"], "Resolve GitHub issue #42: Broken startup")
+            self.assertEqual(
+                run_json["evidence"]["source"]["reference"],
+                "acme/app#42",
+            )
+            self.assertEqual(run_json["evidence"]["source"]["memory"], "not_promoted_to_durable_memory")
+
+    def test_run_issue_id_without_remote_errors_non_interactively(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            loopforge_home = repo / "home"
+            error = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                mock.patch("loopforge.cli.github_repo_from_remote", return_value=None),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                with contextlib.redirect_stderr(error):
+                    self.assertEqual(main(["run", "123", "--no-input"]), 2)
+            self.assertIn("LF_ISSUE_SOURCE_UNRESOLVED", error.getvalue())
+
+    def test_run_issue_url_falls_back_to_manual_summary_when_gh_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            loopforge_home = repo / "home"
+            answers = iter(
+                [
+                    "Manual issue summary",
+                    "",
+                    "Regression test passes",
+                    "y",
+                    "y",
+                    "n",
+                ]
+            )
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                mock.patch("sys.stdin", TtyStringIO()),
+                mock.patch("loopforge.cli.shutil.which", return_value=None),
+                mock.patch("builtins.input", side_effect=lambda _: next(answers)),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(main(["run", "https://github.com/acme/app/issues/5"]), 0)
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+            run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            self.assertEqual(run_json["task"], "Manual issue summary")
+            self.assertEqual(run_json["evidence"]["source"]["url"], "https://github.com/acme/app/issues/5")
+            self.assertIn("GitHub issue could not be read", output.getvalue())
+
+    def test_run_can_select_open_github_issue_when_provider_available(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            loopforge_home = repo / "home"
+            answers = iter(["1", "", "1", "", "", "y", "y", "n"])
+            issue_list = {
+                "issues": [
+                    {
+                        "number": 7,
+                        "title": "Open issue",
+                        "url": "https://github.com/acme/app/issues/7",
+                        "labels": [],
+                    }
+                ]
+            }
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                mock.patch("sys.stdin", TtyStringIO()),
+                mock.patch("loopforge.cli.gh_issue_list", return_value=IssueReadResult(True, issue=issue_list)),
+                mock.patch("builtins.input", side_effect=lambda _: next(answers)),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(main(["run"]), 0)
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+            run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            self.assertEqual(run_json["task"], "Resolve GitHub issue #7: Open issue")
+            self.assertEqual(run_json["evidence"]["source"]["reference"], "acme/app#7")
 
     def test_status_json_has_no_human_prefix(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2680,16 +2880,37 @@ class CliTests(unittest.TestCase):
     def test_codex_attempt_command_uses_exec_and_stdin_prompt(self) -> None:
         self.assertEqual(
             command_for_attempt(adapter="codex", adapter_args=[]),
-            ["codex", "exec", "-s", "workspace-write", "-"],
+            ["codex", "exec", "--json", "--color", "never", "-s", "workspace-write", "-"],
         )
         self.assertEqual(
             command_for_attempt(adapter="codex", adapter_args=["-m", "gpt-5"]),
-            ["codex", "exec", "-m", "gpt-5", "-"],
+            [
+                "codex",
+                "exec",
+                "--json",
+                "--color",
+                "never",
+                "-s",
+                "workspace-write",
+                "-m",
+                "gpt-5",
+                "-",
+            ],
         )
         self.assertEqual(
             command_for_attempt(adapter="codex", adapter_args=["exec", "-s", "workspace-write"]),
-            ["codex", "exec", "-s", "workspace-write", "-"],
+            ["codex", "exec", "--json", "--color", "never", "-s", "workspace-write", "-"],
         )
+        command = command_for_attempt(
+            adapter="codex",
+            adapter_args=[],
+            workspace_dir=Path("workspace"),
+            run_dir=Path("run"),
+        )
+        self.assertIn("--cd", command)
+        self.assertIn("workspace", command)
+        self.assertIn("--add-dir", command)
+        self.assertIn("run", command)
 
     def test_continue_fixture_adapter_failure_blocks_readably(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2744,6 +2965,8 @@ class CliTests(unittest.TestCase):
             self.assertIn("bad fixture", (attempt_dir / "adapter.stderr").read_text())
             self.assertIn("Attempt blocked", error.getvalue())
             self.assertIn("Fixture command failed with return code 3.", error.getvalue())
+            self.assertIn("Adapter diagnostic", error.getvalue())
+            self.assertNotIn("adapter stderr tail:", error.getvalue())
 
     def test_continue_can_retry_after_blocked_attempt_without_archiving(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -3251,6 +3474,46 @@ class CliTests(unittest.TestCase):
             payload = json.loads(result_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["status"], "completed")
             self.assertTrue(payload["workspace_changed"])
+
+    def test_imported_adapter_formats_codex_json_stream(self) -> None:
+        adapter = (
+            Path(__file__).resolve().parents[1]
+            / ".agent"
+            / "adapters"
+            / "local_implementation_adapter.py"
+        )
+        spec = importlib.util.spec_from_file_location("local_implementation_adapter_test", adapter)
+        self.assertIsNotNone(spec)
+        assert spec is not None
+        module = importlib.util.module_from_spec(spec)
+        self.assertIsNotNone(spec.loader)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+
+        output = io.StringIO()
+        presenter = module.StreamPresenter(output, parse_codex_json=True)
+        presenter.write(
+            (
+                json.dumps({"type": "item.started", "item": {"type": "reasoning"}})
+                + "\n"
+                + json.dumps({"type": "function_call", "name": "exec_command"})
+                + "\n"
+                + json.dumps(
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "Done cleanly."}],
+                    }
+                )
+                + "\n"
+            ).encode("utf-8")
+        )
+        presenter.close()
+
+        text = output.getvalue()
+        self.assertIn("Reflexion en cours", text)
+        self.assertIn("Outil: exec_command", text)
+        self.assertIn("Message", text)
+        self.assertIn("Done cleanly.", text)
 
     def test_imported_adapter_streams_before_child_exits(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
