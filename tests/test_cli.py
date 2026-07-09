@@ -14,7 +14,14 @@ from pathlib import Path
 from unittest import mock
 
 from loopforge.cli import main
-from loopforge.engine import command_for_attempt, current_guidance, usable_python_executable
+from loopforge.engine import (
+    command_for_attempt,
+    current_guidance,
+    loopforge_home,
+    platform_cache_home,
+    run_streaming_process,
+    usable_python_executable,
+)
 from loopforge.interactive import (
     InteractiveShell,
     SlashCommandCompleter,
@@ -96,7 +103,7 @@ class CliTests(unittest.TestCase):
             self.assertTrue((repo / ".loopforge" / "templates" / "scratch.md").exists())
             self.assertTrue((repo / ".loopforge" / "templates" / "exchange.json").exists())
             self.assertTrue((repo / ".loopforge" / "memory.md").exists())
-            self.assertIn("LoopForge initialized", output.getvalue())
+            self.assertIn("LoopForge project ready", output.getvalue())
 
     def test_init_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -112,7 +119,7 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(main(["init"]), 0)
 
             self.assertEqual(config_path.read_text(encoding="utf-8"), first_config_text)
-            self.assertIn("LoopForge already initialized", output.getvalue())
+            self.assertIn("Project already ready", output.getvalue())
 
     def test_run_creates_external_run_and_updates_config(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -253,7 +260,7 @@ class CliTests(unittest.TestCase):
             self.assertIn("# Selected Project Pack", loop_contract)
             self.assertIn("generic-code", loop_contract)
             self.assertIn("None recorded.", loop_contract)
-            self.assertIn("LoopForge run created", output.getvalue())
+            self.assertIn("Run created", output.getvalue())
 
             self.assertFalse((repo / "run.json").exists())
             self.assertFalse((repo / "attempts").exists())
@@ -335,7 +342,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(run_json["pack_contract"]["detection"], "auto")
             self.assertIn("python-testing", run_json["pack_contract"]["skills"])
             self.assertIn("pack:python:SKILL.md", loop_contract)
-            self.assertIn("pack: python", output.getvalue())
+            self.assertIn("pack    python", output.getvalue())
             self.assertIn("pack skills: 3", output.getvalue())
 
     def test_project_local_pack_can_add_skills_without_engine_changes(self) -> None:
@@ -393,9 +400,10 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(main(["pack", "detect"]), 0)
 
             text = output.getvalue()
-            self.assertIn("generic-code:", text)
-            self.assertIn("node:", text)
-            self.assertIn("pack: node", text)
+            self.assertIn("current | name | description | kind | source", text)
+            self.assertIn("generic-code", text)
+            self.assertIn("node", text)
+            self.assertIn("pack    node", text)
 
     def test_learn_proposes_memory_without_promoting_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -427,7 +435,7 @@ class CliTests(unittest.TestCase):
             durable = (repo / ".loopforge" / "memory.md").read_text(encoding="utf-8")
 
             self.assertEqual(proposals["proposals"][0]["status"], "pending")
-            self.assertIn("pending: 1", output.getvalue())
+            self.assertRegex(output.getvalue(), r"pending\s+1")
             self.assertNotIn("- Tests use unittest discovery.", durable)
 
     def test_learn_reads_scratch_and_exchange_candidates(self) -> None:
@@ -496,7 +504,8 @@ class CliTests(unittest.TestCase):
             self.assertEqual(len(pending), 2)
             self.assertEqual(len(rejected), 1)
             self.assertIn("untrusted", rejected[0]["rejection_reason"])
-            self.assertIn("proposals: 3", output.getvalue())
+            self.assertRegex(output.getvalue(), r"pending\s+2")
+            self.assertRegex(output.getvalue(), r"rejected\s+1")
 
     def test_learn_approve_promotes_safe_memory_and_records_log(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -532,7 +541,7 @@ class CliTests(unittest.TestCase):
                 durable,
             )
             self.assertIn("human_approved", durable)
-            self.assertIn("promoted: 1", output.getvalue())
+            self.assertRegex(output.getvalue(), r"promoted\s+1")
             self.assertIn("durable memory: 1 items", output.getvalue())
 
     def test_learn_rejects_secret_candidates_even_when_approved(self) -> None:
@@ -567,7 +576,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(proposals["proposals"][0]["status"], "rejected")
             self.assertIn("secret", proposals["proposals"][0]["rejection_reason"])
             self.assertNotIn("abc123", durable)
-            self.assertIn("rejected: 1", output.getvalue())
+            self.assertRegex(output.getvalue(), r"rejected\s+1")
 
     def test_run_requires_init(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -583,8 +592,8 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(main(["status"]), 0)
 
             text = output.getvalue()
-            self.assertIn("state: not initialized", text)
-            self.assertIn("next step: Initialize LoopForge with `loopforge init`.", text)
+            self.assertIn("status   not initialized", text)
+            self.assertIn("Next\nloopforge init", text)
 
     def test_status_reports_initialized_without_run(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -597,10 +606,10 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(main(["status"]), 0)
 
             text = output.getvalue()
-            self.assertIn("state: initialized", text)
-            self.assertIn("profile: strict", text)
-            self.assertIn("current run: none", text)
-            self.assertIn('next step: Create a run with `loopforge run --task "..."`.', text)
+            self.assertIn("status   ready_for_run", text)
+            self.assertIn("profile  strict", text)
+            self.assertIn("run      none", text)
+            self.assertIn("Next", text)
 
     def test_status_reports_current_run(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -621,17 +630,61 @@ class CliTests(unittest.TestCase):
 
             config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
             text = output.getvalue()
-            self.assertIn(f"current run: {config['current_run_id']}", text)
-            self.assertIn("task: Add status output", text)
-            self.assertIn("profile: supervised", text)
-            self.assertIn("loop status: loop_contract_draft", text)
+            self.assertIn(f"run     {config['current_run_id']}", text)
+            self.assertIn("task    Add status output", text)
+            self.assertIn("profile  supervised", text)
+            self.assertIn("status  loop_contract_draft", text)
             self.assertIn("native artifacts: complete", text)
             self.assertIn("loop contract: valid", text)
             self.assertIn("success checks: 0", text)
             self.assertIn("legacy artifacts: valid", text)
             self.assertIn("legacy issue:", text)
             self.assertIn("blockers:\n- none", text)
-            self.assertIn("next step: Complete the loop contract", text)
+            self.assertIn("Next", text)
+
+    def test_status_default_is_compact_and_details_hold_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(main(["run", "--task", "Check compact status"]), 0)
+
+            compact_output = io.StringIO()
+            details_output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(compact_output),
+            ):
+                self.assertEqual(main(["status"]), 0)
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(details_output),
+            ):
+                self.assertEqual(main(["status", "--details"]), 0)
+
+            compact_text = compact_output.getvalue()
+            self.assertIn("Current loop", compact_text)
+            self.assertIn("Next", compact_text)
+            self.assertNotIn("legacy artifact directory", compact_text)
+            self.assertLessEqual(len([line for line in compact_text.splitlines() if line]), 9)
+            self.assertIn("legacy artifact directory", details_output.getvalue())
+
+    def test_quiet_success_output_is_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = io.StringIO()
+            with working_directory(Path(temp_dir)), contextlib.redirect_stdout(output):
+                self.assertEqual(main(["init", "--quiet"]), 0)
+            self.assertEqual(output.getvalue(), "")
 
     def test_shell_status_reports_not_initialized_initialized_and_current_run(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -654,10 +707,10 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(main(["shell", "--command", "/status details"]), 0)
 
             text = output.getvalue()
-            self.assertIn("state: not initialized", text)
-            self.assertIn("state: initialized", text)
-            self.assertIn("task: Add shell status", text)
-            self.assertIn("loop status: loop_contract_draft", text)
+            self.assertIn("status   not initialized", text)
+            self.assertIn("status   ready_for_run", text)
+            self.assertIn("task    Add shell status", text)
+            self.assertIn("status  loop_contract_draft", text)
             self.assertIn("native artifacts: complete", text)
 
     def test_shell_plain_text_creates_run(self) -> None:
@@ -680,7 +733,7 @@ class CliTests(unittest.TestCase):
             run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
             run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
             self.assertEqual(run_json["task"], "Add an interactive task")
-            self.assertIn("LoopForge run created", output.getvalue())
+            self.assertIn("Run created", output.getvalue())
 
     def test_shell_script_runs_native_commands(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -715,8 +768,8 @@ class CliTests(unittest.TestCase):
             self.assertEqual(run_json["status"], "loop_contract_ready")
             self.assertTrue((run_dir / "artifacts" / "memory" / "proposals.json").exists())
             text = output.getvalue()
-            self.assertIn("Loop contract accepted", text)
-            self.assertIn("proposals:", text)
+            self.assertIn("Attempt completed", text)
+            self.assertIn("Memory proposals ready", text)
 
     def test_shell_verify_runs_pack_checks(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -771,7 +824,8 @@ class CliTests(unittest.TestCase):
             run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
             run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
             self.assertEqual(run_json["status"], "verified")
-            self.assertIn("verification: passed", output.getvalue())
+            self.assertIn("Verified", output.getvalue())
+            self.assertIn("status  passed", output.getvalue())
 
     def test_shell_context_and_compact(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -878,9 +932,14 @@ class CliTests(unittest.TestCase):
 
     def test_renderer_rich_mode_forces_styles_for_tests(self) -> None:
         output = io.StringIO()
-        renderer = TerminalRenderer(output, mode="rich")
+        with mock.patch.dict(
+            os.environ,
+            {"TERM": "xterm-256color"},
+            clear=True,
+        ):
+            renderer = TerminalRenderer(output, mode="rich")
 
-        renderer.panel("LoopForge status", ["state: initialized"])
+            renderer.panel("LoopForge status", ["state: initialized"])
 
         self.assertIn("\x1b[", output.getvalue())
 
@@ -895,6 +954,253 @@ class CliTests(unittest.TestCase):
         self.assertIn("LoopForge status", text)
         self.assertNotIn("\x1b[", text)
 
+    def test_renderer_auto_mode_respects_loopforge_no_color_and_term_dumb(self) -> None:
+        for env in ({"LOOPFORGE_NO_COLOR": "1"}, {"TERM": "dumb"}):
+            output = TtyStringIO()
+            with mock.patch.dict(os.environ, env, clear=False):
+                renderer = TerminalRenderer(output, mode="auto")
+                renderer.panel("LoopForge status", ["state: initialized"])
+            self.assertNotIn("\x1b[", output.getvalue())
+
+    def test_version_commands_report_runtime_details(self) -> None:
+        for args in (["--version"], ["-V"], ["version"]):
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(main(args), 0)
+            text = output.getvalue()
+            self.assertIn("LoopForge 0.1.0", text)
+            self.assertIn("python:", text)
+            self.assertIn("LoopForge home:", text)
+
+    def test_version_json_is_single_payload(self) -> None:
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(main(["version", "--json"]), 0)
+        payload = json.loads(output.getvalue())
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["version"]["loopforge_version"], "0.1.0")
+
+    def test_help_command_supports_nested_topics_and_unknown_topic_errors(self) -> None:
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(main(["help", "pack", "list"]), 0)
+        self.assertIn("usage: loopforge pack list", output.getvalue())
+
+        error = io.StringIO()
+        with contextlib.redirect_stderr(error):
+            self.assertEqual(main(["help", "rnu"]), 2)
+        text = error.getvalue()
+        self.assertIn("LF_HELP_TOPIC_UNKNOWN", text)
+        self.assertIn("loopforge help run", text)
+
+    def test_no_input_blocks_implicit_shell(self) -> None:
+        error = io.StringIO()
+        with contextlib.redirect_stderr(error):
+            self.assertEqual(main(["--no-input"]), 2)
+        self.assertIn("LF_INPUT_REQUIRED", error.getvalue())
+
+    def test_run_without_task_errors_in_non_interactive_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            loopforge_home = repo / "home"
+            error = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                with contextlib.redirect_stderr(error):
+                    self.assertEqual(main(["run", "--no-input"]), 2)
+            self.assertIn("LF_INPUT_REQUIRED", error.getvalue())
+
+    def test_run_without_task_prompts_when_interactive(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            loopforge_home = repo / "home"
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                mock.patch("sys.stdin", TtyStringIO()),
+                mock.patch("builtins.input", return_value="Prompted task"),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(main(["run"]), 0)
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+            run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            self.assertEqual(run_json["task"], "Prompted task")
+
+    def test_status_json_has_no_human_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            output = io.StringIO()
+            with working_directory(repo), contextlib.redirect_stdout(output):
+                self.assertEqual(main(["status", "--json"]), 0)
+            payload = json.loads(output.getvalue())
+            self.assertTrue(payload["ok"])
+            self.assertIn("status", payload)
+
+    def test_runs_supports_table_json_and_csv(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            loopforge_home = repo / "home"
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(main(["run", "--task", "List runs"]), 0)
+
+            json_output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(json_output),
+            ):
+                self.assertEqual(main(["runs", "--format", "json"]), 0)
+            payload = json.loads(json_output.getvalue())
+            self.assertTrue(payload["rows"])
+
+            csv_output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(csv_output),
+            ):
+                self.assertEqual(main(["runs", "--format", "csv", "--columns", "run_id,status"]), 0)
+            self.assertIn("run_id,status", csv_output.getvalue())
+
+    def test_completion_outputs_shell_script(self) -> None:
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(main(["completion", "powershell"]), 0)
+        self.assertIn("Register-ArgumentCompleter", output.getvalue())
+
+    def test_discovery_commands_do_not_query_project_state(self) -> None:
+        for args in (["version"], ["help"], ["completion", "bash"]):
+            output = io.StringIO()
+            with (
+                mock.patch("loopforge.cli.current_status", side_effect=AssertionError),
+                mock.patch("loopforge.cli.current_guidance", side_effect=AssertionError),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(args), 0)
+
+    def test_global_flags_work_after_command_and_before_adapter_separator(self) -> None:
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(main(["status", "--json", "--quiet"]), 0)
+        payload = json.loads(output.getvalue())
+        self.assertTrue(payload["ok"])
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            loopforge_home_dir = repo / "home"
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home_dir)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(
+                        [
+                            "run",
+                            "--task",
+                            "Keep adapter separator",
+                            "--success-check",
+                            "adapter runs",
+                        ]
+                    ),
+                    0,
+                )
+                self.assertEqual(
+                    main(
+                        [
+                            "continue",
+                            "--adapter",
+                            "local-adapter-fixture",
+                            "--",
+                            fixture_python(),
+                            "-c",
+                            "import sys; print('--json' in sys.argv)",
+                            "--json",
+                        ]
+                    ),
+                    1,
+                )
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_dir = loopforge_home_dir / "runs" / repo.name / config["current_run_id"]
+            attempt_stdout = run_dir / "attempts" / "attempt-001" / "adapter.stdout"
+            self.assertIn("True", attempt_stdout.read_text(encoding="utf-8"))
+
+    def test_loopforge_home_prefers_env_then_legacy_then_platform_data(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            home = Path(temp_dir)
+            env_home = home / "env-home"
+            with mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(env_home)}):
+                self.assertEqual(loopforge_home(), env_home)
+
+            legacy = home / "LoopForge"
+            legacy.mkdir()
+            with (
+                mock.patch.dict(os.environ, {}, clear=True),
+                mock.patch("loopforge.engine.Path.home", return_value=home),
+            ):
+                self.assertEqual(loopforge_home(), legacy)
+
+            legacy.rmdir()
+            data_home = home / "xdg-data"
+            cache_home = home / "xdg-cache"
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {"XDG_DATA_HOME": str(data_home), "XDG_CACHE_HOME": str(cache_home)},
+                    clear=True,
+                ),
+                mock.patch("loopforge.engine.sys.platform", "linux"),
+                mock.patch("loopforge.engine.Path.home", return_value=home),
+            ):
+                self.assertEqual(loopforge_home(), data_home / "loopforge")
+                self.assertEqual(platform_cache_home(), cache_home / "loopforge")
+
+    def test_streaming_process_terminates_child_on_keyboard_interrupt(self) -> None:
+        class FakeProcess:
+            def __init__(self) -> None:
+                self.stdout = io.BytesIO()
+                self.stderr = io.BytesIO()
+                self.terminated = False
+                self.killed = False
+                self.waits = 0
+
+            def wait(self, timeout=None):  # type: ignore[no-untyped-def]
+                self.waits += 1
+                if self.waits == 1:
+                    raise KeyboardInterrupt
+                return 130
+
+            def terminate(self) -> None:
+                self.terminated = True
+
+            def kill(self) -> None:
+                self.killed = True
+
+        fake = FakeProcess()
+        with (
+            mock.patch("loopforge.engine.subprocess.Popen", return_value=fake),
+            mock.patch("loopforge.engine.isolated_process_module") as isolated,
+        ):
+            isolated.return_value.load_policy.return_value = {"max_timeout_seconds": 60}
+            isolated.return_value.build_child_environment.return_value = {}
+            with self.assertRaises(KeyboardInterrupt):
+                run_streaming_process(["fake"], Path.cwd(), 60)
+        self.assertTrue(fake.terminated)
+        self.assertFalse(fake.killed)
+
     def test_guidance_reports_not_initialized_and_cli_guide(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             repo = Path(temp_dir)
@@ -908,8 +1214,8 @@ class CliTests(unittest.TestCase):
             self.assertEqual(guidance.state, "not_initialized")
             self.assertEqual(guidance.recommended_actions[0].id, "init")
             text = output.getvalue()
-            self.assertIn("guidance:", text)
-            self.assertIn("recommended next action: [init]", text)
+            self.assertIn("Guide", text)
+            self.assertIn("Do this", text)
             self.assertIn("loopforge init", text)
 
     def test_guidance_reports_initialized_without_run(self) -> None:
@@ -1076,10 +1382,10 @@ class CliTests(unittest.TestCase):
 
             self.assertTrue((repo / ".loopforge" / "config.json").exists())
             text = output.getvalue()
-            self.assertIn("Guided actions", text)
-            self.assertIn("next:", text)
-            self.assertIn("why [", text)
-            self.assertIn("LoopForge guidance", text)
+            self.assertIn("Actions", text)
+            self.assertIn("Next", text)
+            self.assertIn("Why", text)
+            self.assertIn("Guide", text)
             self.assertIn("requires confirmation", error.getvalue())
 
     def test_init_repairs_legacy_config_with_adapter_defaults(self) -> None:
@@ -1132,7 +1438,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(config["default_adapter"], "local-adapter-fixture")
             self.assertEqual(config["default_adapter_args"], ["python", "-c", "pass"])
             text = output.getvalue()
-            self.assertIn("selected adapter: local-adapter-fixture", text)
+            self.assertIn("current  local-adapter-fixture", text)
             self.assertIn("local-adapter-fixture", text)
 
     def test_shell_continue_uses_selected_adapter_by_default(self) -> None:
@@ -1215,11 +1521,11 @@ class CliTests(unittest.TestCase):
             self.assertEqual(config["default_adapter"], "claude-code")
             self.assertEqual(config["default_adapter_args"], ["--dangerously-skip-permissions"])
             text = output.getvalue()
-            self.assertIn("theme: dark", text)
-            self.assertIn("tui: plain", text)
-            self.assertIn("keymap: vim", text)
-            self.assertIn("statusline: compact", text)
-            self.assertIn("title: Focus", text)
+            self.assertIn("theme  dark", text)
+            self.assertIn("tui  plain", text)
+            self.assertIn("keymap  vim", text)
+            self.assertIn("statusline  compact", text)
+            self.assertIn("title  Focus", text)
 
     def test_shell_stats_tasks_usage_cost_and_raw(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1268,7 +1574,7 @@ class CliTests(unittest.TestCase):
 
             text = output.getvalue()
             self.assertIn("tokens", text)
-            self.assertIn("unavailable", text)
+            self.assertIn("not reported", text)
             self.assertIn("LoopForge attempts", text)
             self.assertIn("raw hello", text)
 
@@ -1619,20 +1925,15 @@ class CliTests(unittest.TestCase):
 
             text = output.getvalue()
             for label in (
-                "Run list",
-                "Current loop",
-                "Attempts",
+                "Recent runs",
+                "Current run",
                 "Verification",
-                "Memory proposals",
-                "Adapter comparison",
+                "Memory",
                 "Next human action",
-                "Blockers",
             ):
                 self.assertIn(label, text)
             self.assertIn("1 pending, 1 promoted, 1 rejected", text)
-            self.assertIn("Tests use unittest discovery.", text)
-            self.assertIn("codex", text)
-            self.assertIn("do command: loopforge shell --command", text)
+            self.assertIn("loopforge learn --approve", text)
 
             after = {path: path.read_text(encoding="utf-8") for path in watched_paths}
             self.assertEqual(after, before)
@@ -1755,10 +2056,10 @@ class CliTests(unittest.TestCase):
                     self.assertEqual(main(["shell", "--command", command]), 0)
 
             text = output.getvalue()
-            self.assertIn("LoopForge memory", text)
+            self.assertIn("Memory", text)
             self.assertIn("LoopForge skills", text)
-            self.assertIn("allowed tools:", text)
-            self.assertIn("- git", text)
+            self.assertIn("Allowed tools", text)
+            self.assertIn("git | allowed", text)
             self.assertIn("local review evidence", text)
 
     def test_shell_copy_falls_back_to_export_and_export_writes_file(self) -> None:
@@ -1873,7 +2174,7 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(main(["shell", "--script", str(script)]), 0)
 
             text = output.getvalue()
-            self.assertIn(f"project dir: {repo}", text)
+            self.assertIn(f"project  {repo}", text)
             self.assertIn(f"added context dir: {extra}", text)
             self.assertIn(f"mentioned: {mentioned}", text)
             self.assertIn("session context dirs:", text)
@@ -1949,8 +2250,8 @@ class CliTests(unittest.TestCase):
                 "- loopforge status prints the current run",
                 (run_dir / "loop.md").read_text(encoding="utf-8"),
             )
-            self.assertIn("Loop contract accepted", output.getvalue())
-            self.assertIn("Phase 4", output.getvalue())
+            self.assertIn("Contract validation", output.getvalue())
+            self.assertIn("adapter   not executed", output.getvalue())
 
     def test_continue_refuses_without_success_checks(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1971,7 +2272,7 @@ class CliTests(unittest.TestCase):
                     self.assertEqual(main(["continue"]), 1)
 
             text = error.getvalue()
-            self.assertIn("continue refused", text)
+            self.assertIn("Contract blocked", text)
             self.assertIn("no success checks", text)
 
     def test_autonomous_subjective_task_requires_rubric_before_continue(self) -> None:
@@ -2036,7 +2337,7 @@ class CliTests(unittest.TestCase):
                 )
                 self.assertEqual(main(["continue"]), 0)
 
-            self.assertIn("Loop contract accepted", output.getvalue())
+            self.assertIn("Contract validation", output.getvalue())
 
     def test_assist_profile_blocks_adapter_execution(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2219,7 +2520,7 @@ class CliTests(unittest.TestCase):
                 "strict profile requires --confirm before memory promotion",
                 learn_error.getvalue(),
             )
-            self.assertIn("profile allows:", output.getvalue())
+            self.assertIn("Verified", output.getvalue())
 
     def test_continue_fixture_adapter_records_completed_attempt(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2288,7 +2589,7 @@ class CliTests(unittest.TestCase):
             progress = (run_dir / "progress.md").read_text(encoding="utf-8")
             self.assertIn("## Attempt 1: local-adapter-fixture", progress)
             self.assertIn("Fixture command completed and changed the workspace.", progress)
-            self.assertIn("LoopForge adapter attempt completed", output.getvalue())
+            self.assertIn("Attempt completed", output.getvalue())
 
     def test_continue_fixture_adapter_uses_git_worktree_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2441,7 +2742,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(run_json["attempt_count"], 1)
             self.assertIn("reported failed", run_json["blockers"][0])
             self.assertIn("bad fixture", (attempt_dir / "adapter.stderr").read_text())
-            self.assertIn("blocked state", error.getvalue())
+            self.assertIn("Attempt blocked", error.getvalue())
             self.assertIn("Fixture command failed with return code 3.", error.getvalue())
 
     def test_continue_can_retry_after_blocked_attempt_without_archiving(self) -> None:
@@ -2579,9 +2880,9 @@ class CliTests(unittest.TestCase):
             self.assertEqual(verification["checks_passed"], 1)
             self.assertTrue((run_dir / "artifacts" / "patches" / "complete.patch").exists())
             self.assertIn("README.md", (run_dir / "artifacts" / "patches" / "complete.patch").read_text())
-            self.assertIn("verification: passed", output.getvalue())
-            self.assertIn("diff policy allowed: True", output.getvalue())
-            self.assertIn("risk: low", output.getvalue())
+            self.assertIn("Verified", output.getvalue())
+            self.assertIn("status  passed", output.getvalue())
+            self.assertIn("risk    low", output.getvalue())
 
     def test_pack_protected_paths_contribute_risk_rules(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2659,7 +2960,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(verification["risk"]["risk"], "high")
             self.assertIn("protected-paths.json", "\n".join(verification["risk"]["policy_sources"]))
             self.assertTrue((run_dir / "artifacts" / "policies" / "risk-rules.merged.json").exists())
-            self.assertIn("risk policy:", output.getvalue())
+            self.assertIn("risk    high", output.getvalue())
 
     def test_verify_repeated_equivalent_failure_marks_stagnation(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -3121,16 +3422,15 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(main(["status"]), 0)
 
             text = output.getvalue()
-            self.assertIn(f"current run: {config['current_run_id']}", text)
+            self.assertIn(f"run      {config['current_run_id']}", text)
             self.assertIn("current run metadata not found", text)
-            self.assertIn("next step: Restore the missing run artifacts or create a new run.", text)
+            self.assertIn("Next", text)
 
     def test_unknown_command_still_exits_with_parser_error(self) -> None:
         output = io.StringIO()
         with contextlib.redirect_stderr(output):
-            with self.assertRaises(SystemExit) as raised:
-                main(["unknown"])
-        self.assertEqual(raised.exception.code, 2)
+            self.assertEqual(main(["unknown"]), 2)
+        self.assertIn("LF_USAGE", output.getvalue())
         self.assertIn("invalid choice", output.getvalue())
 
 

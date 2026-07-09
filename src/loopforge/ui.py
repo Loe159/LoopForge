@@ -6,7 +6,7 @@ import importlib.util
 import os
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, Iterable, TextIO
 
 from loopforge.engine import GuidedAction, profile_permission_lines
 
@@ -33,10 +33,18 @@ STATUS_STYLES = {
 class TerminalRenderer:
     """Small Rich-aware renderer with a plain text fallback."""
 
-    def __init__(self, output: TextIO, *, mode: str = "auto", theme: str = "default") -> None:
+    def __init__(
+        self,
+        output: TextIO,
+        *,
+        mode: str = "auto",
+        theme: str = "default",
+        no_color: bool = False,
+    ) -> None:
         self.output = output
         self.mode = mode
         self.theme = theme
+        self.no_color = no_color
         self.rich_available = importlib.util.find_spec("rich") is not None
         self.console = None
         self.use_rich = False
@@ -44,14 +52,21 @@ class TerminalRenderer:
 
     def set_mode(self, mode: str) -> None:
         self.mode = mode
+        no_color = (
+            self.no_color
+            or os.environ.get("NO_COLOR") is not None
+            or os.environ.get("LOOPFORGE_NO_COLOR") is not None
+            or os.environ.get("TERM") == "dumb"
+        )
+        force_color = os.environ.get("FORCE_COLOR") is not None and not no_color
+        is_tty = hasattr(self.output, "isatty") and self.output.isatty()
         auto_rich = (
             mode == "auto"
             and self.rich_available
-            and hasattr(self.output, "isatty")
-            and self.output.isatty()
-            and os.environ.get("NO_COLOR") is None
+            and (is_tty or force_color)
+            and not no_color
         )
-        self.use_rich = mode == "rich" and self.rich_available or auto_rich
+        self.use_rich = (mode == "rich" and self.rich_available and not no_color) or auto_rich
         if self.use_rich:
             from rich.console import Console
 
@@ -59,7 +74,7 @@ class TerminalRenderer:
                 file=self.output,
                 force_terminal=True,
                 color_system="standard",
-                no_color=False,
+                no_color=no_color,
                 highlight=False,
             )
         else:
@@ -169,6 +184,71 @@ def compact_text(value: object, *, limit: int = 96) -> str:
     return text[: max(0, limit - 3)].rstrip() + "..."
 
 
+def not_reported(value: object) -> str:
+    if value is None:
+        return "not reported"
+    if isinstance(value, str) and value in {"", "unknown", "unavailable"}:
+        return "not reported"
+    return str(value)
+
+
+def yes_no(value: object) -> str:
+    return "yes" if bool(value) else "no"
+
+
+def summary_table_lines(rows: Iterable[tuple[str, object]], *, key_width: int | None = None) -> list[str]:
+    normalized = [(str(key), str(value)) for key, value in rows]
+    width = key_width if key_width is not None else max((len(key) for key, _ in normalized), default=0)
+    return [f"{key:<{width}}  {value}" for key, value in normalized]
+
+
+def render_next(renderer: TerminalRenderer, command: object | None) -> list[str]:
+    if not command:
+        return []
+    return ["", "Next", renderer.command(command)]
+
+
+def render_summary_table(
+    renderer: TerminalRenderer,
+    title: str,
+    rows: Iterable[tuple[str, object]],
+    *,
+    next_command: object | None = None,
+    extra_lines: Iterable[str] = (),
+) -> None:
+    lines = summary_table_lines(rows)
+    lines.extend(str(line) for line in extra_lines)
+    lines.extend(render_next(renderer, next_command))
+    renderer.panel(title, lines)
+
+
+def render_success(
+    renderer: TerminalRenderer,
+    title: str,
+    rows: Iterable[tuple[str, object]],
+    *,
+    next_command: object | None = None,
+) -> None:
+    render_summary_table(renderer, title, rows, next_command=next_command)
+
+
+def render_blocked(
+    renderer: TerminalRenderer,
+    title: str,
+    rows: Iterable[tuple[str, object]],
+    *,
+    blockers: Iterable[str] = (),
+    next_command: object | None = None,
+) -> None:
+    extra: list[str] = []
+    blocker_list = [str(blocker) for blocker in blockers]
+    if blocker_list:
+        extra.append("")
+        extra.append("Blockers")
+        extra.extend(f"- {blocker}" for blocker in blocker_list)
+    render_summary_table(renderer, title, rows, next_command=next_command, extra_lines=extra)
+
+
 def average_text(series: object) -> str:
     if not isinstance(series, dict):
         return "unknown"
@@ -198,72 +278,67 @@ def blockers_lines(blockers: list[str]) -> list[str]:
 
 def format_status_lines(result: Any, guidance: Any, *, details: bool = False) -> list[str]:
     action = guidance.recommended_actions[0] if guidance.recommended_actions else None
+    command = action.command if action is not None else result.next_step
     lines: list[str] = []
-    lines.extend(action_lines(action))
-    lines.append("")
-    lines.append(f"project: {result.project_dir.name}")
 
     if not result.initialized:
-        lines.extend(
-            [
-                "state: not initialized",
-                f"next step: {result.next_step}",
-            ]
-        )
+        rows: list[tuple[str, object]] = [
+            ("status", "not initialized"),
+            ("project", result.project_dir.name),
+            ("config", compact_path(result.config_path, project_dir=result.project_dir)),
+        ]
+        if result.blockers:
+            rows.append(("blocker", compact_text(result.blockers[0], limit=80)))
+        lines.extend(summary_table_lines(rows))
         if details:
-            lines.append(f"config: {result.config_path}")
-        lines.extend(blockers_lines(result.blockers))
+            lines.extend(["", "Details", f"config: {result.config_path}"])
+            lines.extend(blockers_lines(result.blockers))
+        lines.extend(["", "Next", str(command or "loopforge init")])
         return lines
 
     config = result.config or {}
-    lines.extend(
-        [
-            "state: initialized",
-            f"profile: {config.get('profile')}",
-        ]
-    )
 
     if result.run is None:
-        lines.append(f"current run: {config.get('current_run_id') or 'none'}")
-        if result.run_dir is not None:
-            lines.append(f"run directory: {result.run_dir}")
-        lines.append(f"next step: {result.next_step}")
-        lines.extend(blockers_lines(result.blockers))
+        rows = [
+            ("status", "ready_for_run"),
+            ("project", result.project_dir.name),
+            ("profile", config.get("profile") or "unknown"),
+            ("run", config.get("current_run_id") or "none"),
+        ]
+        if result.blockers:
+            rows.append(("blocker", compact_text(result.blockers[0], limit=80)))
+        lines.extend(summary_table_lines(rows))
         if details:
             lines.extend(_status_detail_lines(result))
+            lines.extend(blockers_lines(result.blockers))
+        lines.extend(["", "Next", str(command or 'loopforge run --task "..."')])
         return lines
 
     run = result.run
-    attempts = run.get("attempt_count", len(run.get("attempts", [])))
-    lines.extend(
-        [
-            f"current run: {run.get('run_id')}",
-            f"task: {compact_text(run.get('task'), limit=120)}",
-            f"loop status: {run.get('status')}",
-            f"attempts: {attempts}",
-            f"pack: {run.get('pack')}",
-        ]
-    )
+    checks = 0
     if result.loop_contract is not None:
-        lines.append(f"loop contract: {result.loop_contract.get('status')}")
-        lines.append(f"success checks: {len(result.loop_contract.get('success_checks', []))}")
+        checks = len(result.loop_contract.get("success_checks", []))
     if result.verification is not None:
         verification = result.verification
-        lines.append(f"verification: {verification.get('status', 'unknown')}")
-        lines.append(
-            "pack checks: "
-            f"{verification.get('checks_passed', 0)}/{verification.get('checks_total', 0)}"
-        )
+        verify = verification.get("status", "unknown")
     else:
-        lines.append("verification: not run")
-    if result.memory is not None:
-        lines.append(f"durable memory: {result.memory.get('durable_items', 0)} items")
-        lines.append(f"memory proposals: {result.memory.get('pending', 0)} pending")
+        verify = "not run"
+    rows = [
+        ("status", run.get("status") or "unknown"),
+        ("run", run.get("run_id") or "none"),
+        ("task", compact_text(run.get("task"), limit=90)),
+        ("pack", run.get("pack") or "none"),
+        ("checks", f"{checks} success checks"),
+        ("verify", verify),
+    ]
+    if result.blockers:
+        rows.append(("blocker", compact_text(result.blockers[0], limit=80)))
+    lines.extend(summary_table_lines(rows))
     _append_artifact_attention(lines, result)
-    lines.append(f"next step: {result.next_step}")
-    lines.extend(blockers_lines(result.blockers))
     if details:
         lines.extend(_status_detail_lines(result))
+        lines.extend(blockers_lines(result.blockers))
+    lines.extend(["", "Next", str(command or result.next_step)])
     return lines
 
 
@@ -420,10 +495,27 @@ def _memory_lines(state: dict[str, object] | None) -> list[str]:
 
 def render_status(renderer: TerminalRenderer, result: Any, guidance: Any, *, details: bool) -> None:
     lines = format_status_lines(result, guidance, details=details)
-    renderer.panel("LoopForge status", lines)
+    renderer.panel("Current loop", lines)
 
 
-def render_dashboard(renderer: TerminalRenderer, snapshot: dict[str, Any]) -> None:
+def render_guidance(renderer: TerminalRenderer, guidance: Any, *, include_also: bool = True) -> None:
+    action = guidance.recommended_actions[0] if guidance.recommended_actions else None
+    lines = ["You are here", guidance.summary]
+    reasons = guidance.blocked_reasons or guidance.diagnostics or guidance.evidence
+    if reasons:
+        lines.extend(["", "Why", compact_text(reasons[0], limit=120)])
+    elif action is not None:
+        lines.extend(["", "Why", compact_text(action.why, limit=120)])
+    if action is not None:
+        lines.extend(["", "Do this", renderer.command(action.command)])
+    if include_also and len(guidance.recommended_actions) > 1:
+        lines.extend(["", "Also useful"])
+        for extra in guidance.recommended_actions[1:4]:
+            lines.append(f"- {extra.command}")
+    renderer.panel("Guide", lines)
+
+
+def render_dashboard(renderer: TerminalRenderer, snapshot: dict[str, Any], *, details: bool = False) -> None:
     project = snapshot.get("project", {}) if isinstance(snapshot.get("project"), dict) else {}
     runs = snapshot.get("runs", {}) if isinstance(snapshot.get("runs"), dict) else {}
     current = (
@@ -451,31 +543,32 @@ def render_dashboard(renderer: TerminalRenderer, snapshot: dict[str, Any]) -> No
     blockers = snapshot.get("blockers", []) if isinstance(snapshot.get("blockers"), list) else []
 
     renderer.panel(
-        "LoopForge dashboard",
-        [
-            f"project: {project.get('name') or 'unknown'}",
-            f"initialized: {project.get('initialized')}",
-            f"profile: {project.get('profile') or 'none'}",
-            f"runs: {runs.get('total', 0)}",
-        ],
+        "Dashboard",
+        summary_table_lines(
+            [
+                ("project", project.get("name") or "unknown"),
+                ("profile", project.get("profile") or "none"),
+                ("runs", runs.get("total", 0)),
+                ("current", current.get("run_id") or "none"),
+            ]
+        ),
     )
 
     renderer.section(
-        "Current loop",
-        [
-            f"run id: {current.get('run_id') or 'none'}",
-            f"task: {compact_text(current.get('task'), limit=120) or 'none'}",
-            f"status: {current.get('status') or 'none'}",
-            f"pack: {current.get('pack') or 'none'}",
-            f"loop contract: {current.get('loop_contract_status') or 'none'}",
-            f"success checks: {len(current.get('success_checks') or [])}",
-            f"next step: {current.get('next_step') or 'none'}",
-        ],
+        "Current run",
+        summary_table_lines(
+            [
+                ("status", current.get("status") or "none"),
+                ("task", compact_text(current.get("task"), limit=90) or "none"),
+                ("pack", current.get("pack") or "none"),
+                ("checks", len(current.get("success_checks") or [])),
+            ]
+        ),
     )
 
     run_items = runs.get("items", []) if isinstance(runs.get("items"), list) else []
     run_rows = []
-    for run in run_items[:10]:
+    for run in run_items[:5]:
         if isinstance(run, dict):
             marker = "*" if run.get("current") else "-"
             run_rows.append(
@@ -486,7 +579,46 @@ def render_dashboard(renderer: TerminalRenderer, snapshot: dict[str, Any]) -> No
                     compact_text(run.get("task"), limit=80),
                 ]
             )
-    renderer.table("Run list", ["", "Run", "Status", "Task"], run_rows or [["-", "none", "", ""]])
+    renderer.table("Recent runs", ["", "Run", "Status", "Task"], run_rows or [["-", "none", "", ""]])
+
+    renderer.section(
+        "Verification",
+        summary_table_lines(
+            [
+                ("status", verification.get("status") or "not run"),
+                ("risk", verification.get("risk") or "unknown"),
+                ("checks", f"{verification.get('checks_passed') or 0}/{verification.get('checks_total') or 0}"),
+            ]
+        ),
+    )
+    renderer.section(
+        "Memory",
+        summary_table_lines(
+            [
+                ("durable", f"{memory.get('durable_items') or 0} facts"),
+                (
+                    "proposals",
+                    f"{memory.get('pending', 0)} pending, "
+                    f"{memory.get('promoted', 0)} promoted, "
+                    f"{memory.get('rejected', 0)} rejected",
+                ),
+            ]
+        ),
+    )
+    renderer.section(
+        "Next human action",
+        summary_table_lines(
+            [
+                ("action", action.get("id") or "none"),
+                ("command", action.get("command") or "none"),
+                ("why", compact_text(action.get("why"), limit=100) or "none"),
+            ]
+        ),
+    )
+    if blockers:
+        renderer.section("Blockers", [f"- {blocker}" for blocker in blockers])
+    if not details:
+        return
 
     attempt_items = attempts.get("items", []) if isinstance(attempts.get("items"), list) else []
     attempt_rows = []
@@ -504,28 +636,6 @@ def render_dashboard(renderer: TerminalRenderer, snapshot: dict[str, Any]) -> No
         "Attempts",
         ["Attempt", "Adapter", "Status", "Summary"],
         attempt_rows or [["none", "", "", ""]],
-    )
-
-    renderer.section(
-        "Verification",
-        [
-            f"status: {verification.get('status') or 'not run'}",
-            f"risk: {verification.get('risk') or 'unknown'}",
-            f"checks: {verification.get('checks_passed') or 0}/{verification.get('checks_total') or 0}",
-            f"patch size bytes: {verification.get('patch_size_bytes') or 'unknown'}",
-        ],
-    )
-    renderer.section(
-        "Memory proposals",
-        [
-            f"durable items: {memory.get('durable_items') or 0}",
-            (
-                "proposals: "
-                f"{memory.get('pending', 0)} pending, "
-                f"{memory.get('promoted', 0)} promoted, "
-                f"{memory.get('rejected', 0)} rejected"
-            ),
-        ],
     )
     proposals = (
         memory.get("proposal_rows", []) if isinstance(memory.get("proposal_rows"), list) else []
@@ -565,16 +675,5 @@ def render_dashboard(renderer: TerminalRenderer, snapshot: dict[str, Any]) -> No
         "Adapter comparison",
         ["Adapter", "Records", "Duration avg", "Attempts avg", "Tokens avg", "Patch avg", "Cost known"],
         comparison_rows or [["none", str(comparison.get("record_count", 0)), "", "", "", "", ""]],
-    )
-    renderer.section(
-        "Next human action",
-        [
-            f"id: {action.get('id') or 'none'}",
-            f"label: {action.get('label') or 'none'}",
-            f"command: {action.get('command') or 'none'}",
-            f"do command: {action.get('do_command') or 'none'}",
-            f"requires confirmation: {action.get('requires_confirmation')}",
-            f"why: {action.get('why') or 'none'}",
-        ],
     )
     renderer.section("Blockers", [f"- {blocker}" for blocker in blockers] or ["- none"])

@@ -547,7 +547,41 @@ def loopforge_home(home: Path | None = None) -> Path:
     configured_home = os.environ.get("LOOPFORGE_HOME")
     if configured_home:
         return Path(configured_home).expanduser()
-    return Path.home() / "LoopForge"
+    legacy_home = Path.home() / "LoopForge"
+    if legacy_home.exists():
+        return legacy_home
+    return platform_data_home() / "loopforge"
+
+
+def platform_data_home() -> Path:
+    if sys.platform == "win32":
+        configured = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+        if configured:
+            return Path(configured).expanduser()
+        return Path.home() / "AppData" / "Local"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support"
+    configured = os.environ.get("XDG_DATA_HOME")
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / ".local" / "share"
+
+
+def platform_cache_home() -> Path:
+    configured_home = os.environ.get("LOOPFORGE_HOME")
+    if configured_home:
+        return Path(configured_home).expanduser() / "cache"
+    if sys.platform == "win32":
+        configured = os.environ.get("LOCALAPPDATA") or os.environ.get("TEMP")
+        if configured:
+            return Path(configured).expanduser() / "loopforge" / "cache"
+        return Path.home() / "AppData" / "Local" / "loopforge" / "cache"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Caches" / "loopforge"
+    configured = os.environ.get("XDG_CACHE_HOME")
+    if configured:
+        return Path(configured).expanduser() / "loopforge"
+    return Path.home() / ".cache" / "loopforge"
 
 
 def default_run_root(project_dir: Path, home: Path | None = None) -> Path:
@@ -4526,14 +4560,25 @@ def run_streaming_process(command: list[str], cwd: Path, timeout_seconds: int) -
     stdout_thread.start()
     stderr_thread.start()
     timed_out = False
+    interrupted = False
     try:
         returncode = process.wait(timeout=bounded_timeout)
     except subprocess.TimeoutExpired:
         timed_out = True
         process.kill()
         returncode = process.wait()
+    except KeyboardInterrupt:
+        interrupted = True
+        process.terminate()
+        try:
+            returncode = process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            returncode = process.wait()
     stdout_thread.join(timeout=5)
     stderr_thread.join(timeout=5)
+    if interrupted:
+        raise KeyboardInterrupt
     return {
         "completed": not timed_out,
         "returncode": returncode,
