@@ -14,16 +14,28 @@ import shutil
 import subprocess
 import sys
 import traceback
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
 from loopforge import __version__
+from loopforge.cli_errors import DOCS_URL, CliError, CliRuntimeError, CliUsageError
+from loopforge.cli_github import GitHubIssueClient
+from loopforge.cli_intake import RunIntakeService
+from loopforge.cli_models import CliOptions, GitHubIssueRef, IssueReadResult, RunIntake
+from loopforge.cli_parser import (
+    CliParserBuilder,
+    LoopForgeArgumentParser,
+    add_format_args,
+    add_table_args,
+    non_negative_int,
+)
 from loopforge.engine import (
     DEFAULT_ALLOWED_TOOLS,
     DEFAULT_ADAPTER,
     DEFAULT_PROFILE,
     SUPPORTED_ADAPTERS,
+    approve_plan,
+    approve_review,
     continue_run,
     create_run,
     current_guidance,
@@ -31,12 +43,15 @@ from loopforge.engine import (
     dashboard_snapshot,
     detect_project_pack,
     discover_pack_contracts,
+    execute_readonly_stage,
     initialize_project,
     learn_run,
     list_runs,
     load_pack_checks,
     loopforge_home,
+    next_readonly_stage,
     normalize_profile,
+    prepare_draft_publication,
     platform_cache_home,
     profile_permission_lines,
     project_config_path,
@@ -60,7 +75,6 @@ from loopforge.ui import (
 )
 
 
-DOCS_URL = "https://github.com/loopforge/loopforge#readme"
 GLOBAL_FLAGS = {
     "--no-color",
     "--no-input",
@@ -75,41 +89,6 @@ TABLE_DEFAULT_COLUMNS = {
     "runs": ["current", "run_id", "status", "task", "pack", "updated_at"],
     "metrics-runs": ["run_id", "duration_seconds", "attempt_count", "patch_size_bytes", "verification", "final_disposition"],
 }
-
-
-@dataclass(frozen=True)
-class CliOptions:
-    no_color: bool = False
-    no_input: bool = False
-    quiet: bool = False
-    debug: bool = False
-    version: bool = False
-    json: bool = False
-
-
-@dataclass(frozen=True)
-class GitHubIssueRef:
-    owner: str
-    repo: str
-    number: int
-    url: str
-
-
-@dataclass
-class RunIntake:
-    task: str
-    success_checks: list[str]
-    allowed_tools: list[str]
-    subjective_rubric: str = ""
-    source_metadata: dict[str, Any] | None = None
-    notes: list[str] | None = None
-
-
-@dataclass
-class IssueReadResult:
-    ok: bool
-    issue: dict[str, Any] | None = None
-    reason: str = ""
 
 
 def prompt_text(label: str, *, default: str = "", required: bool = True) -> str:
@@ -164,205 +143,67 @@ def current_project_profile(project_dir: Path) -> str:
     return normalize_profile(config.get("profile", DEFAULT_PROFILE))
 
 
+def _github_client() -> GitHubIssueClient:
+    return GitHubIssueClient(sys.modules[__name__])
+
+
 def parse_github_remote(remote: str) -> tuple[str, str] | None:
-    patterns = (
-        r"^https?://github\.com/(?P<owner>[^/\s]+)/(?P<repo>[^/\s]+?)(?:\.git)?/?$",
-        r"^git@github\.com:(?P<owner>[^/\s]+)/(?P<repo>[^/\s]+?)(?:\.git)?$",
-        r"^ssh://git@github\.com/(?P<owner>[^/\s]+)/(?P<repo>[^/\s]+?)(?:\.git)?/?$",
-    )
-    for pattern in patterns:
-        match = re.match(pattern, remote.strip())
-        if match:
-            return match.group("owner"), match.group("repo")
-    return None
+    return _github_client().parse_remote(remote)
 
 
 def github_repo_from_remote(project_dir: Path) -> tuple[str, str] | None:
-    try:
-        result = subprocess.run(
-            ["git", "remote", "get-url", "origin"],
-            cwd=project_dir,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if result.returncode != 0:
-        return None
-    return parse_github_remote(result.stdout.strip())
+    return _github_client().repository_from_remote(project_dir)
 
 
 def parse_github_issue_url(source: str) -> GitHubIssueRef | None:
-    match = re.match(
-        r"^https?://github\.com/(?P<owner>[^/\s]+)/(?P<repo>[^/\s]+)/issues/(?P<number>\d+)(?:[/?#].*)?$",
-        source.strip(),
-    )
-    if not match:
-        return None
-    owner = match.group("owner")
-    repo = match.group("repo")
-    number = int(match.group("number"))
-    return GitHubIssueRef(
-        owner=owner,
-        repo=repo,
-        number=number,
-        url=f"https://github.com/{owner}/{repo}/issues/{number}",
-    )
+    return _github_client().parse_issue_url(source)
 
 
 def resolve_github_issue_ref(project_dir: Path, source: str) -> tuple[GitHubIssueRef | None, str]:
-    parsed = parse_github_issue_url(source)
-    if parsed is not None:
-        return parsed, ""
-    if source.strip().isdigit():
-        repo = github_repo_from_remote(project_dir)
-        if repo is None:
-            return None, "GitHub issue ID could not be resolved because the origin remote is missing or not GitHub."
-        owner, name = repo
-        number = int(source.strip())
-        return (
-            GitHubIssueRef(
-                owner=owner,
-                repo=name,
-                number=number,
-                url=f"https://github.com/{owner}/{name}/issues/{number}",
-            ),
-            "",
-        )
-    return None, "Only GitHub issue URLs and numeric issue IDs are supported right now."
+    return _github_client().resolve(project_dir, source)
 
 
 def gh_issue_view(ref: GitHubIssueRef) -> IssueReadResult:
-    if shutil.which("gh") is None:
-        return IssueReadResult(False, reason="GitHub CLI (`gh`) is not available.")
-    try:
-        result = subprocess.run(
-            [
-                "gh",
-                "issue",
-                "view",
-                str(ref.number),
-                "--repo",
-                f"{ref.owner}/{ref.repo}",
-                "--json",
-                "number,title,body,url,labels",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-    except (OSError, subprocess.SubprocessError) as error:
-        return IssueReadResult(False, reason=f"GitHub issue read failed: {error}")
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout).strip()
-        return IssueReadResult(False, reason=detail or "GitHub issue read failed.")
-    try:
-        issue = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        return IssueReadResult(False, reason="GitHub returned unreadable issue data.")
-    issue.setdefault("url", ref.url)
-    issue.setdefault("number", ref.number)
-    return IssueReadResult(True, issue=issue)
+    return _github_client().view(ref)
 
 
 def gh_issue_list(project_dir: Path) -> IssueReadResult:
-    repo = github_repo_from_remote(project_dir)
-    if repo is None:
-        return IssueReadResult(False, reason="Open issues require a GitHub origin remote.")
-    if shutil.which("gh") is None:
-        return IssueReadResult(False, reason="GitHub CLI (`gh`) is not available.")
-    owner, name = repo
-    try:
-        result = subprocess.run(
-            [
-                "gh",
-                "issue",
-                "list",
-                "--repo",
-                f"{owner}/{name}",
-                "--state",
-                "open",
-                "--limit",
-                "20",
-                "--json",
-                "number,title,url,labels",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-    except (OSError, subprocess.SubprocessError) as error:
-        return IssueReadResult(False, reason=f"GitHub issue list failed: {error}")
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout).strip()
-        return IssueReadResult(False, reason=detail or "GitHub issue list failed.")
-    try:
-        issues = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        return IssueReadResult(False, reason="GitHub returned unreadable issue data.")
-    return IssueReadResult(True, issue={"issues": issues})
+    return _github_client().list_open(project_dir)
 
 
 def issue_task_summary(issue: dict[str, Any]) -> str:
-    title = str(issue.get("title") or "").strip()
-    number = issue.get("number")
-    if number:
-        return f"Resolve GitHub issue #{number}: {title}" if title else f"Resolve GitHub issue #{number}"
-    return title or "Resolve GitHub issue"
+    return GitHubIssueClient.task_summary(issue)
 
 
-def issue_source_metadata(ref: GitHubIssueRef, issue: dict[str, Any] | None = None) -> dict[str, Any]:
-    title = str((issue or {}).get("title") or "").strip()
-    return {
-        "type": "github_issue",
-        "provider": "github",
-        "reference": f"{ref.owner}/{ref.repo}#{ref.number}",
-        "url": ref.url,
-        "title": title,
-        "trust": "untrusted_provider_input",
-        "memory": "not_promoted_to_durable_memory",
-    }
+def issue_source_metadata(
+    ref: GitHubIssueRef,
+    issue: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return GitHubIssueClient.source_metadata(ref, issue)
+
+
+def github_issue_label_names(issue: dict[str, Any]) -> set[str]:
+    return GitHubIssueClient.label_names(issue)
+
+
+def github_issue_is_agent_approved(issue: dict[str, Any]) -> bool:
+    return _github_client().is_agent_approved(issue)
+
+
+def require_agent_approved_issue(ref: GitHubIssueRef, issue: dict[str, Any]) -> None:
+    _github_client().require_agent_approved(ref, issue)
+
+
+def _intake_service() -> RunIntakeService:
+    return RunIntakeService(sys.modules[__name__])
 
 
 def pack_check_suggestions(project_dir: Path, pack: str | None) -> list[tuple[str, str]]:
-    contract = detect_project_pack(project_dir) if pack is None else {"name": pack}
-    pack_name = str(contract.get("name") or pack or "")
-    try:
-        checks = load_pack_checks(project_dir, pack_name).get("checks", [])
-    except ValueError:
-        checks = []
-    suggestions: list[tuple[str, str]] = []
-    for check in checks[:3]:
-        if not isinstance(check, dict):
-            continue
-        name = str(check.get("name") or "pack check").strip()
-        command = check.get("command", [])
-        command_text = " ".join(str(part) for part in command) if isinstance(command, list) else ""
-        suggestions.append(
-            (
-                f"Pack check `{name}` passes",
-                f"Selected because the detected `{pack_name}` pack defines `{command_text}`.",
-            )
-        )
-    if not suggestions:
-        suggestions.append(
-            (
-                "Run the relevant local deterministic checks before verification",
-                "Selected because no pack-specific check command is configured.",
-            )
-        )
-    return suggestions
+    return _intake_service().pack_check_suggestions(project_dir, pack)
 
 
 def permission_suggestions() -> list[tuple[str, str]]:
-    return [
-        (tool, "Default LoopForge run permission; bounded by the run workspace and profile policy.")
-        for tool in DEFAULT_ALLOWED_TOOLS
-    ]
+    return _intake_service().permission_suggestions()
 
 
 def confirm_or_edit_list(
@@ -371,15 +212,11 @@ def confirm_or_edit_list(
     *,
     default_values: list[str] | None = None,
 ) -> list[str]:
-    print(title)
-    for index, (value, reason) in enumerate(suggestions, start=1):
-        print(f"{index}. {value}")
-        print(f"   why: {reason}")
-    values = default_values if default_values is not None else [value for value, _ in suggestions]
-    if prompt_yes_no("Use these", default=True):
-        return values
-    edited = prompt_text("Enter replacements separated by commas", required=False)
-    return split_csv_prompt(edited) or values
+    return _intake_service().confirm_or_edit_list(
+        title,
+        suggestions,
+        default_values=default_values,
+    )
 
 
 def build_manual_intake(
@@ -390,38 +227,12 @@ def build_manual_intake(
     source_metadata: dict[str, Any] | None = None,
     notes: list[str] | None = None,
 ) -> RunIntake:
-    task = prompt_text("Title or goal", default=default_task)
-    context = prompt_text("Bug context", required=False)
-    proof = prompt_text("Proof of success")
-    task_text = task if not context else f"{task}\n\nContext: {context}"
-    checks = [proof, *list(args.success_check)]
-    pack_checks = pack_check_suggestions(project_dir, args.pack)
-    if args.success_check:
-        print("Using checks from --success-check.")
-    else:
-        checks.extend(
-            confirm_or_edit_list(
-                "Suggested checks",
-                pack_checks,
-                default_values=[value for value, _ in pack_checks],
-            )
-        )
-    if args.allow_tool:
-        allowed_tools = list(args.allow_tool)
-        print("Using permissions from --allow-tool.")
-    else:
-        allowed_tools = confirm_or_edit_list("Suggested permissions", permission_suggestions())
-    profile = current_project_profile(project_dir)
-    rubric = args.rubric
-    if profile == "autonomous" and task_looks_subjective(task_text) and not rubric:
-        rubric = prompt_text("Subjective quality rubric")
-    return RunIntake(
-        task=task_text,
-        success_checks=checks,
-        allowed_tools=allowed_tools,
-        subjective_rubric=rubric,
+    return _intake_service().build_manual(
+        project_dir,
+        args,
+        default_task=default_task,
         source_metadata=source_metadata,
-        notes=notes or [],
+        notes=notes,
     )
 
 
@@ -431,33 +242,7 @@ def build_issue_intake(
     ref: GitHubIssueRef,
     issue: dict[str, Any],
 ) -> RunIntake:
-    default_task = issue_task_summary(issue)
-    task = prompt_text("Run goal", default=default_task)
-    proof_default = f"The behavior described in GitHub issue #{ref.number} is fixed or implemented."
-    proof = prompt_text("Proof of success", default=proof_default)
-    pack_checks = pack_check_suggestions(project_dir, args.pack)
-    checks = [proof, *list(args.success_check)]
-    if args.success_check:
-        print("Using checks from --success-check.")
-    else:
-        checks.extend(confirm_or_edit_list("Suggested checks", pack_checks))
-    if args.allow_tool:
-        allowed_tools = list(args.allow_tool)
-        print("Using permissions from --allow-tool.")
-    else:
-        allowed_tools = confirm_or_edit_list("Suggested permissions", permission_suggestions())
-    profile = current_project_profile(project_dir)
-    rubric = args.rubric
-    if profile == "autonomous" and task_looks_subjective(task) and not rubric:
-        rubric = prompt_text("Subjective quality rubric")
-    return RunIntake(
-        task=task,
-        success_checks=checks,
-        allowed_tools=allowed_tools,
-        subjective_rubric=rubric,
-        source_metadata=issue_source_metadata(ref, issue),
-        notes=["Issue text is treated as untrusted input and was not promoted to durable memory."],
-    )
+    return _intake_service().build_issue(project_dir, args, ref, issue)
 
 
 def build_noninteractive_issue_intake(
@@ -466,192 +251,19 @@ def build_noninteractive_issue_intake(
     ref: GitHubIssueRef,
     issue: dict[str, Any],
 ) -> RunIntake:
-    task = args.task or issue_task_summary(issue)
-    checks = list(args.success_check)
-    if not checks:
-        checks = [f"The behavior described in GitHub issue #{ref.number} is fixed or implemented."]
-    allowed_tools = list(args.allow_tool)
-    return RunIntake(
-        task=task,
-        success_checks=checks,
-        allowed_tools=allowed_tools,
-        subjective_rubric=args.rubric,
-        source_metadata=issue_source_metadata(ref, issue),
-    )
+    return _intake_service().build_noninteractive_issue(project_dir, args, ref, issue)
 
 
 def choose_issue_from_list(project_dir: Path) -> tuple[GitHubIssueRef | None, dict[str, Any] | None, str]:
-    listed = gh_issue_list(project_dir)
-    if not listed.ok:
-        return None, None, listed.reason
-    issues = (listed.issue or {}).get("issues", [])
-    if not isinstance(issues, list) or not issues:
-        return None, None, "No open GitHub issues were returned."
-    print("Open GitHub issues")
-    for index, issue in enumerate(issues, start=1):
-        print(f"{index}. #{issue.get('number')} {issue.get('title')}")
-    choice = prompt_text("Select issue number from this list", required=False)
-    if not choice.isdigit():
-        return None, None, "No issue was selected."
-    selected_index = int(choice)
-    if selected_index < 1 or selected_index > len(issues):
-        return None, None, "Issue selection was outside the displayed range."
-    selected = issues[selected_index - 1]
-    parsed = parse_github_issue_url(str(selected.get("url") or ""))
-    if parsed is None:
-        return None, None, "Selected issue did not include a supported GitHub URL."
-    return parsed, selected, ""
+    return _intake_service().choose_issue_from_list(project_dir)
 
 
 def interactive_run_intake(project_dir: Path, args: argparse.Namespace) -> RunIntake:
-    source = str(getattr(args, "issue_source", "") or "").strip()
-    notes: list[str] = []
-    if source:
-        ref, reason = resolve_github_issue_ref(project_dir, source)
-        if ref is not None:
-            read = gh_issue_view(ref)
-            if read.ok and read.issue is not None:
-                return build_issue_intake(project_dir, args, ref, read.issue)
-            notes.append(f"GitHub issue could not be read: {read.reason}")
-            print(notes[-1])
-            return build_manual_intake(
-                project_dir,
-                args,
-                default_task=f"Resolve GitHub issue {ref.url}",
-                source_metadata=issue_source_metadata(ref),
-                notes=notes,
-            )
-        notes.append(reason)
-        print(reason)
-        return build_manual_intake(project_dir, args, notes=notes)
-
-    print("Create a run")
-    print("1. Work from an existing GitHub issue")
-    print("2. Report a new bug or task")
-    choice = prompt_text("Choose", default="2")
-    if choice == "1":
-        entered = prompt_text("GitHub issue URL or number, or leave blank to list open issues", required=False)
-        if entered:
-            ref, reason = resolve_github_issue_ref(project_dir, entered)
-            if ref is not None:
-                read = gh_issue_view(ref)
-                if read.ok and read.issue is not None:
-                    return build_issue_intake(project_dir, args, ref, read.issue)
-                notes.append(f"GitHub issue could not be read: {read.reason}")
-                print(notes[-1])
-                return build_manual_intake(
-                    project_dir,
-                    args,
-                    default_task=f"Resolve GitHub issue {ref.url}",
-                    source_metadata=issue_source_metadata(ref),
-                    notes=notes,
-                )
-            notes.append(reason)
-            print(reason)
-            return build_manual_intake(project_dir, args, notes=notes)
-        ref, issue, reason = choose_issue_from_list(project_dir)
-        if ref is not None and issue is not None:
-            return build_issue_intake(project_dir, args, ref, issue)
-        notes.append(reason)
-        print(f"Manual fallback: {reason}")
-    return build_manual_intake(project_dir, args, notes=notes)
+    return _intake_service().interactive(project_dir, args)
 
 
 def noninteractive_run_intake(project_dir: Path, args: argparse.Namespace) -> RunIntake:
-    source = str(getattr(args, "issue_source", "") or "").strip()
-    if source:
-        ref, reason = resolve_github_issue_ref(project_dir, source)
-        if ref is None:
-            if args.task:
-                return RunIntake(
-                    task=str(args.task).strip(),
-                    success_checks=list(args.success_check),
-                    allowed_tools=list(args.allow_tool),
-                    subjective_rubric=args.rubric,
-                    source_metadata={
-                        "type": "manual",
-                        "source": source,
-                        "trust": "operator_supplied_input",
-                        "note": reason,
-                    },
-                )
-            raise CliUsageError(
-                "LF_ISSUE_SOURCE_UNRESOLVED",
-                "Issue source could not be resolved",
-                reason,
-                fix='Pass a full GitHub issue URL or use `loopforge run --task "..."`.',
-            )
-        read = gh_issue_view(ref)
-        if not read.ok or read.issue is None:
-            if args.task:
-                return RunIntake(
-                    task=str(args.task).strip(),
-                    success_checks=list(args.success_check),
-                    allowed_tools=list(args.allow_tool),
-                    subjective_rubric=args.rubric,
-                    source_metadata=issue_source_metadata(ref),
-                    notes=[f"GitHub issue could not be read: {read.reason}"],
-                )
-            raise CliUsageError(
-                "LF_ISSUE_SOURCE_UNAVAILABLE",
-                "Issue source could not be read",
-                read.reason,
-                fix='Pass `--task "..."` with the issue summary or run interactively for manual fallback.',
-            )
-        return build_noninteractive_issue_intake(project_dir, args, ref, read.issue)
-    task = str(args.task or "").strip()
-    if not task:
-        raise CliUsageError(
-            "LF_INPUT_REQUIRED",
-            "Task description is required",
-            "`loopforge run` needs a task in non-interactive mode.",
-            fix='Run `loopforge run --task "Describe the task"`.',
-        )
-    return RunIntake(
-        task=task,
-        success_checks=list(args.success_check),
-        allowed_tools=list(args.allow_tool),
-        subjective_rubric=args.rubric,
-    )
-
-
-class CliError(Exception):
-    def __init__(
-        self,
-        code: str,
-        title: str,
-        detail: str = "",
-        *,
-        fix: str | None = None,
-        exit_code: int = 1,
-        url: str = DOCS_URL,
-    ) -> None:
-        super().__init__(detail or title)
-        self.code = code
-        self.title = title
-        self.detail = detail
-        self.fix = fix
-        self.exit_code = exit_code
-        self.url = url
-
-
-class CliUsageError(CliError):
-    def __init__(self, code: str, title: str, detail: str = "", *, fix: str | None = None) -> None:
-        super().__init__(code, title, detail, fix=fix, exit_code=2)
-
-
-class CliRuntimeError(CliError):
-    pass
-
-
-class LoopForgeArgumentParser(argparse.ArgumentParser):
-    def error(self, message: str) -> None:
-        raise CliUsageError(
-            "LF_USAGE",
-            "Invalid command line",
-            message,
-            fix="Run `loopforge help` or `loopforge help <command>`.",
-        )
+    return _intake_service().noninteractive(project_dir, args)
 
 
 def print_guidance(project_dir: Path, *, concise: bool = False) -> None:
@@ -788,13 +400,6 @@ def print_profile_policy(profile: object, *, file=None) -> None:
         file = sys.stdout
     for line in profile_permission_lines(profile):
         print(line, file=file)
-
-
-def non_negative_int(value: str) -> int:
-    parsed = int(value)
-    if parsed < 0:
-        raise argparse.ArgumentTypeError("value must be non-negative")
-    return parsed
 
 
 def print_json_payload(payload: object) -> None:
@@ -996,15 +601,16 @@ def print_table_rows(
 def print_grouped_help() -> None:
     print("LoopForge")
     print("Portable agentic workflow loops.")
+    print("`loopforge run` is the cockpit: it resumes the active run and advances one approved stage at a time.")
     print()
     groups = [
-        ("Start", [("init", "Prepare this project"), ("run", "Create a bounded run")]),
+        ("Start", [("init", "Prepare this project"), ("run", "Create or resume a staged run")]),
         (
             "Work",
             [
                 ("status", "See where you are"),
-                ("continue", "Execute or validate next attempt"),
-                ("verify", "Generate patch and run checks"),
+                ("continue", "Execute implementation after plan approval"),
+                ("verify", "Generate patch and run deterministic checks"),
                 ("learn", "Propose or approve memory"),
             ],
         ),
@@ -1040,6 +646,7 @@ def print_grouped_help() -> None:
     print('Examples')
     print('  loopforge init')
     print('  loopforge run --task "Describe the task"')
+    print('  loopforge run')
     print('  loopforge status')
     print()
     print("Run `loopforge help <command>` or `loopforge --help` for full argparse help.")
@@ -1210,19 +817,6 @@ def render_learn_result(renderer: TerminalRenderer, result: object, *, approved:
         render_blocked(renderer, "Memory blocked", rows, blockers=blockers, next_command=next_value)
 
 
-def add_format_args(parser: argparse.ArgumentParser, *, csv_format: bool = False) -> None:
-    choices = ("text", "json", "csv") if csv_format else ("text", "json")
-    parser.add_argument("--format", choices=choices, default="text", help="Output format.")
-
-
-def add_table_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--columns", help="Comma-separated columns to show.")
-    parser.add_argument("--sort", help="Sort rows by a column.")
-    parser.add_argument("--filter", help="Only show rows containing this text.")
-    parser.add_argument("--no-headers", action="store_true", help="Omit table or CSV headers.")
-    parser.add_argument("--no-truncate", action="store_true", help="Do not truncate text columns.")
-
-
 def version_payload(project_dir: Path) -> dict[str, object]:
     config_path = project_config_path(project_dir)
     default_adapter: object = "unknown"
@@ -1372,6 +966,204 @@ def status_payload(project_dir: Path) -> dict[str, object]:
         "verification": result.verification,
         "memory": result.memory,
     }
+
+
+def run_has_explicit_source(args: argparse.Namespace) -> bool:
+    return bool(str(getattr(args, "task", "") or "").strip()) or bool(
+        str(getattr(args, "issue_source", "") or "").strip()
+    )
+
+
+def render_run_cockpit(
+    project_dir: Path,
+    renderer: TerminalRenderer,
+    *,
+    fmt: str,
+    quiet: bool,
+) -> None:
+    if fmt == "json":
+        print_json_payload(
+            {
+                "ok": True,
+                "action": "active_run",
+                "status": status_payload(project_dir),
+                "guidance": guidance_payload(project_dir),
+            }
+        )
+        return
+    if quiet:
+        return
+    result = current_status(project_dir)
+    guidance = current_guidance(project_dir)
+    print("Active run found; showing cockpit.")
+    render_status(renderer, result, guidance, details=True)
+
+
+def render_stage_result(
+    renderer: TerminalRenderer,
+    result: object,
+) -> None:
+    stage = getattr(result, "stage", None) or "stage"
+    if getattr(result, "ok", False):
+        render_success(
+            renderer,
+            f"{str(stage).title()} ready",
+            [
+                ("stage", stage),
+                ("status", getattr(result, "message", "")),
+                ("artifact", getattr(result, "artifact_path", None) or "none"),
+            ],
+            next_command="loopforge run",
+        )
+        return
+    render_blocked(
+        renderer,
+        f"{str(stage).title()} blocked",
+        [("status", getattr(result, "message", ""))],
+        blockers=list(getattr(result, "blockers", []) or []),
+        next_command="loopforge run",
+    )
+
+
+def render_plan_approval_result(
+    renderer: TerminalRenderer,
+    result: object,
+) -> None:
+    if getattr(result, "ok", False):
+        render_success(
+            renderer,
+            "Plan approved",
+            [
+                ("status", getattr(result, "message", "")),
+                ("artifact", getattr(result, "artifact_path", None) or "none"),
+            ],
+            next_command="loopforge continue",
+        )
+        return
+    render_blocked(
+        renderer,
+        "Plan approval blocked",
+        [("status", getattr(result, "message", ""))],
+        blockers=list(getattr(result, "blockers", []) or []),
+        next_command="loopforge run",
+    )
+
+
+def render_review_approval_result(
+    renderer: TerminalRenderer,
+    result: object,
+) -> None:
+    if getattr(result, "ok", False):
+        render_success(
+            renderer,
+            "Review approved",
+            [
+                ("status", getattr(result, "message", "")),
+                ("artifact", getattr(result, "artifact_path", None) or "none"),
+            ],
+            next_command="loopforge run",
+        )
+        return
+    render_blocked(
+        renderer,
+        "Review approval blocked",
+        [("status", getattr(result, "message", ""))],
+        blockers=list(getattr(result, "blockers", []) or []),
+        next_command="loopforge run",
+    )
+
+
+def render_publication_result(
+    renderer: TerminalRenderer,
+    result: object,
+) -> None:
+    if getattr(result, "ok", False):
+        render_success(
+            renderer,
+            "Draft publication prepared",
+            [
+                ("status", getattr(result, "message", "")),
+                ("artifact", getattr(result, "artifact_path", None) or "none"),
+            ],
+            next_command="loopforge run",
+        )
+        return
+    render_blocked(
+        renderer,
+        "Draft publication blocked",
+        [("status", getattr(result, "message", ""))],
+        blockers=list(getattr(result, "blockers", []) or []),
+        next_command="loopforge run",
+    )
+
+
+def maybe_run_readonly_stage_from_cockpit(
+    project_dir: Path,
+    renderer: TerminalRenderer,
+    *,
+    adapter: str,
+    adapter_args: list[str],
+    no_color: bool,
+) -> int:
+    status = current_status(project_dir)
+    if status.run is None:
+        return 0
+    stage = next_readonly_stage(status.run)
+    if stage is None:
+        statuses = status.run.get("stage_statuses", {})
+        if not isinstance(statuses, dict):
+            return 0
+        if statuses.get("plan") == "awaiting_approval":
+            if not prompt_yes_no("Approve current plan for implementation", default=False):
+                return 0
+            result = approve_plan(project_dir, source="local")
+            render_plan_approval_result(
+                renderer if result.ok else TerminalRenderer(sys.stderr, no_color=no_color),
+                result,
+            )
+            return 0 if result.ok else 1
+        if (
+            statuses.get("verification") == "complete"
+            and statuses.get("review") not in {"approved", "complete"}
+        ):
+            if not prompt_yes_no("Approve verified work for review", default=False):
+                return 0
+            result = approve_review(project_dir, source="local")
+            render_review_approval_result(
+                renderer if result.ok else TerminalRenderer(sys.stderr, no_color=no_color),
+                result,
+            )
+            return 0 if result.ok else 1
+        eligibility = status.run.get("publish_eligibility", {})
+        if (
+            statuses.get("publication") != "draft_prepared"
+            and isinstance(eligibility, dict)
+            and eligibility.get("eligible") is True
+            and eligibility.get("mode") == "draft"
+        ):
+            if not prompt_yes_no("Prepare draft PR publication artifact", default=False):
+                return 0
+            result = prepare_draft_publication(project_dir)
+            render_publication_result(
+                renderer if result.ok else TerminalRenderer(sys.stderr, no_color=no_color),
+                result,
+            )
+            return 0 if result.ok else 1
+        return 0
+    if not prompt_yes_no(f"Run read-only {stage} with {adapter} now", default=False):
+        return 0
+    with renderer.loading(f"Running read-only {stage} with {adapter}..."):
+        result = execute_readonly_stage(
+            project_dir,
+            stage=stage,
+            adapter=adapter,
+            adapter_args=adapter_args,
+        )
+    render_stage_result(
+        renderer if result.ok else TerminalRenderer(sys.stderr, no_color=no_color),
+        result,
+    )
+    return 0 if result.ok else 1
 
 
 def run_rows_from_result(result: object) -> list[dict[str, object]]:
@@ -1611,832 +1403,15 @@ def average_text_for_cli(series: dict[str, object]) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = LoopForgeArgumentParser(
-        prog="loopforge",
-        description="LoopForge is a portable agentic workflow engine.",
-        epilog=(
-            "Workflow: loopforge init -> loopforge run --task \"...\" "
-            "-> loopforge continue -> loopforge verify -> loopforge learn\n\n"
-            "Global flags: --no-color --no-input --quiet --debug --json --version -V\n"
-            "Examples:\n"
-            "  loopforge init\n"
-            "  loopforge run --task \"Add status output\" --success-check \"tests pass\"\n"
-            "  loopforge continue --adapter codex -- -m gpt-5\n"
-            "  loopforge status --format json\n"
-            f"More: {DOCS_URL}"
-        ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    topics: dict[tuple[str, ...], argparse.ArgumentParser] = {(): parser}
-    subcommands = parser.add_subparsers(dest="command")
+    """Build the public parser through the extracted parser builder."""
 
-    init_parser = subcommands.add_parser(
-        "init",
-        help="Initialize LoopForge metadata for a project.",
-        epilog="Example:\n  loopforge init --profile supervised",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    topics[("init",)] = init_parser
-    init_parser.add_argument(
-        "--profile",
-        default=DEFAULT_PROFILE,
-        choices=("assist", "supervised", "autonomous", "strict"),
-        help="Autonomy profile to store in .loopforge/config.json.",
-    )
-    add_format_args(init_parser)
-
-    run_parser = subcommands.add_parser(
-        "run",
-        help="Create a LoopForge run for a task.",
-        epilog=(
-            "Examples:\n"
-            "  loopforge run --task \"Improve the CLI help\"\n"
-            "  loopforge run --task \"Refactor parser\" --success-check \"pytest passes\"\n"
-            "  loopforge run --task \"Improve copy\" --rubric \"Clear and accurate\"\n"
-            "  loopforge run --task \"Add checks\" --pack python --skill tests"
-        ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    topics[("run",)] = run_parser
-    run_parser.add_argument(
-        "issue_source",
-        nargs="?",
-        help="Optional GitHub issue URL or issue ID inferred from the current git remote.",
-    )
-    run_parser.add_argument(
-        "--task",
-        help="Task description for the run.",
-    )
-    run_parser.add_argument(
-        "--pack",
-        help="Project pack to use. Defaults to automatic project detection.",
-    )
-    run_parser.add_argument(
-        "--success-check",
-        action="append",
-        default=[],
-        help="Objective check required before an autonomous continuation.",
-    )
-    run_parser.add_argument(
-        "--skill",
-        action="append",
-        default=[],
-        help="Selected LoopForge skill for this run. Can be passed more than once.",
-    )
-    run_parser.add_argument(
-        "--allow-tool",
-        action="append",
-        default=[],
-        help="Allowed tool or command family for this run. Can be passed more than once.",
-    )
-    run_parser.add_argument(
-        "--max-attempts",
-        type=int,
-        default=3,
-        help="Maximum bounded attempts allowed by the loop contract.",
-    )
-    run_parser.add_argument(
-        "--timeout",
-        type=int,
-        default=1800,
-        help="Maximum wall-clock seconds allowed by the loop contract.",
-    )
-    run_parser.add_argument(
-        "--rubric",
-        default="",
-        help="Subjective quality rubric required before autonomous subjective work.",
-    )
-    add_format_args(run_parser)
-
-    status_parser = subcommands.add_parser(
-        "status",
-        help="Show the current LoopForge loop state.",
-        epilog="Examples:\n  loopforge status\n  loopforge status --details\n  loopforge status --format json",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    topics[("status",)] = status_parser
-    status_parser.add_argument(
-        "--details",
-        action="store_true",
-        help="Show detailed paths, profile policy, artifacts, and verification evidence.",
-    )
-    add_format_args(status_parser)
-    guide_parser = subcommands.add_parser(
-        "guide",
-        help="Explain the current workflow state and recommended next actions.",
-        epilog="Examples:\n  loopforge guide\n  loopforge guide --format json",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    topics[("guide",)] = guide_parser
-    add_format_args(guide_parser)
-    dashboard_parser = subcommands.add_parser(
-        "dashboard",
-        help="Show a read-only local dashboard for LoopForge runs.",
-        epilog="Examples:\n  loopforge dashboard\n  loopforge dashboard --format json",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    topics[("dashboard",)] = dashboard_parser
-    dashboard_parser.add_argument(
-        "--details",
-        action="store_true",
-        help="Show attempt, proposal, and adapter comparison details.",
-    )
-    add_format_args(dashboard_parser)
-
-    pack_parser = subcommands.add_parser(
-        "pack",
-        help="List or detect LoopForge project packs.",
-        epilog="Examples:\n  loopforge pack list\n  loopforge pack detect --format json",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    topics[("pack",)] = pack_parser
-    pack_subcommands = pack_parser.add_subparsers(dest="pack_command", required=True)
-    pack_list = pack_subcommands.add_parser("list", help="List available project packs.")
-    topics[("pack", "list")] = pack_list
-    add_format_args(pack_list, csv_format=True)
-    add_table_args(pack_list)
-    pack_detect = pack_subcommands.add_parser("detect", help="Show the pack selected for this project.")
-    topics[("pack", "detect")] = pack_detect
-    add_format_args(pack_detect)
-
-    metrics_parser = subcommands.add_parser(
-        "metrics",
-        help="Record or summarize compact LoopForge run metrics.",
-        epilog="Examples:\n  loopforge metrics record --final-disposition complete\n  loopforge metrics summarize --format csv",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    topics[("metrics",)] = metrics_parser
-    metrics_subcommands = metrics_parser.add_subparsers(
-        dest="metrics_command",
-        required=True,
-    )
-    metrics_record = metrics_subcommands.add_parser(
-        "record",
-        help="Write a compact JSON metrics record for the current or selected run.",
-    )
-    topics[("metrics", "record")] = metrics_record
-    metrics_record.add_argument("--run-id", help="Run id to record. Defaults to current run.")
-    metrics_record.add_argument("--model", help="Model id when adapter output did not report one.")
-    metrics_record.add_argument("--input-tokens", type=non_negative_int)
-    metrics_record.add_argument("--output-tokens", type=non_negative_int)
-    metrics_record.add_argument("--total-tokens", type=non_negative_int)
-    metrics_record.add_argument("--cost-microunits", type=non_negative_int)
-    metrics_record.add_argument("--cost-currency")
-    metrics_record.add_argument("--human-corrections", type=non_negative_int)
-    metrics_record.add_argument("--final-disposition")
-    add_format_args(metrics_record)
-    metrics_summarize = metrics_subcommands.add_parser(
-        "summarize",
-        help="Compare recorded metrics across runs.",
-    )
-    topics[("metrics", "summarize")] = metrics_summarize
-    metrics_summarize.add_argument(
-        "--details",
-        action="store_true",
-        help="Include the per-run table in text output.",
-    )
-    add_format_args(metrics_summarize, csv_format=True)
-    add_table_args(metrics_summarize)
-
-    continue_parser = subcommands.add_parser(
-        "continue",
-        help="Validate the current loop contract and optionally execute an adapter attempt.",
-        epilog=(
-            "Examples:\n"
-            "  loopforge continue\n"
-            "  loopforge continue --adapter codex -- -m gpt-5\n"
-            "  loopforge continue --confirm --adapter local-adapter-fixture -- python -c \"print('ok')\""
-        ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    topics[("continue",)] = continue_parser
-    continue_parser.add_argument(
-        "--adapter",
-        choices=SUPPORTED_ADAPTERS,
-        help="Adapter to use for a bounded Phase 4 attempt.",
-    )
-    continue_parser.add_argument(
-        "--confirm",
-        nargs="?",
-        const="yes",
-        help="Confirm a mutating transition when the strict profile requires it.",
-    )
-    continue_parser.add_argument(
-        "--details",
-        action="store_true",
-        help="Show run directory and full adapter evidence.",
-    )
-    continue_parser.add_argument(
-        "adapter_args",
-        nargs=argparse.REMAINDER,
-        help="Arguments passed to the adapter command after --.",
-    )
-    add_format_args(continue_parser)
-
-    verify_parser = subcommands.add_parser(
-        "verify",
-        help="Generate a complete patch and run deterministic pack verification.",
-        epilog="Examples:\n  loopforge verify\n  loopforge verify --confirm\n  loopforge verify --format json",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    topics[("verify",)] = verify_parser
-    verify_parser.add_argument(
-        "--confirm",
-        nargs="?",
-        const="yes",
-        help="Confirm verification artifact generation when the strict profile requires it.",
-    )
-    verify_parser.add_argument(
-        "--details",
-        action="store_true",
-        help="Show detailed patch and risk evidence.",
-    )
-    add_format_args(verify_parser)
-
-    learn_parser = subcommands.add_parser(
-        "learn",
-        help="Propose or approve durable project memory updates for the current run.",
-        epilog="Examples:\n  loopforge learn\n  loopforge learn --note \"Fact: this repo uses unittest\"\n  loopforge learn --approve --confirm",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    topics[("learn",)] = learn_parser
-    learn_parser.add_argument(
-        "--approve",
-        action="store_true",
-        help="Promote safe proposals to durable project memory with human approval.",
-    )
-    learn_parser.add_argument(
-        "--confirm",
-        nargs="?",
-        const="yes",
-        help="Confirm durable memory promotion when the strict profile requires it.",
-    )
-    learn_parser.add_argument(
-        "--note",
-        action="append",
-        default=[],
-        help=(
-            "Explicit memory candidate, such as "
-            "'Fact: this repo uses unittest'. Can be passed more than once."
-        ),
-    )
-    learn_parser.add_argument(
-        "--details",
-        action="store_true",
-        help="Show proposal details in addition to the operator summary.",
-    )
-    add_format_args(learn_parser)
-
-    shell_parser = subcommands.add_parser(
-        "shell",
-        aliases=("interactive",),
-        help="Start the LoopForge interactive shell.",
-        epilog=(
-            "Examples:\n"
-            "  loopforge shell\n"
-            "  loopforge shell --command \"/status\"\n"
-            "  loopforge shell --script commands.loopforge"
-        ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    topics[("shell",)] = shell_parser
-    topics[("interactive",)] = shell_parser
-    shell_parser.add_argument(
-        "--command",
-        dest="shell_command",
-        help="Run a single interactive command, such as '/status', then exit.",
-    )
-    shell_parser.add_argument(
-        "--script",
-        type=Path,
-        help="Run interactive commands from a UTF-8 script file, then exit.",
-    )
-
-    runs_parser = subcommands.add_parser(
-        "runs",
-        help="List known LoopForge runs for this project.",
-        epilog="Examples:\n  loopforge runs\n  loopforge runs --format json\n  loopforge runs --columns run_id,status,task --filter failed",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    topics[("runs",)] = runs_parser
-    add_format_args(runs_parser, csv_format=True)
-    add_table_args(runs_parser)
-
-    version_parser = subcommands.add_parser(
-        "version",
-        help="Show LoopForge version and runtime details.",
-        epilog="Examples:\n  loopforge version\n  loopforge version --format json",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    topics[("version",)] = version_parser
-    add_format_args(version_parser)
-
-    help_parser = subcommands.add_parser(
-        "help",
-        help="Show help for LoopForge or a command.",
-        epilog="Examples:\n  loopforge help\n  loopforge help run\n  loopforge help pack list",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    topics[("help",)] = help_parser
-    help_parser.add_argument("topic", nargs="*", help="Command or subcommand to explain.")
-
-    completion_parser = subcommands.add_parser(
-        "completion",
-        help="Print shell completion script.",
-        epilog=(
-            "Examples:\n"
-            "  loopforge completion bash\n"
-            "  loopforge completion powershell > loopforge-completion.ps1"
-        ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    topics[("completion",)] = completion_parser
-    completion_parser.add_argument("shell", choices=("bash", "zsh", "fish", "powershell"))
-
-    setattr(parser, "_loopforge_topics", topics)
-    return parser
+    return CliParserBuilder().build()
 
 
 def main(argv: list[str] | None = None) -> int:
-    raw_argv = sys.argv[1:] if argv is None else list(argv)
-    options, argv = preparse_global_options(raw_argv)
-    parser = build_parser()
-    renderer = TerminalRenderer(sys.stdout, no_color=options.no_color)
-    try:
-        if options.version and not argv:
-            print_version(Path.cwd(), "json" if options.json else "text")
-            return 0
-        if not argv:
-            if sys.stdin.isatty() and sys.stdout.isatty() and not options.no_input:
-                from loopforge.interactive import run_interactive
+    from loopforge.cli_app import LoopForgeCli
 
-                return run_interactive(Path.cwd())
-            if options.no_input:
-                raise CliUsageError(
-                    "LF_INPUT_REQUIRED",
-                    "No command was provided",
-                    "`--no-input` prevents LoopForge from opening the interactive shell.",
-                    fix="Run `loopforge help` or pass a command such as `loopforge status`.",
-                )
-            print(parser.format_help(), file=sys.stderr, end="")
-            return 2
-        if options.version:
-            print_version(Path.cwd(), "json" if options.json else "text")
-            return 0
-        args = parser.parse_args(argv)
-        set_format_from_json_alias(args, options)
-
-        if args.command == "help":
-            topic = getattr(args, "topic", [])
-            if topic:
-                show_help(parser, topic)
-            else:
-                print_grouped_help()
-            return 0
-        if args.command == "version":
-            print_version(Path.cwd(), output_format(args, options))
-            return 0
-        if args.command == "completion":
-            print(completion_script(args.shell), end="")
-            return 0
-        if args.command in {"shell", "interactive"}:
-            from loopforge.interactive import run_interactive
-
-            if args.shell_command is None and args.script is None:
-                if options.no_input:
-                    raise CliUsageError(
-                        "LF_INPUT_REQUIRED",
-                        "Interactive shell is disabled",
-                        "`--no-input` prevents opening the interactive shell.",
-                        fix="Use `loopforge shell --command \"/status\"` or remove `--no-input`.",
-                    )
-                if not sys.stdin.isatty() or not sys.stdout.isatty():
-                    raise CliUsageError(
-                        "LF_INPUT_REQUIRED",
-                        "LoopForge shell requires an interactive terminal",
-                        "Use --command or --script when running in a non-interactive environment.",
-                        fix='Run `loopforge shell --command "/status"`.',
-                    )
-            return run_interactive(Path.cwd(), command=args.shell_command, script=args.script)
-        if args.command == "init":
-            fmt = normalize_format(output_format(args, options), allowed=("text", "json"), command="loopforge init")
-            result = initialize_project(Path.cwd(), profile=args.profile)
-            if result.created:
-                action = "initialized"
-            elif result.repaired:
-                action = "repaired"
-            else:
-                action = "already initialized"
-            if fmt == "json":
-                print_json_payload(
-                    {
-                        "ok": True,
-                        "action": action,
-                        "config_path": str(result.config_path),
-                        "config": result.config,
-                    }
-                )
-                return 0
-            if options.quiet:
-                return 0
-            title = (
-                "LoopForge project ready"
-                if result.created
-                else "Project repaired"
-                if result.repaired
-                else "Project already ready"
-            )
-            rows: list[tuple[str, object]] = [
-                ("project", result.config["project_name"]),
-                ("profile", result.config["profile"]),
-                ("runs", result.config["run_root"]),
-            ]
-            if result.repaired:
-                rows.append(("config", result.config_path))
-            render_success(renderer, title, rows, next_command='loopforge run --task "Describe the task"')
-            return 0
-        if args.command == "run":
-            fmt = normalize_format(output_format(args, options), allowed=("text", "json"), command="loopforge run")
-            init_result = initialize_project(Path.cwd())
-            selected_adapter, selected_adapter_args = configured_adapter(init_result.config)
-            selected_adapter_command = adapter_continue_command(
-                selected_adapter,
-                selected_adapter_args,
-            )
-            can_prompt = not options.no_input and fmt == "text" and sys.stdin.isatty()
-            wizard_used = can_prompt and (not args.task or bool(args.issue_source))
-            if wizard_used:
-                intake = interactive_run_intake(Path.cwd(), args)
-            else:
-                intake = noninteractive_run_intake(Path.cwd(), args)
-            try:
-                with renderer.loading("Creating LoopForge run..."):
-                    result = create_run(
-                        Path.cwd(),
-                        task=intake.task,
-                        pack=args.pack,
-                        success_checks=intake.success_checks,
-                        selected_skills=args.skill,
-                        allowed_tools=intake.allowed_tools,
-                        max_attempts=args.max_attempts,
-                        timeout_seconds=args.timeout,
-                        subjective_rubric=intake.subjective_rubric,
-                        source_metadata=intake.source_metadata,
-                    )
-            except (FileNotFoundError, ValueError) as error:
-                raise CliRuntimeError(
-                    "LF_RUN_FAILED",
-                    "LoopForge run failed",
-                    str(error),
-                    fix="Run `loopforge init` first, then retry `loopforge run --task \"...\"`.",
-                ) from error
-            if fmt == "json":
-                print_json_payload({"ok": True, "run_dir": str(result.run_dir), "run": result.run})
-                return 0
-            if options.quiet:
-                return 0
-            extra = []
-            if init_result.created:
-                extra.append("Project")
-                extra.append("Initialized LoopForge metadata before creating the run.")
-            elif init_result.repaired:
-                extra.append("Project")
-                extra.append("Repaired LoopForge metadata before creating the run.")
-            if intake.notes:
-                extra.append("Notes")
-                extra.extend(str(note) for note in intake.notes)
-            if not intake.success_checks:
-                extra.append("Warning")
-                extra.append("No success check was provided; autonomous attempts may pause for contract completion.")
-            if result.run["loop_contract"]["subjective"] and not intake.subjective_rubric:
-                extra.append("Rubric")
-                extra.append("Subjective work needs a rubric before autonomous attempts.")
-            if intake.success_checks:
-                extra.append("Selected checks")
-                extra.extend(f"- {check}" for check in intake.success_checks[:5])
-            if intake.allowed_tools:
-                extra.append("Selected permissions")
-                extra.extend(f"- {tool}" for tool in intake.allowed_tools[:5])
-            render_summary_table(
-                renderer,
-                "Run created",
-                [
-                    ("goal", compact_text(result.run["task"], limit=90)),
-                    ("run", result.run["run_id"]),
-                    ("pack", result.run["pack"]),
-                    ("contract", result.run["loop_contract"]["status"]),
-                ],
-                extra_lines=extra,
-                next_command=selected_adapter_command,
-            )
-            if wizard_used:
-                if prompt_yes_no(f"Launch adapter {selected_adapter} now", default=False):
-                    with renderer.loading(f"Launching adapter {selected_adapter}..."):
-                        continue_result = continue_run(
-                            Path.cwd(),
-                            adapter=selected_adapter,
-                            adapter_args=selected_adapter_args,
-                            confirmed=True,
-                        )
-                    render_continue_result(
-                        renderer if continue_result.ok else TerminalRenderer(sys.stderr, no_color=options.no_color),
-                        continue_result,
-                        details=False,
-                    )
-                    return 0 if continue_result.ok else 1
-                print(f"Continue later with: {selected_adapter_command}")
-            return 0
-        if args.command == "pack":
-            if args.pack_command == "list":
-                detected = detect_project_pack(Path.cwd())
-                rows = [
-                    {
-                        "current": "*" if pack.get("name") == detected.get("name") else "",
-                        "name": pack.get("name") or "",
-                        "description": pack.get("description") or "",
-                        "kind": pack_kind(pack.get("source"), Path.cwd()),
-                        "source": pack.get("source") or "none",
-                    }
-                    for pack in discover_pack_contracts(Path.cwd())
-                ]
-                if not rows and output_format(args, options) == "text":
-                    print("No project packs found.")
-                    return 0
-                if options.quiet and output_format(args, options) == "text":
-                    return 0
-                print_table_rows(rows, args, key="pack-list", title="LoopForge packs")
-                return 0
-            if args.pack_command == "detect":
-                fmt = normalize_format(output_format(args, options), allowed=("text", "json"), command="loopforge pack detect")
-                pack = detect_project_pack(Path.cwd())
-                if fmt == "json":
-                    print_json_payload({"ok": True, "pack": pack})
-                    return 0
-                if options.quiet:
-                    return 0
-                render_success(
-                    renderer,
-                    "Detected pack",
-                    [
-                        ("pack", pack["name"]),
-                        ("score", pack.get("detection_score", 0)),
-                        ("why", detection_reason(pack, Path.cwd())),
-                        ("source", pack.get("source") or "none"),
-                    ],
-                    next_command=f'loopforge run --pack {pack["name"]} --task "Describe the task"',
-                )
-                return 0
-        if args.command == "runs":
-            result = list_runs(Path.cwd())
-            if result.blockers:
-                raise CliRuntimeError(
-                    "LF_CONFIG_MISSING",
-                    "Project is not initialized",
-                    "; ".join(result.blockers),
-                    fix="Run `loopforge init` first.",
-                )
-            rows = run_rows_from_result(result)
-            if options.quiet and output_format(args, options) == "text":
-                return 0
-            if output_format(args, options) == "text":
-                print_runs_text(result, args)
-            else:
-                print_table_rows(rows, args, key="runs", title="LoopForge runs")
-            return 0
-        if args.command == "metrics":
-            if args.metrics_command == "record":
-                result = record_run_metrics(
-                    Path.cwd(),
-                    run_id=args.run_id,
-                    model=args.model,
-                    input_tokens=args.input_tokens,
-                    output_tokens=args.output_tokens,
-                    total_tokens=args.total_tokens,
-                    cost_microunits=args.cost_microunits,
-                    cost_currency=args.cost_currency,
-                    human_corrections=args.human_corrections,
-                    final_disposition=args.final_disposition,
-                )
-                output = sys.stdout if result.ok else sys.stderr
-                if output_format(args, options) == "json":
-                    print_json_payload(
-                        {
-                            "ok": result.ok,
-                            "message": result.message,
-                            "record_path": str(result.record_path) if result.record_path else None,
-                            "record": result.record,
-                            "blockers": result.blockers,
-                        }
-                    )
-                else:
-                    if options.quiet and result.ok:
-                        return 0
-                    if result.record is not None and result.record_path is not None:
-                        record = result.record
-                        timing = record.get("timing", {}) if isinstance(record.get("timing"), dict) else {}
-                        tokens = record.get("tokens", {}) if isinstance(record.get("tokens"), dict) else {}
-                        cost = record.get("cost", {}) if isinstance(record.get("cost"), dict) else {}
-                        render_success(
-                            renderer,
-                            "Metrics recorded",
-                            [
-                                ("run", record.get("run_id") or "none"),
-                                ("duration", not_reported(timing.get("duration_seconds"))),
-                                ("tokens", not_reported(tokens.get("total_tokens") or tokens.get("total"))),
-                                ("cost", not_reported(cost.get("amount_microunits"))),
-                                ("file", result.record_path),
-                            ],
-                        )
-                    if result.blockers:
-                        render_blocked(
-                            renderer,
-                            "Metrics blocked",
-                            [("status", result.message)],
-                            blockers=result.blockers,
-                            next_command='loopforge run --task "Describe the task"',
-                        )
-                return 0 if result.ok else 1
-            if args.metrics_command == "summarize":
-                result = summarize_run_metrics(Path.cwd())
-                if output_format(args, options) == "json":
-                    print_json_payload(
-                        {
-                            "ok": result.ok,
-                            "message": result.message,
-                            "run_root": str(result.run_root) if result.run_root else None,
-                            "summary": result.summary,
-                            "blockers": result.blockers,
-                        }
-                    )
-                    return 0 if result.ok else 1
-                if output_format(args, options) == "csv":
-                    print_table_rows(metrics_rows(result.summary), args, key="metrics-runs")
-                    return 0 if result.ok else 1
-                output = sys.stdout if result.ok else sys.stderr
-                if options.quiet and result.ok:
-                    return 0
-                print_metrics_summary(result.summary, details=args.details)
-                if result.blockers:
-                    print("blockers:", file=output)
-                    for blocker in result.blockers:
-                        print(f"- {blocker}", file=output)
-                return 0 if result.ok else 1
-        if args.command == "status":
-            fmt = normalize_format(output_format(args, options), allowed=("text", "json"), command="loopforge status")
-            if fmt == "json":
-                print_json_payload({"ok": True, "status": status_payload(Path.cwd()), "guidance": guidance_payload(Path.cwd())})
-                return 0
-            if options.quiet:
-                return 0
-            result = current_status(Path.cwd())
-            guidance = current_guidance(Path.cwd())
-            render_status(renderer, result, guidance, details=args.details)
-            return 0
-        if args.command == "guide":
-            fmt = normalize_format(output_format(args, options), allowed=("text", "json"), command="loopforge guide")
-            if fmt == "json":
-                print_json_payload({"ok": True, "guidance": guidance_payload(Path.cwd())})
-            else:
-                if options.quiet:
-                    return 0
-                render_guidance(renderer, current_guidance(Path.cwd()), include_also=not options.quiet)
-            return 0
-        if args.command == "dashboard":
-            fmt = normalize_format(output_format(args, options), allowed=("text", "json"), command="loopforge dashboard")
-            result = dashboard_snapshot(Path.cwd())
-            if fmt == "json":
-                print_json_payload({"ok": result.ok, "blockers": result.blockers, "dashboard": result.snapshot})
-            else:
-                if options.quiet and result.ok:
-                    return 0
-                render_dashboard(renderer, result.snapshot, details=args.details)
-            return 0
-        if args.command == "continue":
-            fmt = normalize_format(output_format(args, options), allowed=("text", "json"), command="loopforge continue")
-            adapter_args = args.adapter_args
-            if adapter_args and adapter_args[0] == "--":
-                adapter_args = adapter_args[1:]
-            with renderer.loading("Continuing LoopForge run..."):
-                result = continue_run(
-                    Path.cwd(),
-                    adapter=args.adapter,
-                    adapter_args=adapter_args,
-                    confirmed=confirmation_accepted(args.confirm),
-                )
-            if fmt == "json":
-                print_json_payload(
-                    {
-                        "ok": result.ok,
-                        "message": result.message,
-                        "run_dir": str(result.run_dir) if result.run_dir else None,
-                        "contract": result.contract,
-                        "run": result.run,
-                        "attempt": result.attempt,
-                        "blockers": result.blockers,
-                    }
-                )
-                return 0 if result.ok else 1
-            if options.quiet and result.ok:
-                return 0
-            render_continue_result(
-                renderer if result.ok else TerminalRenderer(sys.stderr, no_color=options.no_color),
-                result,
-                details=args.details,
-            )
-            return 0 if result.ok else 1
-        if args.command == "verify":
-            fmt = normalize_format(output_format(args, options), allowed=("text", "json"), command="loopforge verify")
-            with renderer.loading("Generating patch and running verification..."):
-                result = verify_run(Path.cwd(), confirmed=confirmation_accepted(args.confirm))
-            if fmt == "json":
-                print_json_payload(
-                    {
-                        "ok": result.ok,
-                        "message": result.message,
-                        "run_dir": str(result.run_dir) if result.run_dir else None,
-                        "run": result.run,
-                        "verification": result.verification,
-                        "blockers": result.blockers,
-                    }
-                )
-                return 0 if result.ok else 1
-            if options.quiet and result.ok:
-                return 0
-            render_verify_result(
-                renderer if result.ok else TerminalRenderer(sys.stderr, no_color=options.no_color),
-                result,
-                details=args.details,
-            )
-            return 0 if result.ok else 1
-        if args.command == "learn":
-            fmt = normalize_format(output_format(args, options), allowed=("text", "json"), command="loopforge learn")
-            with renderer.loading("Updating LoopForge memory proposals..."):
-                result = learn_run(
-                    Path.cwd(),
-                    approve=args.approve,
-                    notes=args.note,
-                    confirmed=confirmation_accepted(args.confirm),
-                )
-            if fmt == "json":
-                print_json_payload(
-                    {
-                        "ok": result.ok,
-                        "message": result.message,
-                        "run_dir": str(result.run_dir) if result.run_dir else None,
-                        "run": result.run,
-                        "proposal_path": str(result.proposal_path) if result.proposal_path else None,
-                        "proposals": result.proposals,
-                        "promoted": result.promoted,
-                        "rejected": result.rejected,
-                        "blockers": result.blockers,
-                    }
-                )
-                return 0 if result.ok else 1
-            if options.quiet and result.ok:
-                return 0
-            render_learn_result(
-                renderer if result.ok else TerminalRenderer(sys.stderr, no_color=options.no_color),
-                result,
-                approved=args.approve,
-            )
-            if args.details:
-                for proposal in result.proposals[:10]:
-                    if isinstance(proposal, dict):
-                        print(
-                            "- "
-                            f"{proposal.get('id')}: {proposal.get('status')} "
-                            f"{compact_text(proposal.get('text'), limit=100)}"
-                        )
-            return 0 if result.ok else 1
-        raise CliUsageError("LF_USAGE", "Unknown command", str(args.command), fix="Run `loopforge help`.")
-    except KeyboardInterrupt:
-        error = CliRuntimeError(
-            "LF_INTERRUPTED",
-            "Interrupted",
-            "Interrupted. Run `loopforge status` to inspect state.",
-            fix="Run `loopforge status`.",
-            exit_code=130,
-        )
-        render_cli_error(error, options)
-        return 130
-    except CliError as error:
-        render_cli_error(error, options)
-        return error.exit_code
-    except SystemExit as error:
-        return int(error.code) if isinstance(error.code, int) else 2
-    except Exception as error:  # pragma: no cover - defensive top-level guard.
-        cli_error = CliRuntimeError(
-            "LF_INTERNAL",
-            "Unexpected LoopForge failure",
-            str(error),
-            fix="Re-run with `--debug` and report the debug log.",
-        )
-        if options.debug:
-            path = write_debug_log(error)
-            traceback.print_exc(file=sys.stderr)
-            print(f"debug log: {path}", file=sys.stderr)
-        render_cli_error(cli_error, options)
-        return 1
+    return LoopForgeCli(sys.modules[__name__]).run(argv)
 
 
 if __name__ == "__main__":

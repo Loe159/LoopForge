@@ -1,8 +1,9 @@
 # LoopForge
 
 LoopForge is a portable agentic workflow engine. It turns a task into a bounded
-work loop with context intake, loop design, agent execution, verification,
-memory updates, and human review when the evidence is weak.
+work loop with staged intake, read-only research and planning, gated
+implementation, deterministic verification, explicit review, and local draft
+publication preparation.
 
 This repository starts from the reusable core of the ABL plugin workflow:
 portable artifacts, patch generation, deterministic policy checks, bounded
@@ -32,6 +33,30 @@ loopforge version
 loopforge runs --format json
 loopforge completion powershell
 ```
+
+`loopforge run` is the cockpit for the active run. With a new task or approved
+GitHub issue, it creates a run. With an active run and no new source, it resumes
+that run and offers the next eligible stage one step at a time:
+
+1. task approval (`agent:approved` for GitHub issues, local confirmation for
+   manual tasks);
+2. run read-only research and write `research.md`;
+3. run read-only planning and write `plan.md`;
+4. approve the plan before implementation;
+5. execute implementation with `loopforge continue`;
+6. run deterministic verification with `loopforge verify`;
+7. explicit review approval;
+8. prepare a local draft PR publication artifact without pushing or opening a
+   network PR.
+
+`loopforge run --no-input` only reports the cockpit state. It never approves a
+gate, executes an adapter, or prepares publication.
+
+Research and plan stages are adapter-fed and checked as read-only against the
+project worktree. Verification produces local evidence for review; it is not
+review approval and does not authorize publication. Publication is limited to a
+deterministic local draft artifact under the run directory. LoopForge does not
+push branches, open PRs, or publish to the network from this workflow.
 
 `loopforge shell` starts an interactive prompt with slash commands such as
 `/status`, `/guide`, `/actions`, `/next`, `/do`, `/context`, `/compact`,
@@ -95,3 +120,7 @@ Every run should show:
 - when the agent is stuck;
 - what memory will be retained;
 - what action, if any, needs a human decision.
+
+Verification is evidence, not authority. Review approval is separate from
+deterministic checks, and draft publication is only a local artifact until a
+human chooses an external publishing path.

@@ -29,13 +29,22 @@ what must be refactored.
 - `research.md` no longer routes ABL behavior to Proparse research.
 - `prompt-contract.json` now points research at `.loopforge/skills/`.
 
+## Reintroduced In General Form
+
+- Task approval is now part of run creation: GitHub issues require the
+  `agent:approved` label, and manual tasks require local confirmation.
+- Read-only research and planning are now run-cockpit stages that write
+  `research.md` and `plan.md` from adapter output.
+- Plan approval gates implementation, and review approval is distinct from
+  deterministic verification.
+- Draft PR publication is a local deterministic artifact preparation step. It
+  does not push, open a network PR, or treat receipts and metrics as authority.
+
 ## Left Behind For Now
 
 - GitHub issue queue and snapshot ingestion.
-- Plan/task/session approval chains.
 - Disposable worktree lifecycle receipts.
 - Supervised runner receipt validation chain.
-- Draft PR publisher.
 - Historical golden set.
 - Multi-adapter comparison validator.
 - ABL-specific skills and docs.

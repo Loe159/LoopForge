@@ -15,8 +15,11 @@ import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from tempfile import NamedTemporaryFile
 from typing import Any
+
+from loopforge.engine_packs import PackRegistry
+from loopforge.engine_metrics import MetricsService
+from loopforge.engine_storage import DEFAULT_JSON_STORE
 
 CONFIG_DIR = ".loopforge"
 CONFIG_FILE = "config.json"
@@ -106,6 +109,7 @@ NATIVE_RUN_FILES = (
     "run.json",
     "task.md",
     "loop.md",
+    "research.md",
     "plan.md",
     "progress.md",
     "verification.md",
@@ -148,6 +152,52 @@ DEFAULT_ALLOWED_TOOLS = (
     "Write bounded changes inside the target workspace.",
     "Run local deterministic verification commands.",
 )
+
+WORKFLOW_STAGES = (
+    "task",
+    "research",
+    "plan",
+    "implementation",
+    "verification",
+    "review",
+    "publication",
+)
+
+DEFAULT_CURRENT_STAGE = "task_draft"
+TASK_APPROVED_STAGE = "task_approved"
+RESEARCH_READY_STAGE = "research_ready"
+PLAN_READY_STAGE = "plan_ready"
+IMPLEMENTATION_READY_STAGE = "implementation_ready"
+VERIFICATION_READY_STAGE = "verification_ready"
+REVIEW_READY_STAGE = "review_ready"
+PUBLICATION_READY_STAGE = "draft_publication_ready"
+
+READONLY_WORKFLOW_STAGES = ("research", "plan")
+
+REQUIRED_READONLY_STAGE_SECTIONS = {
+    "research": (
+        "Scope",
+        "Current State",
+        "Evidence",
+        "Risks And Unknowns",
+        "Rejected Approaches",
+        "Suggested Verification",
+    ),
+    "plan": (
+        "Overview",
+        "Preconditions",
+        "Implementation Steps",
+        "Files In Scope",
+        "Out Of Scope",
+        "Verification",
+        "Stop Conditions",
+    ),
+}
+
+READONLY_STAGE_SUCCESS = {
+    "research": ("complete", RESEARCH_READY_STAGE),
+    "plan": ("awaiting_approval", PLAN_READY_STAGE),
+}
 
 SUBJECTIVE_TASK_MARKERS = (
     "better",
@@ -406,6 +456,18 @@ class ContinueResult:
 
 
 @dataclass(frozen=True)
+class StageResult:
+    project_dir: Path
+    run_dir: Path | None
+    run: dict[str, Any] | None
+    stage: str | None
+    ok: bool
+    message: str
+    blockers: list[str]
+    artifact_path: Path | None = None
+
+
+@dataclass(frozen=True)
 class VerifyResult:
     project_dir: Path
     run_dir: Path | None
@@ -593,36 +655,189 @@ def default_workspace_root(project_dir: Path, home: Path | None = None) -> Path:
 
 
 def read_json(path: Path) -> dict[str, Any]:
-    with path.open("r", encoding="utf-8") as handle:
-        data = json.load(handle)
-    if not isinstance(data, dict):
-        raise ValueError(f"{path} must contain a JSON object")
-    return data
+    return DEFAULT_JSON_STORE.read_object(path)
 
 
 def write_json_atomic(path: Path, data: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_name: str | None = None
-    try:
-        with NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            dir=path.parent,
-            prefix=f".{path.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as handle:
-            temp_name = handle.name
-            json.dump(data, handle, indent=2, sort_keys=True)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temp_name, path)
-    finally:
-        if temp_name is not None:
-            temp_path = Path(temp_name)
-            if temp_path.exists():
-                temp_path.unlink()
+    DEFAULT_JSON_STORE.write_object(path, data)
+
+
+def initial_workflow_state() -> dict[str, Any]:
+    stage_statuses = {stage: "pending" for stage in WORKFLOW_STAGES}
+    stage_statuses["task"] = "draft"
+    return {
+        "current_stage": DEFAULT_CURRENT_STAGE,
+        "stage_statuses": stage_statuses,
+        "approval": {
+            "approved": False,
+            "source": "none",
+            "approved_at": None,
+        },
+        "risk": {
+            "level": "unknown",
+            "route": "unknown",
+            "reasons": [],
+        },
+        "human_gates": {
+            "initial_task_approval": {
+                "required": True,
+                "status": "pending",
+            },
+            "plan_approval": {
+                "required": True,
+                "status": "pending",
+            },
+            "review_approval": {
+                "required": True,
+                "status": "pending",
+            },
+        },
+        "publish_eligibility": {
+            "eligible": False,
+            "reasons": ["workflow has not reached publication"],
+        },
+    }
+
+
+def normalize_run_workflow_state(run: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(run)
+    defaults = initial_workflow_state()
+
+    current_stage = normalized.get("current_stage")
+    if not isinstance(current_stage, str) or not current_stage.strip():
+        normalized["current_stage"] = defaults["current_stage"]
+
+    stage_statuses = normalized.get("stage_statuses")
+    if not isinstance(stage_statuses, dict):
+        stage_statuses = {}
+    normalized["stage_statuses"] = {
+        **defaults["stage_statuses"],
+        **{str(key): value for key, value in stage_statuses.items()},
+    }
+
+    for key in ("approval", "risk", "human_gates", "publish_eligibility"):
+        value = normalized.get(key)
+        if isinstance(value, dict):
+            normalized[key] = {**defaults[key], **value}
+        else:
+            normalized[key] = defaults[key]
+
+    reasons = normalized["risk"].get("reasons")
+    if not isinstance(reasons, list):
+        normalized["risk"]["reasons"] = []
+    publish_reasons = normalized["publish_eligibility"].get("reasons")
+    if not isinstance(publish_reasons, list):
+        normalized["publish_eligibility"]["reasons"] = defaults["publish_eligibility"][
+            "reasons"
+        ]
+    return normalized
+
+
+def apply_initial_task_approval(
+    run: dict[str, Any],
+    *,
+    approved: bool,
+    source: str = "none",
+    approved_at: str | None = None,
+) -> dict[str, Any]:
+    normalized = normalize_run_workflow_state(run)
+    clean_source = source.strip() if isinstance(source, str) else ""
+    if approved:
+        normalized["current_stage"] = TASK_APPROVED_STAGE
+        normalized["stage_statuses"]["task"] = "approved"
+        normalized["approval"] = {
+            "approved": True,
+            "source": clean_source or "local",
+            "approved_at": approved_at or utc_now(),
+        }
+        normalized["human_gates"]["initial_task_approval"] = {
+            **initial_workflow_state()["human_gates"]["initial_task_approval"],
+            "status": "approved",
+        }
+        return normalized
+
+    normalized["current_stage"] = DEFAULT_CURRENT_STAGE
+    normalized["stage_statuses"]["task"] = "draft"
+    normalized["approval"] = {
+        "approved": False,
+        "source": clean_source or "none",
+        "approved_at": None,
+    }
+    normalized["human_gates"]["initial_task_approval"] = {
+        **initial_workflow_state()["human_gates"]["initial_task_approval"],
+        "status": "pending",
+    }
+    return normalized
+
+
+def apply_plan_approval(
+    run: dict[str, Any],
+    *,
+    source: str = "local",
+    approved_at: str | None = None,
+) -> dict[str, Any]:
+    normalized = normalize_run_workflow_state(run)
+    clean_source = source.strip() if isinstance(source, str) else ""
+    normalized["current_stage"] = IMPLEMENTATION_READY_STAGE
+    normalized["stage_statuses"]["plan"] = "approved"
+    normalized["human_gates"]["plan_approval"] = {
+        **initial_workflow_state()["human_gates"]["plan_approval"],
+        "status": "approved",
+        "source": clean_source or "local",
+        "approved_at": approved_at or utc_now(),
+    }
+    normalized["blockers"] = []
+    return normalized
+
+
+def apply_review_approval(
+    run: dict[str, Any],
+    *,
+    source: str = "local",
+    approved_at: str | None = None,
+) -> dict[str, Any]:
+    normalized = normalize_run_workflow_state(run)
+    clean_source = source.strip() if isinstance(source, str) else ""
+    normalized["current_stage"] = REVIEW_READY_STAGE
+    normalized["stage_statuses"]["review"] = "approved"
+    normalized["human_gates"]["review_approval"] = {
+        **initial_workflow_state()["human_gates"]["review_approval"],
+        "status": "approved",
+        "source": clean_source or "local",
+        "approved_at": approved_at or utc_now(),
+    }
+    normalized["publish_eligibility"] = {
+        "eligible": True,
+        "mode": "draft",
+        "reasons": ["verified work has explicit review approval"],
+    }
+    normalized["blockers"] = []
+    return normalized
+
+
+def apply_draft_publication_prepared(
+    run: dict[str, Any],
+    *,
+    artifact_path: str,
+) -> dict[str, Any]:
+    normalized = normalize_run_workflow_state(run)
+    normalized["current_stage"] = PUBLICATION_READY_STAGE
+    normalized["stage_statuses"]["publication"] = "draft_prepared"
+    normalized["publication"] = {
+        "status": "draft_prepared",
+        "mode": "draft",
+        "artifact_path": artifact_path,
+        "network": {"performed": False},
+    }
+    normalized["publish_eligibility"] = {
+        "eligible": True,
+        "mode": "draft",
+        "status": "prepared",
+        "reasons": ["draft PR artifact prepared after explicit review approval"],
+        "artifact": artifact_path,
+    }
+    normalized["blockers"] = []
+    return normalized
 
 
 def ensure_templates(project_dir: Path) -> None:
@@ -739,186 +954,69 @@ def default_risk_policy() -> Path:
     return repository_root() / ".agent" / "policies" / "risk-rules.json"
 
 
+def _pack_registry(project_dir: Path) -> PackRegistry:
+    return PackRegistry(
+        project_dir,
+        bundled_root=repository_root(),
+        store=DEFAULT_JSON_STORE,
+        config_dir=CONFIG_DIR,
+        default_pack=DEFAULT_PACK,
+    )
+
+
 def pack_roots(project_dir: Path) -> list[Path]:
-    return [
-        project_dir / CONFIG_DIR / "packs",
-        repository_root() / CONFIG_DIR / "packs",
-    ]
+    return _pack_registry(project_dir).roots()
 
 
 def pack_file_candidates(project_dir: Path, pack: str, file_name: str) -> list[Path]:
-    return [
-        project_dir / CONFIG_DIR / "packs" / pack / file_name,
-        project_dir / CONFIG_DIR / "packs" / f"{pack}.{file_name}",
-        repository_root() / CONFIG_DIR / "packs" / pack / file_name,
-        repository_root() / CONFIG_DIR / "packs" / f"{pack}.{file_name}",
-    ]
+    return _pack_registry(project_dir).file_candidates(pack, file_name)
 
 
 def normalize_unique_strings(values: list[str]) -> list[str]:
-    normalized: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        stripped = value.strip()
-        if not stripped or stripped in seen:
-            continue
-        seen.add(stripped)
-        normalized.append(stripped)
-    return normalized
+    return PackRegistry.normalize_unique_strings(values)
 
 
 def discover_pack_contracts(project_dir: Path) -> list[dict[str, Any]]:
-    contracts_by_name: dict[str, dict[str, Any]] = {}
-    for root in reversed(pack_roots(project_dir)):
-        if not root.exists():
-            continue
-        for path in sorted(root.glob("*/pack.json")):
-            try:
-                contract = load_pack_contract_from_path(path)
-            except (OSError, ValueError, json.JSONDecodeError):
-                continue
-            contracts_by_name[str(contract["name"])] = contract
-    return sorted(contracts_by_name.values(), key=lambda item: str(item["name"]))
+    return _pack_registry(project_dir).discover_contracts()
 
 
 def load_pack_contract_from_path(path: Path) -> dict[str, Any]:
-    data = read_json(path)
-    name = str(data.get("name") or path.parent.name).strip()
-    if not name:
-        raise ValueError(f"{path} must define a pack name")
-    version = data.get("version", 1)
-    if not isinstance(version, int) or isinstance(version, bool) or version < 1:
-        raise ValueError(f"{path} version must be a positive integer")
-    detection = data.get("detection", {})
-    if not isinstance(detection, dict):
-        raise ValueError(f"{path} detection must be an object")
-    skills = data.get("skills", [])
-    if not isinstance(skills, list) or not all(isinstance(skill, str) for skill in skills):
-        raise ValueError(f"{path} skills must be a list of strings")
-    priority = data.get("priority", 0)
-    if not isinstance(priority, int) or isinstance(priority, bool):
-        raise ValueError(f"{path} priority must be an integer")
-    return {
-        "name": name,
-        "version": version,
-        "description": str(data.get("description") or "").strip(),
-        "priority": priority,
-        "source": str(path),
-        "root": str(path.parent),
-        "detection": detection,
-        "skills": normalize_unique_strings(skills),
-        "skill_file": str(path.parent / str(data.get("skill_file") or "SKILL.md")),
-        "checks_file": str(path.parent / str(data.get("checks_file") or "checks.json")),
-        "protected_paths_file": str(
-            path.parent / str(data.get("protected_paths_file") or "protected-paths.json")
-        ),
-        "memory_rules_file": str(
-            path.parent / str(data.get("memory_rules_file") or "memory-rules.md")
-        ),
-        "memory": data.get("memory", {}) if isinstance(data.get("memory", {}), dict) else {},
-    }
+    registry = PackRegistry(
+        path.parent,
+        bundled_root=repository_root(),
+        store=DEFAULT_JSON_STORE,
+        config_dir=CONFIG_DIR,
+        default_pack=DEFAULT_PACK,
+    )
+    return registry.load_contract_from_path(path)
 
 
 def load_pack_contract(project_dir: Path, pack: str) -> dict[str, Any]:
-    for path in pack_file_candidates(project_dir, pack, "pack.json"):
-        if path.exists():
-            return load_pack_contract_from_path(path)
-    raise ValueError(f"project pack not found: {pack}")
+    return _pack_registry(project_dir).load_contract(pack)
 
 
 def detection_string_list(detection: dict[str, Any], key: str) -> list[str]:
-    value = detection.get(key, [])
-    if isinstance(value, str):
-        return [value]
-    if not isinstance(value, list):
-        return []
-    return [item for item in value if isinstance(item, str) and item.strip()]
+    return PackRegistry.detection_string_list(detection, key)
 
 
 def project_path_exists(project_dir: Path, relative_name: str) -> bool:
-    candidate = project_dir / relative_name
-    return candidate.exists()
+    return _pack_registry(project_dir).project_path_exists(relative_name)
 
 
 def project_glob_matches(project_dir: Path, pattern: str) -> bool:
-    if not any(character in pattern for character in "*?["):
-        return project_path_exists(project_dir, pattern)
-    try:
-        return any(path.exists() for path in project_dir.glob(pattern))
-    except ValueError:
-        return False
+    return _pack_registry(project_dir).project_glob_matches(pattern)
 
 
 def pack_detection_score(project_dir: Path, contract: dict[str, Any]) -> int:
-    detection = contract.get("detection", {})
-    if not isinstance(detection, dict):
-        return 0
-    all_files = detection_string_list(detection, "all_files")
-    if all_files and not all(project_path_exists(project_dir, name) for name in all_files):
-        return 0
-    all_dirs = detection_string_list(detection, "all_dirs")
-    if all_dirs and not all((project_dir / name).is_dir() for name in all_dirs):
-        return 0
-
-    score = 0
-    files_any = detection_string_list(detection, "files_any")
-    dirs_any = detection_string_list(detection, "dirs_any")
-    paths_any = detection_string_list(detection, "paths_any")
-    score += sum(20 for name in files_any if project_path_exists(project_dir, name))
-    score += sum(20 for name in dirs_any if (project_dir / name).is_dir())
-    score += sum(10 for pattern in paths_any if project_glob_matches(project_dir, pattern))
-    if score <= 0:
-        return 0
-    score += int(contract.get("priority", 0))
-    return score
+    return _pack_registry(project_dir).detection_score(contract)
 
 
 def detect_project_pack(project_dir: Path) -> dict[str, Any]:
-    contracts = discover_pack_contracts(project_dir)
-    best: tuple[int, dict[str, Any]] | None = None
-    for contract in contracts:
-        if contract["name"] == DEFAULT_PACK:
-            continue
-        score = pack_detection_score(project_dir, contract)
-        if score <= 0:
-            continue
-        if best is None or score > best[0]:
-            best = (score, contract)
-    if best is not None:
-        detected = dict(best[1])
-        detected["detection_score"] = best[0]
-        detected["detected"] = True
-        return detected
-    try:
-        fallback = load_pack_contract(project_dir, DEFAULT_PACK)
-    except ValueError:
-        fallback = {
-            "name": DEFAULT_PACK,
-            "version": 1,
-            "description": "Fallback generic code pack.",
-            "priority": 0,
-            "source": None,
-            "root": None,
-            "detection": {},
-            "skills": [],
-            "skill_file": None,
-            "checks_file": None,
-            "protected_paths_file": None,
-            "memory_rules_file": None,
-            "memory": {},
-        }
-    fallback["detection_score"] = 0
-    fallback["detected"] = True
-    return fallback
+    return _pack_registry(project_dir).detect()
 
 
 def pack_skill_entries(contract: dict[str, Any]) -> list[str]:
-    skills = contract.get("skills", [])
-    values = skills if isinstance(skills, list) else []
-    skill_file = contract.get("skill_file")
-    if isinstance(skill_file, str) and Path(skill_file).exists():
-        values = [*values, f"pack:{contract['name']}:SKILL.md"]
-    return normalize_unique_strings([str(value) for value in values])
+    return _pack_registry(repository_root()).skill_entries(contract)
 
 
 def isolated_process_module() -> Any:
@@ -2414,7 +2512,7 @@ def current_status(project_dir: Path) -> StatusResult:
             blockers=[f"current run metadata not found: {run_json_path}"],
         )
 
-    run = read_json(run_json_path)
+    run = normalize_run_workflow_state(read_json(run_json_path))
     raw_blockers = run.get("blockers", [])
     blockers = [str(blocker) for blocker in raw_blockers] if isinstance(raw_blockers, list) else []
     contract = loop_contract_state(run_dir / "loop.md")
@@ -3161,145 +3259,32 @@ def record_run_metrics(
     )
 
 
+def _metrics_service() -> MetricsService:
+    return MetricsService(DEFAULT_JSON_STORE, record_file=METRICS_RECORD_FILE)
+
+
 def metric_number(value: object) -> int | float | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)) and value >= 0:
-        return value
-    return None
+    return MetricsService.metric_number(value)
 
 
 def summarize_number_series(records: list[dict[str, Any]], values: list[object]) -> dict[str, Any]:
-    known = [number for number in (metric_number(value) for value in values) if number is not None]
-    total = sum(known) if known else None
-    return {
-        "known_count": len(known),
-        "unknown_count": len(records) - len(known),
-        "min": min(known) if known else None,
-        "max": max(known) if known else None,
-        "sum": total,
-        "average": (total / len(known)) if known else None,
-    }
+    return MetricsService.summarize_number_series(records, values)
 
 
 def count_values(values: list[object]) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for value in values:
-        key = str(value) if value is not None else "unknown"
-        counts[key] = counts.get(key, 0) + 1
-    return dict(sorted(counts.items()))
+    return MetricsService.count_values(values)
 
 
 def summarize_token_field(records: list[dict[str, Any]], field: str) -> dict[str, Any]:
-    return summarize_number_series(
-        records,
-        [
-            record.get("tokens", {}).get(field)
-            if isinstance(record.get("tokens"), dict)
-            else None
-            for record in records
-        ],
-    )
+    return _metrics_service().summarize_token_field(records, field)
 
 
 def summarize_costs(records: list[dict[str, Any]]) -> dict[str, Any]:
-    totals_by_currency: dict[str, int] = {}
-    known = 0
-    for record in records:
-        cost = record.get("cost")
-        if not isinstance(cost, dict):
-            continue
-        amount = nonnegative_int_or_none(cost.get("amount_microunits"))
-        currency = cost.get("currency")
-        if amount is None or not isinstance(currency, str) or not currency:
-            continue
-        known += 1
-        totals_by_currency[currency] = totals_by_currency.get(currency, 0) + amount
-    return {
-        "known_count": known,
-        "unknown_count": len(records) - known,
-        "amount_microunits_by_currency": dict(sorted(totals_by_currency.items())),
-    }
+    return _metrics_service().summarize_costs(records)
 
 
 def build_metrics_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
-    rows = []
-    for record in records:
-        timing = record.get("timing") if isinstance(record.get("timing"), dict) else {}
-        patch = record.get("patch") if isinstance(record.get("patch"), dict) else {}
-        verification = (
-            record.get("verification") if isinstance(record.get("verification"), dict) else {}
-        )
-        final = (
-            record.get("final_disposition")
-            if isinstance(record.get("final_disposition"), dict)
-            else {}
-        )
-        attempts = record.get("attempts") if isinstance(record.get("attempts"), dict) else {}
-        rows.append(
-            {
-                "run_id": record.get("run_id"),
-                "duration_seconds": timing.get("duration_seconds"),
-                "attempt_count": attempts.get("count"),
-                "patch_size_bytes": patch.get("size_bytes"),
-                "verification": verification.get("status"),
-                "final_disposition": final.get("status"),
-            }
-        )
-    return {
-        "metrics_version": 1,
-        "record_count": len(records),
-        "duration_seconds": summarize_number_series(
-            records,
-            [
-                record.get("timing", {}).get("duration_seconds")
-                if isinstance(record.get("timing"), dict)
-                else None
-                for record in records
-            ],
-        ),
-        "attempt_count": summarize_number_series(
-            records,
-            [
-                record.get("attempts", {}).get("count")
-                if isinstance(record.get("attempts"), dict)
-                else None
-                for record in records
-            ],
-        ),
-        "patch_size_bytes": summarize_number_series(
-            records,
-            [
-                record.get("patch", {}).get("size_bytes")
-                if isinstance(record.get("patch"), dict)
-                else None
-                for record in records
-            ],
-        ),
-        "tokens": {
-            "input_tokens": summarize_token_field(records, "input_tokens"),
-            "output_tokens": summarize_token_field(records, "output_tokens"),
-            "total_tokens": summarize_token_field(records, "total_tokens"),
-        },
-        "cost": summarize_costs(records),
-        "verification_results": count_values(
-            [
-                record.get("verification", {}).get("status")
-                if isinstance(record.get("verification"), dict)
-                else None
-                for record in records
-            ]
-        ),
-        "final_dispositions": count_values(
-            [
-                record.get("final_disposition", {}).get("status")
-                if isinstance(record.get("final_disposition"), dict)
-                else None
-                for record in records
-            ]
-        ),
-        "runs": rows,
-    }
+    return _metrics_service().build_summary(records)
 
 
 def summarize_run_metrics(project_dir: Path) -> MetricsSummaryResult:
@@ -3316,16 +3301,7 @@ def summarize_run_metrics(project_dir: Path) -> MetricsSummaryResult:
         )
 
     run_root = Path(str(status.config["run_root"])).expanduser()
-    records: list[dict[str, Any]] = []
-    blockers: list[str] = []
-    if run_root.exists():
-        for path in sorted(run_root.glob(f"*/metrics/{METRICS_RECORD_FILE}")):
-            try:
-                record = read_json(path)
-            except (OSError, ValueError, json.JSONDecodeError) as error:
-                blockers.append(f"could not read metrics record {path}: {error}")
-                continue
-            records.append(record)
+    records, blockers = _metrics_service().load_records(run_root)
     summary = build_metrics_summary(records)
     return MetricsSummaryResult(
         project_dir=status.project_dir,
@@ -3994,6 +3970,7 @@ def create_run(
     timeout_seconds: int = 1800,
     subjective_rubric: str = "",
     source_metadata: dict[str, Any] | None = None,
+    initial_approval: dict[str, Any] | None = None,
 ) -> RunResult:
     if not task.strip():
         raise ValueError("task must not be empty")
@@ -4085,6 +4062,7 @@ def create_run(
             "memory_rules_file": pack_contract.get("memory_rules_file"),
         },
         "status": contract_status,
+        **initial_workflow_state(),
         "created_at": now,
         "success_checks": normalized_success_checks,
         "limits": {
@@ -4111,6 +4089,7 @@ def create_run(
         "artifacts": {
             "task": str(run_dir / "task.md"),
             "loop": str(run_dir / "loop.md"),
+            "research": str(run_dir / "research.md"),
             "plan": str(run_dir / "plan.md"),
             "progress": str(run_dir / "progress.md"),
             "verification": str(run_dir / "verification.md"),
@@ -4133,6 +4112,23 @@ def create_run(
     }
     if source_metadata:
         run_data["evidence"] = {"source": source_metadata}
+    if isinstance(initial_approval, dict):
+        run_data = apply_initial_task_approval(
+            run_data,
+            approved=bool(initial_approval.get("approved")),
+            source=str(initial_approval.get("source") or "none"),
+            approved_at=(
+                str(initial_approval.get("approved_at"))
+                if initial_approval.get("approved_at")
+                else None
+            ),
+        )
+    else:
+        run_data = apply_initial_task_approval(
+            run_data,
+            approved=False,
+            source="none",
+        )
 
     write_json_atomic(run_dir / "run.json", run_data)
     (run_dir / "task.md").write_text(f"# Task\n\n{task.strip()}\n", encoding="utf-8")
@@ -4152,6 +4148,10 @@ def create_run(
             subjective=subjective,
             subjective_rubric=normalized_rubric,
         ),
+        encoding="utf-8",
+    )
+    (run_dir / "research.md").write_text(
+        "# Research\n\nNo research recorded yet.\n",
         encoding="utf-8",
     )
     (run_dir / "plan.md").write_text("# Plan\n\nNo plan recorded yet.\n", encoding="utf-8")
@@ -4458,6 +4458,670 @@ def git_status_entries(project_dir: Path) -> list[str] | None:
     if result.returncode != 0:
         return None
     return [line for line in result.stdout.splitlines() if line.strip()]
+
+
+def next_readonly_stage(run: dict[str, Any]) -> str | None:
+    normalized = normalize_run_workflow_state(run)
+    approval = normalized.get("approval", {})
+    approved = bool(approval.get("approved")) if isinstance(approval, dict) else False
+    if not approved:
+        return None
+    statuses = normalized.get("stage_statuses", {})
+    if not isinstance(statuses, dict):
+        return None
+    if statuses.get("task") != "approved":
+        return None
+    if statuses.get("research") != "complete":
+        return "research"
+    if statuses.get("plan") not in {"awaiting_approval", "approved", "complete"}:
+        return "plan"
+    return None
+
+
+def readonly_stage_prerequisite_blockers(run: dict[str, Any], stage: str) -> list[str]:
+    normalized = normalize_run_workflow_state(run)
+    statuses = normalized.get("stage_statuses", {})
+    if not isinstance(statuses, dict):
+        statuses = {}
+    approval = normalized.get("approval", {})
+    approved = bool(approval.get("approved")) if isinstance(approval, dict) else False
+    blockers: list[str] = []
+    task_approved = statuses.get("task") == "approved"
+    if stage == "research" and (not approved or not task_approved):
+        blockers.append("research requires an approved task before adapter execution.")
+    if stage == "plan":
+        if not approved or not task_approved:
+            blockers.append("plan requires an approved task before adapter execution.")
+        if statuses.get("research") != "complete":
+            blockers.append("plan requires completed research before adapter execution.")
+    if stage not in READONLY_WORKFLOW_STAGES:
+        blockers.append(f"unsupported read-only stage: {stage}")
+    return blockers
+
+
+def render_stage_prompt(
+    *,
+    stage: str,
+    run: dict[str, Any],
+    run_dir: Path,
+    workspace_dir: Path,
+    adapter: str,
+) -> str:
+    artifact = f"{stage}.md"
+    sections = REQUIRED_READONLY_STAGE_SECTIONS.get(stage, ())
+    lines = [
+        f"# LoopForge {stage.title()} Stage",
+        "",
+        "Produce only the requested portable Markdown artifact on stdout.",
+        "Do not modify the workspace. Read project files and run artifacts only.",
+        "",
+        "## Paths",
+        "",
+        f"- Run directory: {run_dir}",
+        f"- Workspace directory: {workspace_dir}",
+        f"- Artifact: {artifact}",
+        f"- Adapter: {adapter}",
+        "",
+        "## Objective",
+        "",
+        str(run.get("task") or "").strip(),
+        "",
+        "## Required Artifact",
+        "",
+        "- YAML frontmatter with artifact_version, artifact, issue, base_commit, and status.",
+        f"- artifact: {stage}",
+        f"- status: {READONLY_STAGE_SUCCESS[stage][0]}",
+        "",
+        "## Required Sections",
+        "",
+    ]
+    lines.extend(f"- {section}" for section in sections)
+    lines.append("")
+    return "\n".join(lines)
+
+
+def validate_readonly_stage_artifact(stage: str, markdown: str) -> list[str]:
+    blockers: list[str] = []
+    lines = markdown.splitlines()
+    if len(lines) < 3 or lines[0].strip() != "---" or "---" not in [
+        line.strip() for line in lines[1:]
+    ]:
+        blockers.append(f"{stage}.md must start with YAML frontmatter.")
+        return blockers
+    frontmatter = parse_frontmatter(markdown)
+    if frontmatter.get("artifact") != stage:
+        blockers.append(f"{stage}.md frontmatter must include artifact: {stage}.")
+    if not frontmatter.get("artifact_version"):
+        blockers.append(f"{stage}.md frontmatter must include artifact_version.")
+    if not frontmatter.get("issue"):
+        blockers.append(f"{stage}.md frontmatter must include issue.")
+    if not frontmatter.get("base_commit"):
+        blockers.append(f"{stage}.md frontmatter must include base_commit.")
+    expected_status = READONLY_STAGE_SUCCESS[stage][0]
+    if frontmatter.get("status") != expected_status:
+        blockers.append(f"{stage}.md frontmatter must include status: {expected_status}.")
+    sections = markdown_sections(markdown)
+    missing_sections = [
+        section
+        for section in REQUIRED_READONLY_STAGE_SECTIONS[stage]
+        if not section_text(sections, section)
+    ]
+    if missing_sections:
+        blockers.append(
+            f"{stage}.md is missing required sections: {', '.join(missing_sections)}."
+        )
+    return blockers
+
+
+def readonly_worktree_changes(
+    *,
+    before_snapshot: dict[str, tuple[int, int]],
+    before_git: list[str] | None,
+    after_snapshot: dict[str, tuple[int, int]],
+    after_git: list[str] | None,
+) -> list[str]:
+    snapshot_changes = workspace_snapshot_changes(before_snapshot, after_snapshot)
+    if before_git is not None and after_git is not None and before_git != after_git:
+        return after_git or snapshot_changes or ["git status changed"]
+    return snapshot_changes
+
+
+def update_run_for_stage_blocker(
+    *,
+    run_json_path: Path,
+    run: dict[str, Any],
+    stage: str,
+    blockers: list[str],
+) -> dict[str, Any]:
+    updated = normalize_run_workflow_state(run)
+    updated["stage_statuses"][stage] = "blocked"
+    updated["blockers"] = blockers
+    updated["updated_at"] = utc_now()
+    write_json_atomic(run_json_path, updated)
+    return updated
+
+
+def approve_plan(
+    project_dir: Path,
+    *,
+    source: str = "local",
+) -> StageResult:
+    status = current_status(project_dir)
+    if not status.initialized:
+        return StageResult(
+            project_dir=status.project_dir,
+            run_dir=None,
+            run=None,
+            stage="plan_approval",
+            ok=False,
+            message="Initialize LoopForge before approving a plan.",
+            blockers=[status.next_step],
+        )
+    if status.run is None or status.run_dir is None:
+        return StageResult(
+            project_dir=status.project_dir,
+            run_dir=status.run_dir,
+            run=None,
+            stage="plan_approval",
+            ok=False,
+            message="No current run is ready for plan approval.",
+            blockers=status.blockers or [status.next_step],
+        )
+
+    run = normalize_run_workflow_state(status.run)
+    statuses = run.get("stage_statuses", {})
+    if not isinstance(statuses, dict):
+        statuses = {}
+    blockers: list[str] = []
+    if statuses.get("plan") != "awaiting_approval":
+        blockers.append("plan approval requires a plan awaiting approval.")
+    plan_path = status.run_dir / "plan.md"
+    if not plan_path.exists():
+        blockers.append("plan approval requires plan.md in the run directory.")
+    if blockers:
+        return StageResult(
+            project_dir=status.project_dir,
+            run_dir=status.run_dir,
+            run=run,
+            stage="plan_approval",
+            ok=False,
+            message="LoopForge plan approval is blocked.",
+            blockers=blockers,
+            artifact_path=plan_path if plan_path.exists() else None,
+        )
+
+    updated = apply_plan_approval(run, source=source)
+    updated["updated_at"] = utc_now()
+    write_json_atomic(status.run_json_path or (status.run_dir / "run.json"), updated)
+    return StageResult(
+        project_dir=status.project_dir,
+        run_dir=status.run_dir,
+        run=updated,
+        stage="plan_approval",
+        ok=True,
+        message="LoopForge plan approved; implementation is ready.",
+        blockers=[],
+        artifact_path=plan_path,
+    )
+
+
+def approve_review(
+    project_dir: Path,
+    *,
+    source: str = "local",
+) -> StageResult:
+    status = current_status(project_dir)
+    if not status.initialized:
+        return StageResult(
+            project_dir=status.project_dir,
+            run_dir=None,
+            run=None,
+            stage="review_approval",
+            ok=False,
+            message="Initialize LoopForge before approving a review.",
+            blockers=[status.next_step],
+        )
+    if status.run is None or status.run_dir is None:
+        return StageResult(
+            project_dir=status.project_dir,
+            run_dir=status.run_dir,
+            run=None,
+            stage="review_approval",
+            ok=False,
+            message="No current run is ready for review approval.",
+            blockers=status.blockers or [status.next_step],
+        )
+
+    run = normalize_run_workflow_state(status.run)
+    statuses = run.get("stage_statuses", {})
+    if not isinstance(statuses, dict):
+        statuses = {}
+    blockers: list[str] = []
+    if statuses.get("verification") != "complete":
+        blockers.append("review approval requires completed deterministic verification.")
+    if statuses.get("review") in {"approved", "complete"}:
+        blockers.append("review approval has already been recorded.")
+    verification_path = status.run_dir / "verification.md"
+    if not verification_path.exists():
+        blockers.append("review approval requires verification.md in the run directory.")
+    if blockers:
+        return StageResult(
+            project_dir=status.project_dir,
+            run_dir=status.run_dir,
+            run=run,
+            stage="review_approval",
+            ok=False,
+            message="LoopForge review approval is blocked.",
+            blockers=blockers,
+            artifact_path=verification_path if verification_path.exists() else None,
+        )
+
+    updated = apply_review_approval(run, source=source)
+    updated["updated_at"] = utc_now()
+    write_json_atomic(status.run_json_path or (status.run_dir / "run.json"), updated)
+    return StageResult(
+        project_dir=status.project_dir,
+        run_dir=status.run_dir,
+        run=updated,
+        stage="review_approval",
+        ok=True,
+        message="LoopForge review approved; draft publication is now eligible.",
+        blockers=[],
+        artifact_path=verification_path,
+    )
+
+
+def current_git_branch(project_dir: Path) -> str:
+    result = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=project_dir,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    if result.returncode != 0:
+        return "HEAD"
+    branch = result.stdout.strip()
+    return branch or "HEAD"
+
+
+def draft_publication_body(run: dict[str, Any], verification: dict[str, Any]) -> str:
+    patch = verification.get("patch", {}) if isinstance(verification.get("patch"), dict) else {}
+    checks_passed = verification.get("checks_passed", 0)
+    checks_total = verification.get("checks_total", 0)
+    lines = [
+        f"# {run.get('task') or 'LoopForge run'}",
+        "",
+        "Draft PR prepared by LoopForge after explicit review approval.",
+        "",
+        "## Verification",
+        "",
+        f"- Status: {verification.get('status') or 'unknown'}",
+        f"- Checks: {checks_passed}/{checks_total}",
+        f"- Patch: {patch.get('path') or 'none'}",
+        f"- Patch SHA-256: {patch.get('sha256') or 'none'}",
+        "",
+        "## Publication",
+        "",
+        "- Draft: true",
+        "- Network: not performed",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def prepare_draft_publication(project_dir: Path) -> StageResult:
+    status = current_status(project_dir)
+    if not status.initialized:
+        return StageResult(
+            project_dir=status.project_dir,
+            run_dir=None,
+            run=None,
+            stage="publication",
+            ok=False,
+            message="Initialize LoopForge before preparing draft publication.",
+            blockers=[status.next_step],
+        )
+    if status.run is None or status.run_dir is None:
+        return StageResult(
+            project_dir=status.project_dir,
+            run_dir=status.run_dir,
+            run=None,
+            stage="publication",
+            ok=False,
+            message="No current run is ready for draft publication.",
+            blockers=status.blockers or [status.next_step],
+        )
+
+    run = normalize_run_workflow_state(status.run)
+    statuses = run.get("stage_statuses", {})
+    gates = run.get("human_gates", {})
+    eligibility = run.get("publish_eligibility", {})
+    verification = run.get("verification", {})
+    if not isinstance(statuses, dict):
+        statuses = {}
+    if not isinstance(gates, dict):
+        gates = {}
+    if not isinstance(eligibility, dict):
+        eligibility = {}
+    if not isinstance(verification, dict):
+        verification = {}
+    review_gate = gates.get("review_approval")
+    if not isinstance(review_gate, dict):
+        review_gate = {}
+    patch = verification.get("patch")
+    if not isinstance(patch, dict):
+        patch = {}
+
+    blockers: list[str] = []
+    if statuses.get("verification") != "complete" or verification.get("status") != "passed":
+        blockers.append("draft publication requires passed deterministic verification.")
+    if statuses.get("review") not in {"approved", "complete"} or review_gate.get("status") != "approved":
+        blockers.append("draft publication requires explicit review approval.")
+    if not bool(eligibility.get("eligible")) or eligibility.get("mode") != "draft":
+        blockers.append("draft publication requires draft publish eligibility.")
+    patch_path_value = patch.get("path")
+    patch_path = status.run_dir / str(patch_path_value) if patch_path_value else None
+    if not bool(patch.get("generated")) or patch.get("status") != "generated":
+        blockers.append("draft publication requires a generated verification patch.")
+    if patch_path is None or not patch_path.is_file():
+        blockers.append("draft publication requires a retained verification patch.")
+    if not isinstance(patch.get("sha256"), str) or not str(patch.get("sha256")).strip():
+        blockers.append("draft publication requires a verification patch sha256.")
+    base_commit = run.get("base_commit")
+    if not isinstance(base_commit, str) or not base_commit:
+        blockers.append("draft publication requires base_commit in run.json.")
+    if blockers:
+        return StageResult(
+            project_dir=status.project_dir,
+            run_dir=status.run_dir,
+            run=run,
+            stage="publication",
+            ok=False,
+            message="LoopForge draft publication is blocked.",
+            blockers=blockers,
+        )
+
+    publication_dir = status.run_dir / "artifacts" / "publication"
+    publication_dir.mkdir(parents=True, exist_ok=True)
+    artifact_path = publication_dir / "draft-pr.json"
+    relative_artifact_path = relative_to_run(status.run_dir, artifact_path)
+    run_id = str(run.get("run_id") or "run")
+    title = str(run.get("task") or "LoopForge run").strip() or "LoopForge run"
+    payload = {
+        "artifact_version": 1,
+        "artifact": "draft_pr",
+        "kind": "draft_pr_publication",
+        "draft": True,
+        "no_network": True,
+        "network": {
+            "performed": False,
+            "reason": "LoopForge prepared a deterministic local draft artifact only.",
+        },
+        "publisher": "local-draft-artifact",
+        "run_id": run_id,
+        "task": run.get("task"),
+        "title": f"LoopForge: {title}",
+        "body": draft_publication_body(run, verification),
+        "branch": f"loopforge/{run_id}",
+        "base": current_git_branch(status.project_dir),
+        "head_branch": f"loopforge/{run_id}",
+        "base_branch": current_git_branch(status.project_dir),
+        "base_commit": base_commit,
+        "patch": {
+            "path": patch.get("path"),
+            "sha256": patch.get("sha256"),
+            "size_bytes": patch.get("size_bytes", 0),
+        },
+        "verification": {
+            "status": verification.get("status"),
+            "patch": {
+                "path": patch.get("path"),
+                "sha256": patch.get("sha256"),
+                "size_bytes": patch.get("size_bytes", 0),
+            },
+        },
+        "source": {
+            "run_id": run.get("run_id"),
+            "task": run.get("task"),
+            "review_status": review_gate.get("status"),
+            "verification_status": verification.get("status"),
+        },
+    }
+    write_json_atomic(artifact_path, payload)
+    updated = apply_draft_publication_prepared(
+        run,
+        artifact_path=relative_artifact_path,
+    )
+    updated.setdefault("artifacts", {})["draft_publication"] = str(artifact_path)
+    updated["updated_at"] = utc_now()
+    write_json_atomic(status.run_json_path or (status.run_dir / "run.json"), updated)
+    return StageResult(
+        project_dir=status.project_dir,
+        run_dir=status.run_dir,
+        run=updated,
+        stage="publication",
+        ok=True,
+        message="LoopForge draft PR artifact prepared without network publication.",
+        blockers=[],
+        artifact_path=artifact_path,
+    )
+
+
+def execute_readonly_stage(
+    project_dir: Path,
+    *,
+    stage: str,
+    adapter: str,
+    adapter_args: list[str] | None = None,
+) -> StageResult:
+    status = current_status(project_dir)
+    if not status.initialized:
+        return StageResult(
+            project_dir=status.project_dir,
+            run_dir=None,
+            run=None,
+            stage=stage,
+            ok=False,
+            message="Initialize LoopForge before running a read-only stage.",
+            blockers=[status.next_step],
+        )
+    if status.run is None or status.run_dir is None:
+        return StageResult(
+            project_dir=status.project_dir,
+            run_dir=status.run_dir,
+            run=None,
+            stage=stage,
+            ok=False,
+            message="No current run is ready for a read-only stage.",
+            blockers=status.blockers or [status.next_step],
+        )
+    run = normalize_run_workflow_state(status.run)
+    run_json_path = status.run_json_path or (status.run_dir / "run.json")
+    blockers = readonly_stage_prerequisite_blockers(run, stage)
+    if blockers:
+        updated = update_run_for_stage_blocker(
+            run_json_path=run_json_path,
+            run=run,
+            stage=stage,
+            blockers=blockers,
+        )
+        return StageResult(
+            project_dir=status.project_dir,
+            run_dir=status.run_dir,
+            run=updated,
+            stage=stage,
+            ok=False,
+            message=f"LoopForge {stage} stage is blocked.",
+            blockers=blockers,
+        )
+    available_stage = next_readonly_stage(run)
+    if available_stage != stage:
+        blockers = [f"{stage} is not the next available read-only stage."]
+        updated = update_run_for_stage_blocker(
+            run_json_path=run_json_path,
+            run=run,
+            stage=stage,
+            blockers=blockers,
+        )
+        return StageResult(
+            project_dir=status.project_dir,
+            run_dir=status.run_dir,
+            run=updated,
+            stage=stage,
+            ok=False,
+            message=f"LoopForge {stage} stage is blocked.",
+            blockers=blockers,
+        )
+    if adapter != "local-adapter-fixture":
+        blockers = [
+            f"read-only {stage} stage does not yet support adapter `{adapter}`; "
+            "configure local-adapter-fixture for this stage."
+        ]
+        updated = update_run_for_stage_blocker(
+            run_json_path=run_json_path,
+            run=run,
+            stage=stage,
+            blockers=blockers,
+        )
+        return StageResult(
+            project_dir=status.project_dir,
+            run_dir=status.run_dir,
+            run=updated,
+            stage=stage,
+            ok=False,
+            message=f"LoopForge {stage} stage is blocked.",
+            blockers=blockers,
+        )
+    workspace_dir = run_workspace_path(run, status.project_dir)
+    if not workspace_dir.exists() or not workspace_dir.is_dir():
+        blockers = [f"run workspace is not available: {workspace_dir}"]
+        updated = update_run_for_stage_blocker(
+            run_json_path=run_json_path,
+            run=run,
+            stage=stage,
+            blockers=blockers,
+        )
+        return StageResult(
+            project_dir=status.project_dir,
+            run_dir=status.run_dir,
+            run=updated,
+            stage=stage,
+            ok=False,
+            message=f"LoopForge {stage} stage is blocked.",
+            blockers=blockers,
+        )
+
+    stage_dir = status.run_dir / "artifacts" / "stages" / stage
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    (stage_dir / "prompt.md").write_text(
+        render_stage_prompt(
+            stage=stage,
+            run=run,
+            run_dir=status.run_dir,
+            workspace_dir=workspace_dir,
+            adapter=adapter,
+        ),
+        encoding="utf-8",
+    )
+    before_snapshot = workspace_snapshot(workspace_dir)
+    before_git = git_status_entries(workspace_dir)
+    try:
+        command = command_for_adapter(adapter, adapter_args or [])
+        child, stdout, stderr = execute_fixture_command(
+            command=command,
+            project_dir=workspace_dir,
+            timeout_seconds=attempt_timeout(run, status.loop_contract or {}),
+        )
+    except (OSError, RuntimeError, ValueError) as error:
+        blockers = [f"read-only {stage} adapter execution could not start: {error}"]
+        updated = update_run_for_stage_blocker(
+            run_json_path=run_json_path,
+            run=run,
+            stage=stage,
+            blockers=blockers,
+        )
+        return StageResult(
+            project_dir=status.project_dir,
+            run_dir=status.run_dir,
+            run=updated,
+            stage=stage,
+            ok=False,
+            message=f"LoopForge {stage} stage is blocked.",
+            blockers=blockers,
+        )
+    after_snapshot = workspace_snapshot(workspace_dir)
+    after_git = git_status_entries(workspace_dir)
+    write_bytes(stage_dir / "adapter.stdout", stdout)
+    write_bytes(stage_dir / "adapter.stderr", stderr)
+    worktree_changes = readonly_worktree_changes(
+        before_snapshot=before_snapshot,
+        before_git=before_git,
+        after_snapshot=after_snapshot,
+        after_git=after_git,
+    )
+    returncode = child.get("returncode")
+    if not bool(child.get("completed")):
+        blockers = [f"read-only {stage} adapter timed out."]
+    elif returncode != 0:
+        blockers = [f"read-only {stage} adapter failed with return code {returncode}."]
+    else:
+        blockers = []
+    if worktree_changes:
+        blockers.append(
+            f"read-only {stage} stage changed the worktree: "
+            + "; ".join(worktree_changes[:10])
+        )
+    try:
+        artifact_text = stdout.decode("utf-8")
+    except UnicodeDecodeError:
+        artifact_text = ""
+        blockers.append(f"{stage}.md stdout must be valid UTF-8.")
+    if not artifact_text:
+        blockers.append(f"{stage}.md stdout was empty.")
+    if artifact_text:
+        blockers.extend(validate_readonly_stage_artifact(stage, artifact_text))
+    if blockers:
+        updated = update_run_for_stage_blocker(
+            run_json_path=run_json_path,
+            run=run,
+            stage=stage,
+            blockers=blockers,
+        )
+        return StageResult(
+            project_dir=status.project_dir,
+            run_dir=status.run_dir,
+            run=updated,
+            stage=stage,
+            ok=False,
+            message=f"LoopForge {stage} stage is blocked.",
+            blockers=blockers,
+        )
+
+    artifact_path = status.run_dir / f"{stage}.md"
+    artifact_path.write_bytes(stdout)
+    updated = normalize_run_workflow_state(run)
+    stage_status, current_stage = READONLY_STAGE_SUCCESS[stage]
+    updated["stage_statuses"][stage] = stage_status
+    updated["current_stage"] = current_stage
+    if stage == "plan":
+        updated["human_gates"]["plan_approval"] = {
+            **initial_workflow_state()["human_gates"]["plan_approval"],
+            "status": "pending",
+        }
+    updated["blockers"] = []
+    updated["updated_at"] = utc_now()
+    write_json_atomic(run_json_path, updated)
+    return StageResult(
+        project_dir=status.project_dir,
+        run_dir=status.run_dir,
+        run=updated,
+        stage=stage,
+        ok=True,
+        message=f"LoopForge {stage} stage completed.",
+        blockers=[],
+        artifact_path=artifact_path,
+    )
 
 
 def append_progress(run_dir: Path, attempt: dict[str, Any]) -> None:
@@ -4897,52 +5561,11 @@ def update_run_after_attempt(
 
 
 def pack_check_paths(project_dir: Path, pack: str) -> list[Path]:
-    return pack_file_candidates(project_dir, pack, "checks.json")
+    return _pack_registry(project_dir).check_paths(pack)
 
 
 def load_pack_checks(project_dir: Path, pack: str) -> dict[str, Any]:
-    for path in pack_check_paths(project_dir, pack):
-        if not path.exists():
-            continue
-        data = read_json(path)
-        checks = data.get("checks", [])
-        if not isinstance(checks, list):
-            raise ValueError(f"{path} must contain a checks list")
-        normalized: list[dict[str, Any]] = []
-        for index, check in enumerate(checks, start=1):
-            if not isinstance(check, dict):
-                raise ValueError(f"{path} check {index} must be an object")
-            name = str(check.get("name") or f"check-{index}").strip()
-            command = check.get("command")
-            if not isinstance(command, list) or not command or not all(
-                isinstance(part, str) and part for part in command
-            ):
-                raise ValueError(f"{path} check {name} must define a non-empty command list")
-            env = check.get("env", {})
-            if not isinstance(env, dict) or not all(
-                isinstance(key, str) and isinstance(value, str)
-                for key, value in env.items()
-            ):
-                raise ValueError(f"{path} check {name} env must be an object of strings")
-            timeout = check.get("timeout_seconds", 300)
-            if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout < 1:
-                raise ValueError(f"{path} check {name} timeout_seconds must be positive")
-            normalized.append(
-                {
-                    "name": name,
-                    "command": command,
-                    "env": env,
-                    "timeout_seconds": timeout,
-                }
-            )
-        return {
-            "source": str(path),
-            "checks": normalized,
-        }
-    return {
-        "source": None,
-        "checks": [],
-    }
+    return _pack_registry(project_dir).load_checks(pack)
 
 
 def expand_check_value(
@@ -5066,34 +5689,11 @@ def run_json_check(command: list[str], cwd: Path, timeout: int = 60) -> dict[str
 
 
 def pack_protected_path_paths(project_dir: Path, pack: str) -> list[Path]:
-    return pack_file_candidates(project_dir, pack, "protected-paths.json")
+    return _pack_registry(project_dir).protected_path_paths(pack)
 
 
 def load_pack_protected_paths(project_dir: Path, pack: str) -> dict[str, Any]:
-    for path in pack_protected_path_paths(project_dir, pack):
-        if not path.exists():
-            continue
-        data = read_json(path)
-        high = data.get("high_path_patterns", [])
-        medium = data.get("medium_path_patterns", [])
-        for field_name, value in (
-            ("high_path_patterns", high),
-            ("medium_path_patterns", medium),
-        ):
-            if not isinstance(value, list) or not all(
-                isinstance(pattern, str) for pattern in value
-            ):
-                raise ValueError(f"{path} {field_name} must be a list of strings")
-        return {
-            "source": str(path),
-            "high_path_patterns": high,
-            "medium_path_patterns": medium,
-        }
-    return {
-        "source": None,
-        "high_path_patterns": [],
-        "medium_path_patterns": [],
-    }
+    return _pack_registry(project_dir).load_protected_paths(pack)
 
 
 def merged_risk_policy_path(
@@ -5523,11 +6123,33 @@ def verify_run(project_dir: Path, *, confirmed: bool = False) -> VerifyResult:
     )
     update_loop_diagnostic(run_dir, verification)
 
-    updated_run = dict(run)
+    updated_run = normalize_run_workflow_state(run)
     updated_run["verification"] = verification
     updated_run["updated_at"] = utc_now()
     updated_run["status"] = VERIFIED if not blockers else VERIFICATION_FAILED
     updated_run["blockers"] = [] if not blockers else blockers
+    if not blockers:
+        updated_run["current_stage"] = VERIFICATION_READY_STAGE
+        updated_run["stage_statuses"]["verification"] = "complete"
+        if updated_run["stage_statuses"].get("review") not in {"approved", "complete"}:
+            updated_run["stage_statuses"]["review"] = "pending"
+            updated_run["human_gates"]["review_approval"] = {
+                **initial_workflow_state()["human_gates"]["review_approval"],
+                "status": "pending",
+            }
+            updated_run["publish_eligibility"] = {
+                "eligible": False,
+                "reasons": ["review approval is required before draft publication"],
+            }
+    else:
+        updated_run["current_stage"] = "verification_blocked"
+        updated_run["stage_statuses"]["verification"] = "blocked"
+        if updated_run["stage_statuses"].get("review") not in {"approved", "complete"}:
+            updated_run["stage_statuses"]["review"] = "pending"
+        updated_run["publish_eligibility"] = {
+            "eligible": False,
+            "reasons": ["deterministic verification is blocked"],
+        }
     write_json_atomic(run_json_path, updated_run)
 
     return VerifyResult(
@@ -5539,6 +6161,22 @@ def verify_run(project_dir: Path, *, confirmed: bool = False) -> VerifyResult:
         blockers=blockers,
         verification=verification,
     )
+
+
+def implementation_gate_blockers(run: dict[str, Any]) -> list[str]:
+    normalized = normalize_run_workflow_state(run)
+    statuses = normalized.get("stage_statuses", {})
+    gates = normalized.get("human_gates", {})
+    if not isinstance(statuses, dict):
+        statuses = {}
+    if not isinstance(gates, dict):
+        gates = {}
+    plan_gate = gates.get("plan_approval")
+    if not isinstance(plan_gate, dict):
+        plan_gate = {}
+    if statuses.get("plan") == "approved" and plan_gate.get("status") == "approved":
+        return []
+    return ["implementation requires an approved plan before adapter execution."]
 
 
 def continue_run(
@@ -5573,6 +6211,8 @@ def continue_run(
     contract = status.loop_contract or loop_contract_state(status.run_dir / "loop.md")
     run_status = str(status.run.get("status") or "")
     blockers = [] if run_status == ADAPTER_BLOCKED else list(status.blockers)
+    for blocker in implementation_gate_blockers(status.run):
+        append_unique(blockers, blocker)
     if contract["status"] != "valid":
         for error in contract.get("errors", []):
             append_unique(blockers, str(error))

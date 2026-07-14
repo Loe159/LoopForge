@@ -3,6 +3,9 @@
 This plan tracks command-by-command UX and design improvements for LoopForge's
 human-facing CLI and interactive shell.
 
+For the end-to-end run lifecycle map, resume/new-run behavior, and human review
+requirements, see `docs/plans/2026-07-10-001-feat-run-guidance-map-plan.md`.
+
 ## Global Principle
 
 Every command should show three things, in this order:

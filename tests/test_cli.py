@@ -16,10 +16,15 @@ from unittest import mock
 
 from loopforge.cli import IssueReadResult, main
 from loopforge.engine import (
+    apply_initial_task_approval,
+    apply_plan_approval,
+    approve_review,
     command_for_attempt,
     current_guidance,
+    current_status,
     loopforge_home,
     platform_cache_home,
+    prepare_draft_publication,
     run_streaming_process,
     set_default_adapter,
     usable_python_executable,
@@ -61,12 +66,144 @@ def fixture_python() -> str:
     return str(executable)
 
 
+def valid_research_markdown() -> str:
+    return """---
+artifact_version: 1
+artifact: research
+issue: 1
+base_commit: 0000000000000000000000000000000000000000
+status: complete
+---
+
+# Scope
+
+Read-only repository orientation.
+
+# Current State
+
+The run is approved and ready for planning.
+
+# Evidence
+
+- task.md records the requested goal.
+
+# Risks And Unknowns
+
+- No workspace edits were made.
+
+# Rejected Approaches
+
+- Do not invent research without adapter output.
+
+# Suggested Verification
+
+- Generate a plan from this research.
+"""
+
+
+def valid_plan_markdown() -> str:
+    return """---
+artifact_version: 1
+artifact: plan
+issue: 1
+base_commit: 0000000000000000000000000000000000000000
+status: awaiting_approval
+---
+
+# Overview
+
+Implement the approved task after human plan approval.
+
+# Preconditions
+
+- Research is complete.
+
+# Implementation Steps
+
+- Make the smallest bounded change.
+
+# Files In Scope
+
+- src/loopforge/engine.py
+
+# Out Of Scope
+
+- Publishing and deployment.
+
+# Verification
+
+- Run the targeted tests.
+
+# Stop Conditions
+
+- Stop before approval-sensitive transitions.
+"""
+
+
 class TtyStringIO(io.StringIO):
     def isatty(self) -> bool:
         return True
 
 
 class CliTests(unittest.TestCase):
+    def initialize_git_project(self, repo: Path) -> None:
+        subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True, text=True)
+        (repo / "README.md").write_text("# Project\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=repo, check=True, capture_output=True, text=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=LoopForge Tests",
+                "-c",
+                "user.email=loopforge@example.invalid",
+                "commit",
+                "-m",
+                "initial",
+            ],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    def approve_current_run(self, repo: Path, loopforge_home: Path) -> Path:
+        config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+        run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+        run_json_path = run_dir / "run.json"
+        run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+        run_json = apply_initial_task_approval(
+            run_json,
+            approved=True,
+            source="test",
+        )
+        run_json_path.write_text(json.dumps(run_json), encoding="utf-8")
+        return run_dir
+
+    def approve_current_plan(self, run_dir: Path) -> None:
+        run_json_path = run_dir / "run.json"
+        run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+        run_json["stage_statuses"]["research"] = "complete"
+        run_json["stage_statuses"]["plan"] = "awaiting_approval"
+        run_json["current_stage"] = "plan_ready"
+        run_json["human_gates"]["plan_approval"] = {
+            "required": True,
+            "status": "pending",
+        }
+        (run_dir / "research.md").write_text(valid_research_markdown(), encoding="utf-8")
+        (run_dir / "plan.md").write_text(valid_plan_markdown(), encoding="utf-8")
+        run_json = apply_plan_approval(run_json, source="test")
+        run_json_path.write_text(json.dumps(run_json), encoding="utf-8")
+
+    def approve_current_run_for_implementation(
+        self,
+        repo: Path,
+        loopforge_home: Path,
+    ) -> Path:
+        run_dir = self.approve_current_run(repo, loopforge_home)
+        self.approve_current_plan(run_dir)
+        return run_dir
+
     def test_init_creates_config_and_templates_in_temp_repo(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             repo = Path(temp_dir)
@@ -203,6 +340,39 @@ class CliTests(unittest.TestCase):
             self.assertEqual(run_json["profile"], "supervised")
             self.assertEqual(run_json["pack"], "generic-code")
             self.assertEqual(run_json["status"], "loop_contract_draft")
+            self.assertEqual(run_json["current_stage"], "task_draft")
+            self.assertEqual(
+                set(run_json["stage_statuses"]),
+                {
+                    "task",
+                    "research",
+                    "plan",
+                    "implementation",
+                    "verification",
+                    "review",
+                    "publication",
+                },
+            )
+            self.assertEqual(run_json["stage_statuses"]["task"], "draft")
+            self.assertEqual(
+                run_json["approval"],
+                {"approved": False, "source": "none", "approved_at": None},
+            )
+            self.assertEqual(
+                run_json["risk"],
+                {"level": "unknown", "route": "unknown", "reasons": []},
+            )
+            self.assertEqual(
+                run_json["human_gates"]["initial_task_approval"]["status"],
+                "pending",
+            )
+            self.assertTrue(run_json["human_gates"]["initial_task_approval"]["required"])
+            self.assertEqual(run_json["human_gates"]["plan_approval"]["status"], "pending")
+            self.assertTrue(run_json["human_gates"]["plan_approval"]["required"])
+            self.assertEqual(run_json["human_gates"]["review_approval"]["status"], "pending")
+            self.assertTrue(run_json["human_gates"]["review_approval"]["required"])
+            self.assertFalse(run_json["publish_eligibility"]["eligible"])
+            self.assertTrue(run_json["publish_eligibility"]["reasons"])
             self.assertEqual(run_json["success_checks"], [])
             self.assertEqual(run_json["blockers"], [])
             self.assertEqual(run_json["loop_contract"]["status"], "loop_contract_draft")
@@ -649,6 +819,53 @@ class CliTests(unittest.TestCase):
             self.assertIn("blockers:\n- none", text)
             self.assertIn("Next", text)
 
+    def test_status_details_handles_legacy_run_without_workflow_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(main(["run", "--task", "Read old run metadata"]), 0)
+
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_json_path = loopforge_home / "runs" / repo.name / config["current_run_id"] / "run.json"
+            run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+            for key in (
+                "current_stage",
+                "stage_statuses",
+                "approval",
+                "risk",
+                "human_gates",
+                "publish_eligibility",
+            ):
+                run_json.pop(key, None)
+            run_json_path.write_text(json.dumps(run_json), encoding="utf-8")
+
+            details_output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(details_output),
+            ):
+                self.assertEqual(main(["status", "--details"]), 0)
+
+            status = current_status(repo)
+            guidance = current_guidance(repo)
+            self.assertIsNotNone(status.run)
+            assert status.run is not None
+            self.assertEqual(status.run["current_stage"], "task_draft")
+            self.assertEqual(status.run["stage_statuses"]["publication"], "pending")
+            self.assertFalse(status.run["approval"]["approved"])
+            self.assertEqual(guidance.state, "loop_contract_draft")
+            self.assertIn("workflow stage: task_draft", details_output.getvalue())
+
     def test_status_default_is_compact_and_details_hold_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)
@@ -754,7 +971,6 @@ class CliTests(unittest.TestCase):
                     [
                         "/init",
                         '/run --task "Scripted loop" --success-check "contract validates"',
-                        "/continue --check",
                         '/learn --note "Fact: this repo uses unittest"',
                     ]
                 ),
@@ -775,7 +991,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(run_json["status"], "loop_contract_ready")
             self.assertTrue((run_dir / "artifacts" / "memory" / "proposals.json").exists())
             text = output.getvalue()
-            self.assertIn("Attempt completed", text)
+            self.assertIn("Run created", text)
             self.assertIn("Memory proposals ready", text)
 
     def test_shell_verify_runs_pack_checks(self) -> None:
@@ -1000,6 +1216,50 @@ class CliTests(unittest.TestCase):
         self.assertIn("LF_HELP_TOPIC_UNKNOWN", text)
         self.assertIn("loopforge help run", text)
 
+    def test_help_describes_run_cockpit_without_workflow_flag(self) -> None:
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(main(["help"]), 0)
+        text = output.getvalue()
+        self.assertIn("run` is the cockpit", text)
+        self.assertIn("one approved stage at a time", text)
+        self.assertNotIn("--workflow", text)
+
+        run_output = io.StringIO()
+        with contextlib.redirect_stdout(run_output):
+            self.assertEqual(main(["help", "run"]), 0)
+        run_text = run_output.getvalue()
+        self.assertIn("`loopforge run` is the cockpit", run_text)
+        self.assertIn("task approval", run_text)
+        self.assertIn("read-only research", run_text)
+        self.assertIn("read-only plan", run_text)
+        self.assertIn("plan approval", run_text)
+        self.assertIn("deterministic verification", run_text)
+        self.assertIn("review approval", run_text)
+        self.assertIn("local draft PR publication artifact", run_text)
+        self.assertIn("agent:approved", run_text)
+        self.assertIn("Verification is evidence for review", run_text)
+        self.assertIn("never approves, executes, or publishes", run_text)
+        self.assertNotIn("--workflow", run_text)
+
+    def test_readme_documents_run_cockpit_workflow(self) -> None:
+        readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(
+            encoding="utf-8"
+        )
+        readme_flat = " ".join(readme.split())
+        self.assertIn("`loopforge run` is the cockpit", readme)
+        self.assertIn("task approval", readme)
+        self.assertIn("read-only research", readme)
+        self.assertIn("read-only planning", readme)
+        self.assertIn("approve the plan before implementation", readme)
+        self.assertIn("deterministic verification", readme)
+        self.assertIn("explicit review approval", readme)
+        self.assertIn("local draft PR publication artifact", readme)
+        self.assertIn("Verification produces local evidence for review", readme)
+        self.assertIn("does not authorize publication", readme)
+        self.assertIn("does not push branches, open PRs, or publish to the network", readme_flat)
+        self.assertNotIn("--workflow", readme)
+
     def test_no_input_blocks_implicit_shell(self) -> None:
         error = io.StringIO()
         with contextlib.redirect_stderr(error):
@@ -1034,6 +1294,7 @@ class CliTests(unittest.TestCase):
                     "Startup test passes",
                     "y",
                     "y",
+                    "y",
                     "n",
                 ]
             )
@@ -1051,7 +1312,792 @@ class CliTests(unittest.TestCase):
             run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
             self.assertEqual(run_json["task"], "Prompted task\n\nContext: Fails on startup")
             self.assertIn("Startup test passes", run_json["success_checks"])
+            self.assertEqual(run_json["current_stage"], "task_approved")
+            self.assertEqual(
+                run_json["approval"]["source"],
+                "local/manual",
+            )
             self.assertIn("Continue later with: loopforge continue --adapter codex", output.getvalue())
+
+    def test_run_with_active_run_interactive_can_resume_without_creating_new_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            loopforge_home = repo / "home"
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(main(["run", "--task", "First task"]), 0)
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            first_run_id = config["current_run_id"]
+
+            output = io.StringIO()
+            answers = iter(["1"])
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                mock.patch("sys.stdin", TtyStringIO()),
+                mock.patch("builtins.input", side_effect=lambda _: next(answers)),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["run"]), 0)
+
+            updated = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            self.assertEqual(updated["current_run_id"], first_run_id)
+            self.assertEqual(len(list((loopforge_home / "runs" / repo.name).iterdir())), 1)
+            text = output.getvalue()
+            self.assertIn("Active LoopForge run", text)
+            self.assertIn("Current loop", text)
+            self.assertIn(first_run_id, text)
+            self.assertIn("Next", text)
+
+    def test_run_with_active_run_no_input_reports_cockpit_text_and_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            loopforge_home = repo / "home"
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(main(["run", "--task", "First task"]), 0)
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            first_run_id = config["current_run_id"]
+
+            text_output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(text_output),
+            ):
+                self.assertEqual(main(["run", "--no-input"]), 0)
+
+            updated = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            self.assertEqual(updated["current_run_id"], first_run_id)
+            self.assertEqual(len(list((loopforge_home / "runs" / repo.name).iterdir())), 1)
+            self.assertIn("Active run found", text_output.getvalue())
+            self.assertIn(first_run_id, text_output.getvalue())
+
+            json_output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(json_output),
+            ):
+                self.assertEqual(main(["run", "--no-input", "--format", "json"]), 0)
+
+            updated = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            self.assertEqual(updated["current_run_id"], first_run_id)
+            self.assertEqual(len(list((loopforge_home / "runs" / repo.name).iterdir())), 1)
+            payload = json.loads(json_output.getvalue())
+            self.assertEqual(payload["action"], "active_run")
+            self.assertEqual(payload["status"]["config"]["current_run_id"], first_run_id)
+            self.assertEqual(payload["status"]["run"]["run_id"], first_run_id)
+            self.assertTrue(payload["guidance"]["recommended_actions"])
+
+    def test_run_cockpit_does_not_offer_research_for_unapproved_task(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            loopforge_home = repo / "home"
+            fixture_code = f"import sys; sys.stdout.write({valid_research_markdown()!r})"
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertTrue(
+                    set_default_adapter(
+                        repo,
+                        "local-adapter-fixture",
+                        [fixture_python(), "-c", fixture_code],
+                    ).ok
+                )
+                self.assertEqual(main(["run", "--task", "Needs approval first"]), 0)
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+
+            answers = iter(["1"])
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                mock.patch("sys.stdin", TtyStringIO()),
+                mock.patch("builtins.input", side_effect=lambda _: next(answers)),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["run"]), 0)
+
+            run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            self.assertEqual(run_json["stage_statuses"]["research"], "pending")
+            self.assertEqual(run_json["current_stage"], "task_draft")
+            self.assertNotEqual(
+                (run_dir / "research.md").read_text(encoding="utf-8"),
+                valid_research_markdown(),
+            )
+
+    def test_run_cockpit_executes_research_with_fixture_adapter(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            self.initialize_git_project(repo)
+            loopforge_home = workspace / "home"
+            fixture_code = f"import sys; sys.stdout.write({valid_research_markdown()!r})"
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertTrue(
+                    set_default_adapter(
+                        repo,
+                        "local-adapter-fixture",
+                        [fixture_python(), "-c", fixture_code],
+                    ).ok
+                )
+                self.assertEqual(
+                    main(["run", "--task", "Research the change", "--success-check", "Tests pass"]),
+                    0,
+                )
+            run_dir = self.approve_current_run(repo, loopforge_home)
+
+            answers = iter(["1", "y"])
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                mock.patch("sys.stdin", TtyStringIO()),
+                mock.patch("builtins.input", side_effect=lambda _: next(answers)),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["run"]), 0)
+
+            run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            workspace_dir = Path(run_json["workspace"]["path"])
+            git_status = subprocess.run(
+                ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+                cwd=workspace_dir,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+            self.assertEqual((run_dir / "research.md").read_text(encoding="utf-8"), valid_research_markdown())
+            self.assertEqual(git_status, "")
+            self.assertEqual(run_json["current_stage"], "research_ready")
+            self.assertEqual(run_json["stage_statuses"]["research"], "complete")
+            self.assertIn("Research ready", output.getvalue())
+
+    def test_run_cockpit_executes_plan_with_fixture_adapter(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            self.initialize_git_project(repo)
+            loopforge_home = workspace / "home"
+            fixture_code = f"import sys; sys.stdout.write({valid_plan_markdown()!r})"
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertTrue(
+                    set_default_adapter(
+                        repo,
+                        "local-adapter-fixture",
+                        [fixture_python(), "-c", fixture_code],
+                    ).ok
+                )
+                self.assertEqual(
+                    main(["run", "--task", "Plan the change", "--success-check", "Tests pass"]),
+                    0,
+                )
+            run_dir = self.approve_current_run(repo, loopforge_home)
+            run_json_path = run_dir / "run.json"
+            run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+            run_json["stage_statuses"]["research"] = "complete"
+            run_json["current_stage"] = "research_ready"
+            run_json_path.write_text(json.dumps(run_json), encoding="utf-8")
+            (run_dir / "research.md").write_text(valid_research_markdown(), encoding="utf-8")
+
+            answers = iter(["1", "y"])
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                mock.patch("sys.stdin", TtyStringIO()),
+                mock.patch("builtins.input", side_effect=lambda _: next(answers)),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["run"]), 0)
+
+            run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+            self.assertEqual((run_dir / "plan.md").read_text(encoding="utf-8"), valid_plan_markdown())
+            self.assertEqual(run_json["current_stage"], "plan_ready")
+            self.assertEqual(run_json["stage_statuses"]["plan"], "awaiting_approval")
+            self.assertEqual(run_json["human_gates"]["plan_approval"]["status"], "pending")
+            self.assertIn("Plan ready", output.getvalue())
+
+    def test_run_cockpit_approves_plan_for_implementation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            self.initialize_git_project(repo)
+            loopforge_home = workspace / "home"
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(["run", "--task", "Approve the plan", "--success-check", "Tests pass"]),
+                    0,
+                )
+            run_dir = self.approve_current_run(repo, loopforge_home)
+            run_json_path = run_dir / "run.json"
+            run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+            run_json["stage_statuses"]["research"] = "complete"
+            run_json["stage_statuses"]["plan"] = "awaiting_approval"
+            run_json["current_stage"] = "plan_ready"
+            run_json["human_gates"]["plan_approval"] = {
+                "required": True,
+                "status": "pending",
+            }
+            run_json_path.write_text(json.dumps(run_json), encoding="utf-8")
+            (run_dir / "plan.md").write_text(valid_plan_markdown(), encoding="utf-8")
+
+            answers = iter(["1", "y"])
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                mock.patch("sys.stdin", TtyStringIO()),
+                mock.patch("builtins.input", side_effect=lambda _: next(answers)),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["run"]), 0)
+
+            run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+            plan_gate = run_json["human_gates"]["plan_approval"]
+            self.assertEqual(run_json["current_stage"], "implementation_ready")
+            self.assertEqual(run_json["stage_statuses"]["plan"], "approved")
+            self.assertEqual(plan_gate["status"], "approved")
+            self.assertEqual(plan_gate["source"], "local")
+            self.assertTrue(plan_gate["approved_at"])
+            self.assertEqual(run_json["blockers"], [])
+            self.assertIn("Plan approved", output.getvalue())
+
+    def test_run_no_input_does_not_approve_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            self.initialize_git_project(repo)
+            loopforge_home = workspace / "home"
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(["run", "--task", "Do not approve plan", "--success-check", "Tests pass"]),
+                    0,
+                )
+            run_dir = self.approve_current_run(repo, loopforge_home)
+            run_json_path = run_dir / "run.json"
+            run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+            run_json["stage_statuses"]["research"] = "complete"
+            run_json["stage_statuses"]["plan"] = "awaiting_approval"
+            run_json["current_stage"] = "plan_ready"
+            run_json["human_gates"]["plan_approval"] = {
+                "required": True,
+                "status": "pending",
+            }
+            run_json_path.write_text(json.dumps(run_json), encoding="utf-8")
+            (run_dir / "plan.md").write_text(valid_plan_markdown(), encoding="utf-8")
+
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["run", "--no-input"]), 0)
+
+            run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+            self.assertEqual(run_json["current_stage"], "plan_ready")
+            self.assertEqual(run_json["stage_statuses"]["plan"], "awaiting_approval")
+            self.assertEqual(run_json["human_gates"]["plan_approval"]["status"], "pending")
+            self.assertIn("Active run found", output.getvalue())
+
+    def test_run_cockpit_approves_review_after_verification(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            self.initialize_git_project(repo)
+            loopforge_home = workspace / "loopforge-home"
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(
+                        [
+                            "run",
+                            "--task",
+                            "Verify then review",
+                            "--success-check",
+                            "README contains the update",
+                        ]
+                    ),
+                    0,
+                )
+                config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+                run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+                run_json_path = run_dir / "run.json"
+                run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+                workspace_dir = Path(run_json["workspace"]["path"])
+                (workspace_dir / "README.md").write_text("# Project\n\nUpdated.\n", encoding="utf-8")
+                self.assertEqual(main(["verify"]), 0)
+
+            answers = iter(["1", "y"])
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                mock.patch("sys.stdin", TtyStringIO()),
+                mock.patch("builtins.input", side_effect=lambda _: next(answers)),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["run"]), 0)
+
+            run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+            review_gate = run_json["human_gates"]["review_approval"]
+            self.assertEqual(run_json["current_stage"], "review_ready")
+            self.assertEqual(run_json["stage_statuses"]["verification"], "complete")
+            self.assertEqual(run_json["stage_statuses"]["review"], "approved")
+            self.assertEqual(review_gate["status"], "approved")
+            self.assertEqual(review_gate["source"], "local")
+            self.assertTrue(review_gate["approved_at"])
+            self.assertTrue(run_json["publish_eligibility"]["eligible"])
+            self.assertEqual(run_json["publish_eligibility"]["mode"], "draft")
+            self.assertIn("Review approved", output.getvalue())
+
+    def test_run_no_input_does_not_approve_review_after_verification(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            self.initialize_git_project(repo)
+            loopforge_home = workspace / "loopforge-home"
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(
+                        [
+                            "run",
+                            "--task",
+                            "Verify without review approval",
+                            "--success-check",
+                            "README contains the update",
+                        ]
+                    ),
+                    0,
+                )
+                config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+                run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+                run_json_path = run_dir / "run.json"
+                run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+                workspace_dir = Path(run_json["workspace"]["path"])
+                (workspace_dir / "README.md").write_text("# Project\n\nUpdated.\n", encoding="utf-8")
+                self.assertEqual(main(["verify"]), 0)
+
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["run", "--no-input"]), 0)
+
+            run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+            self.assertEqual(run_json["current_stage"], "verification_ready")
+            self.assertEqual(run_json["stage_statuses"]["verification"], "complete")
+            self.assertEqual(run_json["stage_statuses"]["review"], "pending")
+            self.assertEqual(run_json["human_gates"]["review_approval"]["status"], "pending")
+            self.assertFalse(run_json["publish_eligibility"]["eligible"])
+            self.assertIn("Active run found", output.getvalue())
+
+    def test_run_cockpit_after_review_prepares_draft_pr_publication(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            self.initialize_git_project(repo)
+            loopforge_home = workspace / "loopforge-home"
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(
+                        [
+                            "run",
+                            "--task",
+                            "Prepare a draft PR",
+                            "--success-check",
+                            "README contains the update",
+                        ]
+                    ),
+                    0,
+                )
+                config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+                run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+                run_json_path = run_dir / "run.json"
+                run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+                workspace_dir = Path(run_json["workspace"]["path"])
+                (workspace_dir / "README.md").write_text("# Project\n\nUpdated.\n", encoding="utf-8")
+                self.assertEqual(main(["verify"]), 0)
+
+            answers = iter(["1", "y"])
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                mock.patch("sys.stdin", TtyStringIO()),
+                mock.patch("builtins.input", side_effect=lambda _: next(answers)),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["run"]), 0)
+
+            answers = iter(["1", "y"])
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                mock.patch("sys.stdin", TtyStringIO()),
+                mock.patch("builtins.input", side_effect=lambda _: next(answers)),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["run"]), 0)
+
+            run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+            artifact_path = run_dir / "artifacts" / "publication" / "draft-pr.json"
+            payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+            patch = run_json["verification"]["patch"]
+            self.assertEqual(run_json["current_stage"], "draft_publication_ready")
+            self.assertEqual(run_json["stage_statuses"]["publication"], "draft_prepared")
+            self.assertEqual(run_json["publish_eligibility"]["status"], "prepared")
+            self.assertEqual(run_json["publication"]["status"], "draft_prepared")
+            self.assertEqual(run_json["blockers"], [])
+            self.assertTrue(payload["draft"])
+            self.assertTrue(payload["no_network"])
+            self.assertFalse(payload["network"]["performed"])
+            self.assertEqual(payload["publisher"], "local-draft-artifact")
+            self.assertEqual(payload["task"], "Prepare a draft PR")
+            self.assertEqual(payload["patch"]["path"], patch["path"])
+            self.assertEqual(payload["patch"]["sha256"], patch["sha256"])
+            self.assertEqual(payload["verification"]["patch"]["sha256"], patch["sha256"])
+            self.assertEqual(payload["base_commit"], run_json["base_commit"])
+            self.assertEqual(payload["branch"], f"loopforge/{run_json['run_id']}")
+            self.assertIn("Draft publication prepared", output.getvalue())
+
+    def test_run_no_input_after_review_does_not_prepare_draft_publication(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            self.initialize_git_project(repo)
+            loopforge_home = workspace / "loopforge-home"
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(
+                        [
+                            "run",
+                            "--task",
+                            "Leave draft publication unprepared",
+                            "--success-check",
+                            "README contains the update",
+                        ]
+                    ),
+                    0,
+                )
+                config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+                run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+                run_json_path = run_dir / "run.json"
+                run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+                workspace_dir = Path(run_json["workspace"]["path"])
+                (workspace_dir / "README.md").write_text("# Project\n\nUpdated.\n", encoding="utf-8")
+                self.assertEqual(main(["verify"]), 0)
+                self.assertTrue(approve_review(repo, source="test").ok)
+
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["run", "--no-input"]), 0)
+
+            run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+            artifact_path = run_dir / "artifacts" / "publication" / "draft-pr.json"
+            self.assertEqual(run_json["current_stage"], "review_ready")
+            self.assertEqual(run_json["stage_statuses"]["publication"], "pending")
+            self.assertFalse(artifact_path.exists())
+            self.assertIn("Active run found", output.getvalue())
+
+    def test_prepare_draft_publication_blocks_without_review_or_patch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            self.initialize_git_project(repo)
+            loopforge_home = workspace / "loopforge-home"
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(
+                        [
+                            "run",
+                            "--task",
+                            "Do not publish",
+                            "--success-check",
+                            "Tests pass",
+                        ]
+                    ),
+                    0,
+                )
+                result = prepare_draft_publication(repo)
+
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+            run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            self.assertFalse(result.ok)
+            self.assertTrue(any("publish eligibility" in blocker for blocker in result.blockers))
+            self.assertTrue(any("review approval" in blocker for blocker in result.blockers))
+            self.assertTrue(any("verification" in blocker for blocker in result.blockers))
+            self.assertTrue(any("patch" in blocker for blocker in result.blockers))
+            self.assertEqual(run_json["stage_statuses"]["publication"], "pending")
+            self.assertFalse((run_dir / "artifacts" / "publication" / "draft-pr.json").exists())
+
+    def test_run_cockpit_blocks_readonly_stage_when_fixture_changes_worktree(self) -> None:
+        for stage, artifact in (
+            ("research", valid_research_markdown()),
+            ("plan", valid_plan_markdown()),
+        ):
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as temp_dir:
+                workspace = Path(temp_dir)
+                repo = workspace / "project"
+                repo.mkdir()
+                self.initialize_git_project(repo)
+                loopforge_home = workspace / "home"
+                fixture_code = (
+                    "from pathlib import Path; import sys; "
+                    "Path('changed.txt').write_text('changed\\n', encoding='utf-8'); "
+                    f"sys.stdout.write({artifact!r})"
+                )
+                with (
+                    mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                    working_directory(repo),
+                    contextlib.redirect_stdout(io.StringIO()),
+                ):
+                    self.assertEqual(main(["init"]), 0)
+                    self.assertTrue(
+                        set_default_adapter(
+                            repo,
+                            "local-adapter-fixture",
+                            [fixture_python(), "-c", fixture_code],
+                        ).ok
+                    )
+                    self.assertEqual(
+                        main(["run", "--task", f"{stage} change", "--success-check", "Tests pass"]),
+                        0,
+                    )
+                run_dir = self.approve_current_run(repo, loopforge_home)
+                run_json_path = run_dir / "run.json"
+                if stage == "plan":
+                    run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+                    run_json["stage_statuses"]["research"] = "complete"
+                    run_json["current_stage"] = "research_ready"
+                    run_json_path.write_text(json.dumps(run_json), encoding="utf-8")
+                    (run_dir / "research.md").write_text(valid_research_markdown(), encoding="utf-8")
+
+                answers = iter(["1", "y"])
+                error = io.StringIO()
+                with (
+                    mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                    mock.patch("sys.stdin", TtyStringIO()),
+                    mock.patch("builtins.input", side_effect=lambda _: next(answers)),
+                    working_directory(repo),
+                    contextlib.redirect_stdout(io.StringIO()),
+                    contextlib.redirect_stderr(error),
+                ):
+                    self.assertEqual(main(["run"]), 1)
+
+                run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+                self.assertEqual(run_json["stage_statuses"][stage], "blocked")
+                self.assertIn("changed the worktree", "\n".join(run_json["blockers"]))
+                self.assertIn(f"{stage.title()} blocked", error.getvalue())
+                self.assertNotEqual(
+                    (run_dir / f"{stage}.md").read_text(encoding="utf-8"),
+                    artifact,
+                )
+
+    def test_run_cockpit_blocks_readonly_stage_with_invalid_frontmatter(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            self.initialize_git_project(repo)
+            loopforge_home = workspace / "home"
+            invalid_research = valid_research_markdown().replace(
+                "issue: 1\nbase_commit: 0000000000000000000000000000000000000000\n",
+                "",
+            )
+            fixture_code = f"import sys; sys.stdout.write({invalid_research!r})"
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertTrue(
+                    set_default_adapter(
+                        repo,
+                        "local-adapter-fixture",
+                        [fixture_python(), "-c", fixture_code],
+                    ).ok
+                )
+                self.assertEqual(
+                    main(["run", "--task", "Validate research", "--success-check", "Tests pass"]),
+                    0,
+                )
+            run_dir = self.approve_current_run(repo, loopforge_home)
+
+            answers = iter(["1", "y"])
+            error = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                mock.patch("sys.stdin", TtyStringIO()),
+                mock.patch("builtins.input", side_effect=lambda _: next(answers)),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(error),
+            ):
+                self.assertEqual(main(["run"]), 1)
+
+            run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            blockers = "\n".join(run_json["blockers"])
+            self.assertEqual(run_json["stage_statuses"]["research"], "blocked")
+            self.assertIn("frontmatter must include issue", blockers)
+            self.assertIn("frontmatter must include base_commit", blockers)
+            self.assertNotEqual(
+                (run_dir / "research.md").read_text(encoding="utf-8"),
+                invalid_research,
+            )
+            self.assertIn("Research blocked", error.getvalue())
+
+    def test_run_no_input_does_not_execute_available_readonly_stage(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            self.initialize_git_project(repo)
+            loopforge_home = workspace / "home"
+            fixture_code = f"import sys; sys.stdout.write({valid_research_markdown()!r})"
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertTrue(
+                    set_default_adapter(
+                        repo,
+                        "local-adapter-fixture",
+                        [fixture_python(), "-c", fixture_code],
+                    ).ok
+                )
+                self.assertEqual(
+                    main(["run", "--task", "Do not auto research", "--success-check", "Tests pass"]),
+                    0,
+                )
+            run_dir = self.approve_current_run(repo, loopforge_home)
+
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["run", "--no-input"]), 0)
+
+            run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            self.assertEqual(run_json["stage_statuses"]["research"], "pending")
+            self.assertNotEqual(
+                (run_dir / "research.md").read_text(encoding="utf-8"),
+                valid_research_markdown(),
+            )
+            self.assertIn("Active run found", output.getvalue())
+
+    def test_run_with_task_can_replace_active_current_run_explicitly(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            loopforge_home = repo / "home"
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(main(["run", "--task", "First task"]), 0)
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            first_run_id = config["current_run_id"]
+
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["run", "--task", "Second explicit task"]), 0)
+
+            updated = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            self.assertNotEqual(updated["current_run_id"], first_run_id)
+            self.assertEqual(len(list((loopforge_home / "runs" / repo.name).iterdir())), 2)
+            text = output.getvalue()
+            self.assertIn("Previous current run", text)
+            self.assertIn(f"Replaced {first_run_id}", text)
 
     def test_run_wizard_uses_selected_default_adapter(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1064,6 +2110,7 @@ class CliTests(unittest.TestCase):
                     "Adapter-neutral task",
                     "",
                     "Proof exists",
+                    "y",
                     "y",
                     "y",
                     "n",
@@ -1133,7 +2180,7 @@ class CliTests(unittest.TestCase):
                 "title": "Broken startup",
                 "body": "Untrusted issue text",
                 "url": "https://github.com/acme/app/issues/42",
-                "labels": [],
+                "labels": [{"name": "agent:approved"}],
             }
             with (
                 mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
@@ -1153,6 +2200,46 @@ class CliTests(unittest.TestCase):
                 "acme/app#42",
             )
             self.assertEqual(run_json["evidence"]["source"]["memory"], "not_promoted_to_durable_memory")
+            self.assertEqual(run_json["current_stage"], "task_approved")
+            self.assertEqual(
+                run_json["approval"],
+                {
+                    "approved": True,
+                    "source": "github",
+                    "approved_at": run_json["approval"]["approved_at"],
+                },
+            )
+            self.assertIsInstance(run_json["approval"]["approved_at"], str)
+            self.assertEqual(
+                run_json["human_gates"]["initial_task_approval"]["status"],
+                "approved",
+            )
+
+    def test_run_issue_without_agent_approved_label_errors_before_creating_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            loopforge_home = repo / "home"
+            issue = {
+                "number": 42,
+                "title": "Broken startup",
+                "body": "Untrusted issue text",
+                "url": "https://github.com/acme/app/issues/42",
+                "labels": [{"name": "bug"}],
+            }
+            error = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                mock.patch("loopforge.cli.github_repo_from_remote", return_value=("acme", "app")),
+                mock.patch("loopforge.cli.gh_issue_view", return_value=IssueReadResult(True, issue=issue)),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                with contextlib.redirect_stderr(error):
+                    self.assertEqual(main(["run", "42", "--no-input"]), 2)
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            self.assertIsNone(config["current_run_id"])
+            self.assertIn("LF_GITHUB_APPROVAL_REQUIRED", error.getvalue())
 
     def test_run_issue_id_without_remote_errors_non_interactively(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1170,37 +2257,24 @@ class CliTests(unittest.TestCase):
                     self.assertEqual(main(["run", "123", "--no-input"]), 2)
             self.assertIn("LF_ISSUE_SOURCE_UNRESOLVED", error.getvalue())
 
-    def test_run_issue_url_falls_back_to_manual_summary_when_gh_unavailable(self) -> None:
+    def test_run_issue_url_refuses_when_approval_cannot_be_verified(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             repo = Path(temp_dir)
             loopforge_home = repo / "home"
-            answers = iter(
-                [
-                    "Manual issue summary",
-                    "",
-                    "Regression test passes",
-                    "y",
-                    "y",
-                    "n",
-                ]
-            )
-            output = io.StringIO()
+            error = io.StringIO()
             with (
                 mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
                 mock.patch("sys.stdin", TtyStringIO()),
                 mock.patch("loopforge.cli.shutil.which", return_value=None),
-                mock.patch("builtins.input", side_effect=lambda _: next(answers)),
                 working_directory(repo),
-                contextlib.redirect_stdout(output),
+                contextlib.redirect_stdout(io.StringIO()),
             ):
                 self.assertEqual(main(["init"]), 0)
-                self.assertEqual(main(["run", "https://github.com/acme/app/issues/5"]), 0)
+                with contextlib.redirect_stderr(error):
+                    self.assertEqual(main(["run", "https://github.com/acme/app/issues/5"]), 2)
             config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
-            run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
-            run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
-            self.assertEqual(run_json["task"], "Manual issue summary")
-            self.assertEqual(run_json["evidence"]["source"]["url"], "https://github.com/acme/app/issues/5")
-            self.assertIn("GitHub issue could not be read", output.getvalue())
+            self.assertIsNone(config["current_run_id"])
+            self.assertIn("LF_GITHUB_APPROVAL_UNAVAILABLE", error.getvalue())
 
     def test_run_can_select_open_github_issue_when_provider_available(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1213,7 +2287,7 @@ class CliTests(unittest.TestCase):
                         "number": 7,
                         "title": "Open issue",
                         "url": "https://github.com/acme/app/issues/7",
-                        "labels": [],
+                        "labels": ["agent:approved"],
                     }
                 ]
             }
@@ -1318,6 +2392,7 @@ class CliTests(unittest.TestCase):
                     ),
                     0,
                 )
+                self.approve_current_run_for_implementation(repo, loopforge_home_dir)
                 self.assertEqual(
                     main(
                         [
@@ -1454,6 +2529,7 @@ class CliTests(unittest.TestCase):
                 ready = current_guidance(repo)
                 self.assertEqual(ready.state, "loop_contract_ready")
                 self.assertEqual(ready.recommended_actions[0].id, "continue")
+                self.approve_current_run_for_implementation(repo, loopforge_home)
 
                 self.assertEqual(
                     main(
@@ -1685,6 +2761,7 @@ class CliTests(unittest.TestCase):
                     ),
                     0,
                 )
+                self.approve_current_run_for_implementation(repo, loopforge_home)
                 self.assertEqual(main(["shell", "--command", "/continue"]), 0)
 
             self.assertEqual((repo / "default-adapter.txt").read_text(encoding="utf-8"), "ok\n")
@@ -1764,6 +2841,7 @@ class CliTests(unittest.TestCase):
                     main(["run", "--task", "Record raw output", "--success-check", "adapter runs"]),
                     0,
                 )
+                self.approve_current_run_for_implementation(repo, loopforge_home)
                 self.assertEqual(main(["shell", "--command", "/continue"]), 0)
                 self.assertEqual(main(["shell", "--command", "/stats"]), 0)
                 self.assertEqual(main(["shell", "--command", "/usage"]), 0)
@@ -2436,6 +3514,7 @@ class CliTests(unittest.TestCase):
                     ),
                     0,
                 )
+                self.approve_current_run_for_implementation(repo, loopforge_home)
                 self.assertEqual(main(["continue"]), 0)
 
             config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
@@ -2452,6 +3531,121 @@ class CliTests(unittest.TestCase):
             )
             self.assertIn("Contract validation", output.getvalue())
             self.assertIn("adapter   not executed", output.getvalue())
+
+    def test_continue_blocks_when_plan_is_awaiting_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+            fixture_code = (
+                "from pathlib import Path; "
+                "Path('should-not-exist.txt').write_text('changed\\n', encoding='utf-8')"
+            )
+
+            error = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(
+                        [
+                            "run",
+                            "--task",
+                            "Block implementation",
+                            "--success-check",
+                            "should-not-exist.txt exists",
+                        ]
+                    ),
+                    0,
+                )
+                run_dir = self.approve_current_run(repo, loopforge_home)
+                run_json_path = run_dir / "run.json"
+                run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+                run_json["stage_statuses"]["research"] = "complete"
+                run_json["stage_statuses"]["plan"] = "awaiting_approval"
+                run_json["current_stage"] = "plan_ready"
+                run_json["human_gates"]["plan_approval"] = {
+                    "required": True,
+                    "status": "pending",
+                }
+                run_json_path.write_text(json.dumps(run_json), encoding="utf-8")
+                (run_dir / "plan.md").write_text(valid_plan_markdown(), encoding="utf-8")
+                with contextlib.redirect_stderr(error):
+                    self.assertEqual(
+                        main(
+                            [
+                                "continue",
+                                "--adapter",
+                                "local-adapter-fixture",
+                                "--",
+                                fixture_python(),
+                                "-c",
+                                fixture_code,
+                            ]
+                        ),
+                        1,
+                    )
+
+            run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            self.assertEqual(run_json["attempt_count"], 0)
+            self.assertFalse((repo / "should-not-exist.txt").exists())
+            self.assertIn("approved plan", error.getvalue())
+
+    def test_continue_runs_when_plan_is_approved(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+            fixture_code = (
+                "from pathlib import Path; "
+                "Path('approved-plan.txt').write_text('changed\\n', encoding='utf-8')"
+            )
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(
+                        [
+                            "run",
+                            "--task",
+                            "Run approved implementation",
+                            "--success-check",
+                            "approved-plan.txt exists",
+                        ]
+                    ),
+                    0,
+                )
+                self.approve_current_run_for_implementation(repo, loopforge_home)
+                self.assertEqual(
+                    main(
+                        [
+                            "continue",
+                            "--adapter",
+                            "local-adapter-fixture",
+                            "--",
+                            fixture_python(),
+                            "-c",
+                            fixture_code,
+                        ]
+                    ),
+                    0,
+                )
+
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_dir = loopforge_home / "runs" / repo.name / config["current_run_id"]
+            run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            self.assertEqual(run_json["attempt_count"], 1)
+            self.assertEqual(run_json["stage_statuses"]["plan"], "approved")
+            self.assertTrue((repo / "approved-plan.txt").exists())
 
     def test_continue_refuses_without_success_checks(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2535,6 +3729,7 @@ class CliTests(unittest.TestCase):
                     ),
                     0,
                 )
+                self.approve_current_run_for_implementation(repo, loopforge_home)
                 self.assertEqual(main(["continue"]), 0)
 
             self.assertIn("Contract validation", output.getvalue())
@@ -2565,6 +3760,7 @@ class CliTests(unittest.TestCase):
                     ),
                     0,
                 )
+                self.approve_current_run_for_implementation(repo, loopforge_home)
                 with contextlib.redirect_stderr(error):
                     self.assertEqual(
                         main(
@@ -2616,6 +3812,7 @@ class CliTests(unittest.TestCase):
                     ),
                     0,
                 )
+                self.approve_current_run_for_implementation(repo, loopforge_home)
                 with contextlib.redirect_stderr(error):
                     self.assertEqual(
                         main(["continue", "--adapter", "local-adapter-fixture", "--", fixture_python(), "-c", "print('unused')"]),
@@ -2755,6 +3952,7 @@ class CliTests(unittest.TestCase):
                     ),
                     0,
                 )
+                self.approve_current_run_for_implementation(repo, loopforge_home)
                 self.assertEqual(
                     main(
                         [
@@ -2847,6 +4045,7 @@ class CliTests(unittest.TestCase):
                     ),
                     0,
                 )
+                self.approve_current_run_for_implementation(repo, loopforge_home)
                 self.assertEqual(
                     main(
                         [
@@ -2938,6 +4137,7 @@ class CliTests(unittest.TestCase):
                     ),
                     0,
                 )
+                self.approve_current_run_for_implementation(repo, loopforge_home)
                 with contextlib.redirect_stderr(error):
                     self.assertEqual(
                         main(
@@ -2985,6 +4185,7 @@ class CliTests(unittest.TestCase):
                     main(["run", "--task", "Retry blocked work", "--success-check", "file exists"]),
                     0,
                 )
+                self.approve_current_run_for_implementation(repo, loopforge_home)
                 self.assertEqual(
                     main(
                         [
@@ -3097,6 +4298,11 @@ class CliTests(unittest.TestCase):
             verification = run_json["verification"]
 
             self.assertEqual(run_json["status"], "verified")
+            self.assertEqual(run_json["current_stage"], "verification_ready")
+            self.assertEqual(run_json["stage_statuses"]["verification"], "complete")
+            self.assertEqual(run_json["stage_statuses"]["review"], "pending")
+            self.assertEqual(run_json["human_gates"]["review_approval"]["status"], "pending")
+            self.assertFalse(run_json["publish_eligibility"]["eligible"])
             self.assertEqual(verification["status"], "passed")
             self.assertEqual(verification["diff_policy"]["allowed"], True)
             self.assertEqual(verification["risk"]["risk"], "low")
@@ -3106,6 +4312,311 @@ class CliTests(unittest.TestCase):
             self.assertIn("Verified", output.getvalue())
             self.assertIn("status  passed", output.getvalue())
             self.assertIn("risk    low", output.getvalue())
+
+    def test_run_cockpit_approves_verified_work_for_review(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(["run", "--task", "Review verified work", "--success-check", "Tests pass"]),
+                    0,
+                )
+            run_dir = self.approve_current_run_for_implementation(repo, loopforge_home)
+            run_json_path = run_dir / "run.json"
+            run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+            run_json["status"] = "verified"
+            run_json["current_stage"] = "verification_ready"
+            run_json["stage_statuses"]["verification"] = "complete"
+            run_json["stage_statuses"]["review"] = "pending"
+            run_json["human_gates"]["review_approval"] = {
+                "required": True,
+                "status": "pending",
+            }
+            run_json["publish_eligibility"] = {
+                "eligible": False,
+                "reasons": ["review approval is required before draft publication"],
+            }
+            run_json_path.write_text(json.dumps(run_json), encoding="utf-8")
+            (run_dir / "verification.md").write_text("# Verification\n\nPassed.\n", encoding="utf-8")
+
+            answers = iter(["1", "y"])
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                mock.patch("sys.stdin", TtyStringIO()),
+                mock.patch("builtins.input", side_effect=lambda _: next(answers)),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["run"]), 0)
+
+            run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+            review_gate = run_json["human_gates"]["review_approval"]
+            self.assertEqual(run_json["current_stage"], "review_ready")
+            self.assertEqual(run_json["stage_statuses"]["review"], "approved")
+            self.assertEqual(review_gate["status"], "approved")
+            self.assertEqual(review_gate["source"], "local")
+            self.assertTrue(review_gate["approved_at"])
+            self.assertTrue(run_json["publish_eligibility"]["eligible"])
+            self.assertEqual(run_json["publish_eligibility"]["mode"], "draft")
+            self.assertIn("Review approved", output.getvalue())
+
+    def test_run_no_input_does_not_approve_review(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(["run", "--task", "Leave review pending", "--success-check", "Tests pass"]),
+                    0,
+                )
+            run_dir = self.approve_current_run_for_implementation(repo, loopforge_home)
+            run_json_path = run_dir / "run.json"
+            run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+            run_json["status"] = "verified"
+            run_json["current_stage"] = "verification_ready"
+            run_json["stage_statuses"]["verification"] = "complete"
+            run_json["stage_statuses"]["review"] = "pending"
+            run_json["human_gates"]["review_approval"] = {
+                "required": True,
+                "status": "pending",
+            }
+            run_json["publish_eligibility"] = {
+                "eligible": False,
+                "reasons": ["review approval is required before draft publication"],
+            }
+            run_json_path.write_text(json.dumps(run_json), encoding="utf-8")
+            (run_dir / "verification.md").write_text("# Verification\n\nPassed.\n", encoding="utf-8")
+
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["run", "--no-input"]), 0)
+
+            run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+            self.assertEqual(run_json["current_stage"], "verification_ready")
+            self.assertEqual(run_json["stage_statuses"]["review"], "pending")
+            self.assertEqual(run_json["human_gates"]["review_approval"]["status"], "pending")
+            self.assertFalse(run_json["publish_eligibility"]["eligible"])
+            self.assertIn("Active run found", output.getvalue())
+
+    def test_run_cockpit_prepares_draft_publication_after_review(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            self.initialize_git_project(repo)
+            loopforge_home = workspace / "loopforge-home"
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(["run", "--task", "Prepare draft PR", "--success-check", "Tests pass"]),
+                    0,
+                )
+            run_dir = self.approve_current_run_for_implementation(repo, loopforge_home)
+            patch_path = run_dir / "artifacts" / "patches" / "complete.patch"
+            patch_path.parent.mkdir(parents=True, exist_ok=True)
+            patch_bytes = b"diff --git a/README.md b/README.md\n"
+            patch_path.write_bytes(patch_bytes)
+            run_json_path = run_dir / "run.json"
+            run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+            run_json["status"] = "verified"
+            run_json["current_stage"] = "review_ready"
+            run_json["stage_statuses"]["verification"] = "complete"
+            run_json["stage_statuses"]["review"] = "approved"
+            run_json["human_gates"]["review_approval"] = {
+                "required": True,
+                "status": "approved",
+                "source": "test",
+                "approved_at": "2026-07-11T00:00:00Z",
+            }
+            run_json["verification"] = {
+                "status": "passed",
+                "checks_passed": 1,
+                "checks_total": 1,
+                "patch": {
+                    "generated": True,
+                    "path": "artifacts/patches/complete.patch",
+                    "sha256": hashlib.sha256(patch_bytes).hexdigest(),
+                    "size_bytes": len(patch_bytes),
+                    "status": "generated",
+                },
+            }
+            run_json["publish_eligibility"] = {
+                "eligible": True,
+                "mode": "draft",
+                "reasons": ["verified work has explicit review approval"],
+            }
+            run_json_path.write_text(json.dumps(run_json), encoding="utf-8")
+
+            answers = iter(["1", "y"])
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                mock.patch("sys.stdin", TtyStringIO()),
+                mock.patch("builtins.input", side_effect=lambda _: next(answers)),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["run"]), 0)
+
+            draft_path = run_dir / "artifacts" / "publication" / "draft-pr.json"
+            draft = json.loads(draft_path.read_text(encoding="utf-8"))
+            run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+            self.assertEqual(run_json["current_stage"], "draft_publication_ready")
+            self.assertEqual(run_json["stage_statuses"]["publication"], "draft_prepared")
+            self.assertEqual(run_json["publication"]["network"], {"performed": False})
+            self.assertTrue(draft["draft"])
+            self.assertEqual(draft["network"]["performed"], False)
+            self.assertEqual(draft["kind"], "draft_pr_publication")
+            self.assertEqual(draft["publisher"], "local-draft-artifact")
+            self.assertTrue(draft["no_network"])
+            self.assertIn("Prepare draft PR", draft["title"])
+            self.assertEqual(draft["base_commit"], run_json["base_commit"])
+            self.assertEqual(draft["patch"]["path"], "artifacts/patches/complete.patch")
+            self.assertEqual(draft["patch"]["sha256"], hashlib.sha256(patch_bytes).hexdigest())
+            self.assertIn("Draft publication prepared", output.getvalue())
+
+    def test_run_no_input_does_not_prepare_draft_publication(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            self.initialize_git_project(repo)
+            loopforge_home = workspace / "loopforge-home"
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(["run", "--task", "Do not publish", "--success-check", "Tests pass"]),
+                    0,
+                )
+            run_dir = self.approve_current_run_for_implementation(repo, loopforge_home)
+            patch_path = run_dir / "artifacts" / "patches" / "complete.patch"
+            patch_path.parent.mkdir(parents=True, exist_ok=True)
+            patch_path.write_text("diff --git a/README.md b/README.md\n", encoding="utf-8")
+            run_json_path = run_dir / "run.json"
+            run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+            run_json["status"] = "verified"
+            run_json["current_stage"] = "review_ready"
+            run_json["stage_statuses"]["verification"] = "complete"
+            run_json["stage_statuses"]["review"] = "approved"
+            run_json["human_gates"]["review_approval"] = {
+                "required": True,
+                "status": "approved",
+            }
+            run_json["verification"] = {
+                "status": "passed",
+                "checks_passed": 1,
+                "checks_total": 1,
+                "patch": {
+                    "generated": True,
+                    "path": "artifacts/patches/complete.patch",
+                    "sha256": "abc123",
+                    "size_bytes": patch_path.stat().st_size,
+                    "status": "generated",
+                },
+            }
+            run_json["publish_eligibility"] = {
+                "eligible": True,
+                "mode": "draft",
+                "reasons": ["verified work has explicit review approval"],
+            }
+            run_json_path.write_text(json.dumps(run_json), encoding="utf-8")
+
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["run", "--no-input"]), 0)
+
+            run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+            self.assertNotEqual(run_json["stage_statuses"]["publication"], "draft_prepared")
+            self.assertFalse((run_dir / "artifacts" / "publication" / "draft-pr.json").exists())
+            self.assertIn("Active run found", output.getvalue())
+
+    def test_prepare_draft_publication_blocks_without_review_eligibility(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            self.initialize_git_project(repo)
+            loopforge_home = workspace / "loopforge-home"
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(["run", "--task", "Blocked publication", "--success-check", "Tests pass"]),
+                    0,
+                )
+            run_dir = self.approve_current_run_for_implementation(repo, loopforge_home)
+            patch_path = run_dir / "artifacts" / "patches" / "complete.patch"
+            patch_path.parent.mkdir(parents=True, exist_ok=True)
+            patch_path.write_text("diff --git a/README.md b/README.md\n", encoding="utf-8")
+            run_json_path = run_dir / "run.json"
+            run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+            run_json["status"] = "verified"
+            run_json["current_stage"] = "verification_ready"
+            run_json["stage_statuses"]["verification"] = "complete"
+            run_json["stage_statuses"]["review"] = "pending"
+            run_json["verification"] = {
+                "status": "passed",
+                "patch": {
+                    "generated": True,
+                    "path": "artifacts/patches/complete.patch",
+                    "sha256": "abc123",
+                    "size_bytes": patch_path.stat().st_size,
+                    "status": "generated",
+                },
+            }
+            run_json["publish_eligibility"] = {
+                "eligible": False,
+                "mode": "draft",
+                "reasons": ["review approval is required before draft publication"],
+            }
+            run_json_path.write_text(json.dumps(run_json), encoding="utf-8")
+
+            with mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}):
+                result = prepare_draft_publication(repo)
+
+            self.assertFalse(result.ok)
+            self.assertIn("review approval", "\n".join(result.blockers))
+            self.assertIn("draft publish eligibility", "\n".join(result.blockers))
+            self.assertFalse((run_dir / "artifacts" / "publication" / "draft-pr.json").exists())
 
     def test_pack_protected_paths_contribute_risk_rules(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -3287,6 +4798,10 @@ class CliTests(unittest.TestCase):
             verification = run_json["verification"]
 
             self.assertEqual(run_json["status"], "verification_failed")
+            self.assertEqual(run_json["current_stage"], "verification_blocked")
+            self.assertEqual(run_json["stage_statuses"]["verification"], "blocked")
+            self.assertEqual(run_json["stage_statuses"]["review"], "pending")
+            self.assertFalse(run_json["publish_eligibility"]["eligible"])
             self.assertEqual(verification["status"], "failed")
             self.assertTrue(verification["stagnated"])
             self.assertIn(

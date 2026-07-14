@@ -375,6 +375,7 @@ def _status_detail_lines(result: Any) -> list[str]:
         run = result.run
         lines.append(f"base commit: {run.get('base_commit') or 'none'}")
         lines.append(f"run directory: {result.run_dir}")
+        lines.append(f"workflow stage: {run.get('current_stage') or 'task_draft'}")
         workspace = run.get("workspace", {})
         if isinstance(workspace, dict) and workspace:
             lines.append(f"workspace mode: {workspace.get('mode') or 'unknown'}")
