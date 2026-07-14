@@ -1,0 +1,8 @@
+{
+  "name": "generic-code",
+  "version": 1,
+  "description": "Default pack for a source repository.",
+  "priority": 0,
+  "detection": {},
+  "skills": ["change-review"]
+}

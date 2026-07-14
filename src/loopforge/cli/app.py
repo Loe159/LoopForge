@@ -14,8 +14,8 @@ import sys
 import traceback
 from typing import Any, Sequence
 
-from loopforge.cli_context import CliContext
-from loopforge.cli_workflow import (
+from loopforge.cli.context import CliContext
+from loopforge.cli.workflow import (
     ContinueCommandHandler,
     LearnCommandHandler,
     RunCommandHandler,
@@ -70,7 +70,7 @@ class DiscoveryCommandHandler:
                     "Use --command or --script when running in a non-interactive environment.",
                     fix='Run `loopforge shell --command "/status"`.',
                 )
-        interactive = importlib.import_module("loopforge.interactive")
+        interactive = importlib.import_module("loopforge.cli.interactive")
         return interactive.run_interactive(
             context.project_dir,
             command=args.shell_command,
@@ -499,7 +499,7 @@ class LoopForgeCli:
                 and context.stdout.isatty()
                 and not options.no_input
             ):
-                interactive = importlib.import_module("loopforge.interactive")
+                interactive = importlib.import_module("loopforge.cli.interactive")
                 return interactive.run_interactive(context.project_dir)
             if options.no_input:
                 raise api.CliUsageError(

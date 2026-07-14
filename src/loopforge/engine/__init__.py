@@ -10,16 +10,15 @@ import sys
 import threading
 import uuid
 import hashlib
-import importlib.util
 import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from loopforge.engine_packs import PackRegistry
-from loopforge.engine_metrics import MetricsService
-from loopforge.engine_storage import DEFAULT_JSON_STORE
+from loopforge.engine.packs import PackRegistry
+from loopforge.engine.metrics import MetricsService
+from loopforge.engine.storage import DEFAULT_JSON_STORE
 
 CONFIG_DIR = ".loopforge"
 CONFIG_FILE = "config.json"
@@ -927,37 +926,42 @@ def render_run_memory_snapshot(project_dir: Path, run_id: str) -> str:
 
 
 def repository_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    return Path(__file__).resolve().parents[3]
 
 
 def legacy_templates_dir() -> Path:
-    return repository_root() / ".agent" / "templates"
+    return Path(__file__).resolve().parents[1] / "templates" / "legacy"
 
 
 def legacy_artifact_validator() -> Path:
-    return repository_root() / ".agent" / "checks" / "validate_artifacts.py"
+    return Path(__file__).resolve().parents[1] / "checks" / "validate_artifacts.py"
 
 
 def local_implementation_adapter() -> Path:
-    return repository_root() / ".agent" / "adapters" / "local_implementation_adapter.py"
+    return Path(__file__).resolve().parents[1] / "adapters" / "local_implementation_adapter.py"
 
 
 def imported_check(name: str) -> Path:
-    return repository_root() / ".agent" / "checks" / name
+    return Path(__file__).resolve().parents[1] / "checks" / name
 
 
 def default_diff_policy() -> Path:
-    return repository_root() / ".agent" / "policies" / "diff-policy.json"
+    from loopforge.contracts import policy_path
+
+    return policy_path("diff-policy.json")
 
 
 def default_risk_policy() -> Path:
-    return repository_root() / ".agent" / "policies" / "risk-rules.json"
+    from loopforge.contracts import policy_path
+
+    return policy_path("risk-rules.json")
 
 
 def _pack_registry(project_dir: Path) -> PackRegistry:
     return PackRegistry(
         project_dir,
         bundled_root=repository_root(),
+        bundled_packs_root=Path(__file__).resolve().parents[1] / "packs",
         store=DEFAULT_JSON_STORE,
         config_dir=CONFIG_DIR,
         default_pack=DEFAULT_PACK,
@@ -984,6 +988,7 @@ def load_pack_contract_from_path(path: Path) -> dict[str, Any]:
     registry = PackRegistry(
         path.parent,
         bundled_root=repository_root(),
+        bundled_packs_root=Path(__file__).resolve().parents[1] / "packs",
         store=DEFAULT_JSON_STORE,
         config_dir=CONFIG_DIR,
         default_pack=DEFAULT_PACK,
@@ -1020,13 +1025,9 @@ def pack_skill_entries(contract: dict[str, Any]) -> list[str]:
 
 
 def isolated_process_module() -> Any:
-    path = repository_root() / ".agent" / "checks" / "isolated_process.py"
-    spec = importlib.util.spec_from_file_location("loopforge_imported_isolated_process", path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"could not load isolated process helper: {path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    from loopforge.checks import isolated_process
+
+    return isolated_process
 
 
 def is_windows_app_execution_alias(path: Path) -> bool:
@@ -1412,7 +1413,7 @@ def legacy_artifact_state(run: dict[str, Any]) -> dict[str, Any]:
 
     try:
         result = subprocess.run(
-            [sys.executable, str(validator), "--run", str(artifact_dir), "--format", "json"],
+            [sys.executable, "-m", "loopforge.checks.validate_artifacts", "--run", str(artifact_dir), "--format", "json"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -5277,12 +5278,10 @@ def adapter_protocol_command(
     stdin_file: Path | None,
     result_output: Path | None,
 ) -> list[str]:
-    adapter_path = local_implementation_adapter()
-    if not adapter_path.exists():
-        raise FileNotFoundError(f"local implementation adapter not found: {adapter_path}")
     protocol = [
         usable_python_executable(),
-        str(adapter_path),
+        "-m",
+        "loopforge.adapters.local_implementation_adapter",
         "--expected-session",
         str(expected_session_path),
         "--workspace",
@@ -5933,11 +5932,11 @@ def verify_run(project_dir: Path, *, confirmed: bool = False) -> VerifyResult:
     elif not workspace_dir.exists() or not workspace_dir.is_dir():
         blockers.append(f"patch generation requires the run workspace: {workspace_dir}.")
     else:
-        generator = imported_check("generate_complete_patch.py")
         generated = run_json_check(
             [
                 usable_python_executable(),
-                str(generator),
+                "-m",
+                "loopforge.checks.generate_complete_patch",
                 "--repo",
                 str(workspace_dir),
                 "--base",
@@ -5985,7 +5984,8 @@ def verify_run(project_dir: Path, *, confirmed: bool = False) -> VerifyResult:
         diff_result = run_json_check(
             [
                 usable_python_executable(),
-                str(imported_check("diff_policy.py")),
+                "-m",
+                "loopforge.checks.diff_policy",
                 "--patch",
                 str(patch_path),
                 "--policy",
@@ -6029,7 +6029,8 @@ def verify_run(project_dir: Path, *, confirmed: bool = False) -> VerifyResult:
         risk_result = run_json_check(
             [
                 usable_python_executable(),
-                str(imported_check("classify_patch_risk.py")),
+                "-m",
+                "loopforge.checks.classify_patch_risk",
                 "--patch",
                 str(patch_path),
                 "--diff-policy",

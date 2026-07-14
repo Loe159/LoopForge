@@ -29,13 +29,13 @@ from loopforge.engine import (
     set_default_adapter,
     usable_python_executable,
 )
-from loopforge.interactive import (
+from loopforge.cli.interactive import (
     InteractiveShell,
     SlashCommandCompleter,
     available_commands,
     tui_dependency_state,
 )
-from loopforge.ui import TerminalRenderer
+from loopforge.cli.ui import TerminalRenderer
 
 
 @contextlib.contextmanager
@@ -3463,7 +3463,7 @@ class CliTests(unittest.TestCase):
             output = io.StringIO()
             with (
                 mock.patch(
-                    "loopforge.interactive.importlib.util.find_spec",
+                    "loopforge.cli.interactive.importlib.util.find_spec",
                     return_value=None,
                 ),
                 working_directory(Path(temp_dir)),

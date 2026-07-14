@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from loopforge.engine_storage import JsonStore
+from loopforge.engine.storage import JsonStore
 
 
 class MetricsService:

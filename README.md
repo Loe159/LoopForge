@@ -94,20 +94,18 @@ new installs use the platform data directory such as `$XDG_DATA_HOME/loopforge`
 on Linux, `~/Library/Application Support/loopforge` on macOS, or
 `%LOCALAPPDATA%\loopforge` on Windows.
 
-## Imported Core
+## Package Layout and Compatibility
 
-The initial import lives under `.agent/` to keep the proven scripts runnable
-while the public CLI is designed. Important imported pieces:
+The product implementation lives under `src/loopforge/`:
 
-- `.agent/checks/diff_policy.py`
-- `.agent/checks/generate_complete_patch.py`
-- `.agent/checks/classify_patch_risk.py`
-- `.agent/checks/validate_artifacts.py`
-- `.agent/checks/isolated_process.py`
-- `.agent/checks/record_run_metrics.py`
-- `.agent/adapters/local_implementation_adapter.py`
-- `.agent/templates/`
-- `.agent/prompts/`
+- `cli/`: public CLI facade, parser, handlers, interactive shell, and terminal UI;
+- `engine/`: engine facade plus storage, packs, and metrics services;
+- `checks/`, `adapters/`, `contracts/`, and `templates/`: deterministic runtime
+  components and their packaged data.
+
+The corresponding `.agent/checks/` and `.agent/adapters/` scripts remain as
+thin compatibility launchers. Other inherited `.agent/` content remains
+bootstrap material until it has a product-owned replacement.
 
 ## Product Principle
 

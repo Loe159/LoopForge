@@ -11,6 +11,15 @@ dependencies = [
 [project.scripts]
 loopforge = "loopforge.cli:main"
 
+[tool.setuptools.package-data]
+loopforge = [
+  "contracts/policies/*.json",
+  "contracts/schemas/*.json",
+  "packs/*/*.json",
+  "packs/*/*.md",
+  "templates/legacy/*.md",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 

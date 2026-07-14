@@ -7,11 +7,11 @@ from pathlib import Path
 from unittest import mock
 
 from loopforge import cli
-from loopforge.cli_app import LoopForgeCli
-from loopforge.cli_errors import CliError, CliRuntimeError, CliUsageError
-from loopforge.cli_models import CliOptions, GitHubIssueRef, IssueReadResult, RunIntake
-from loopforge.cli_parser import CliParserBuilder, LoopForgeArgumentParser
-from loopforge.cli_workflow import (
+from loopforge.cli.app import LoopForgeCli
+from loopforge.cli.errors import CliError, CliRuntimeError, CliUsageError
+from loopforge.cli.models import CliOptions, GitHubIssueRef, IssueReadResult, RunIntake
+from loopforge.cli.parser import CliParserBuilder, LoopForgeArgumentParser
+from loopforge.cli.workflow import (
     ContinueCommandHandler,
     LearnCommandHandler,
     RunCommandHandler,
@@ -45,7 +45,7 @@ class CliStructureTests(unittest.TestCase):
         application.run.return_value = 17
 
         with mock.patch(
-            "loopforge.cli_app.LoopForgeCli",
+            "loopforge.cli.app.LoopForgeCli",
             return_value=application,
         ) as cli_type:
             self.assertEqual(cli.main(["status"]), 17)

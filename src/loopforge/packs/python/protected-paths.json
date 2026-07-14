@@ -1,0 +1,4 @@
+{
+  "high_path_patterns": ["pyproject.toml", "setup.py"],
+  "medium_path_patterns": ["src/**/*.py", "tests/**/*.py"]
+}

@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from loopforge.cli_errors import DOCS_URL, CliUsageError
+from loopforge.cli.errors import DOCS_URL, CliUsageError
 from loopforge.engine import DEFAULT_PROFILE, SUPPORTED_ADAPTERS
 
 

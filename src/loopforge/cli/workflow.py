@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from loopforge.cli_context import CliContext
+from loopforge.cli.context import CliContext
 
 
 class RunCommandHandler:

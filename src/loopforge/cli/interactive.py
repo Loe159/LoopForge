@@ -45,7 +45,7 @@ from loopforge.engine import (
     learn_run,
     profile_permission_lines,
 )
-from loopforge.ui import (
+from loopforge.cli.ui import (
     TerminalRenderer,
     compact_text,
     format_status_lines,

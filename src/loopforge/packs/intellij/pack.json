@@ -1,0 +1,10 @@
+{
+  "name": "intellij",
+  "version": 1,
+  "description": "IntelliJ project conventions.",
+  "priority": 5,
+  "detection": {
+    "dirs_any": [".idea"]
+  },
+  "skills": ["intellij-project-review"]
+}

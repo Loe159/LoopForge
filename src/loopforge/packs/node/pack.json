@@ -1,0 +1,10 @@
+{
+  "name": "node",
+  "version": 1,
+  "description": "Node.js project conventions and deterministic checks.",
+  "priority": 10,
+  "detection": {
+    "files_any": ["package.json"]
+  },
+  "skills": ["node-package-management"]
+}

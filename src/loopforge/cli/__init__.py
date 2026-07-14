@@ -18,11 +18,11 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from loopforge import __version__
-from loopforge.cli_errors import DOCS_URL, CliError, CliRuntimeError, CliUsageError
-from loopforge.cli_github import GitHubIssueClient
-from loopforge.cli_intake import RunIntakeService
-from loopforge.cli_models import CliOptions, GitHubIssueRef, IssueReadResult, RunIntake
-from loopforge.cli_parser import (
+from loopforge.cli.errors import DOCS_URL, CliError, CliRuntimeError, CliUsageError
+from loopforge.cli.github import GitHubIssueClient
+from loopforge.cli.intake import RunIntakeService
+from loopforge.cli.models import CliOptions, GitHubIssueRef, IssueReadResult, RunIntake
+from loopforge.cli.parser import (
     CliParserBuilder,
     LoopForgeArgumentParser,
     add_format_args,
@@ -61,7 +61,7 @@ from loopforge.engine import (
     task_looks_subjective,
     verify_run,
 )
-from loopforge.ui import (
+from loopforge.cli.ui import (
     TerminalRenderer,
     compact_text,
     not_reported,
@@ -1409,7 +1409,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    from loopforge.cli_app import LoopForgeCli
+    from loopforge.cli.app import LoopForgeCli
 
     return LoopForgeCli(sys.modules[__name__]).run(argv)
 

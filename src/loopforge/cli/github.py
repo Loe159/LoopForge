@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from loopforge.cli_models import GitHubIssueRef, IssueReadResult
+from loopforge.cli.models import GitHubIssueRef, IssueReadResult
 
 
 class GitHubIssueClient:

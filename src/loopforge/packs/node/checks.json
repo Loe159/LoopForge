@@ -1,0 +1,9 @@
+{
+  "checks": [
+    {
+      "name": "package-json",
+      "command": ["{python}", "-c", "import json, pathlib; json.loads(pathlib.Path('package.json').read_text(encoding='utf-8'))"],
+      "timeout_seconds": 30
+    }
+  ]
+}

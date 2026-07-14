@@ -5,9 +5,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from loopforge.engine_metrics import MetricsService
-from loopforge.engine_packs import PackRegistry
-from loopforge.engine_storage import JsonStore
+from loopforge.adapters import local_implementation_adapter
+from loopforge.contracts import policy_path
+from loopforge.checks import diff_policy
+from loopforge.engine.metrics import MetricsService
+from loopforge.engine.packs import PackRegistry
+from loopforge.engine.storage import JsonStore
 
 
 class JsonStoreTests(unittest.TestCase):
@@ -28,6 +31,22 @@ class JsonStoreTests(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 JsonStore().read_object(path)
+
+
+class PackagedRuntimeLayoutTests(unittest.TestCase):
+    def test_runtime_scripts_and_contracts_are_product_owned(self) -> None:
+        package_root = Path(__file__).resolve().parents[1] / "src" / "loopforge"
+
+        self.assertEqual(Path(diff_policy.__file__).resolve().parent, package_root / "checks")
+        self.assertEqual(
+            Path(local_implementation_adapter.__file__).resolve().parent,
+            package_root / "adapters",
+        )
+        self.assertEqual(
+            local_implementation_adapter.POLICY_PATH,
+            policy_path("local-implementation-adapter.json"),
+        )
+        self.assertTrue(policy_path("diff-policy.json").is_file())
 
 
 class PackRegistryTests(unittest.TestCase):

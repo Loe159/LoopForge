@@ -1,0 +1,10 @@
+{
+  "name": "python",
+  "version": 1,
+  "description": "Python project conventions and deterministic checks.",
+  "priority": 10,
+  "detection": {
+    "files_any": ["pyproject.toml", "setup.py", "requirements.txt"]
+  },
+  "skills": ["python-testing", "python-packaging"]
+}

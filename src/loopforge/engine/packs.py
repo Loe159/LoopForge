@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from loopforge.engine_storage import JsonStore
+from loopforge.engine.storage import JsonStore
 
 
 class PackRegistry:
@@ -20,25 +20,32 @@ class PackRegistry:
         store: JsonStore,
         config_dir: str = ".loopforge",
         default_pack: str = "generic-code",
+        bundled_packs_root: Path | None = None,
     ) -> None:
         self.project_dir = project_dir
         self.bundled_root = bundled_root
         self.store = store
         self.config_dir = config_dir
         self.default_pack = default_pack
+        self.bundled_packs_root = bundled_packs_root
+
+    def bundled_packs_path(self) -> Path:
+        if self.bundled_packs_root is not None:
+            return self.bundled_packs_root
+        return self.bundled_root / self.config_dir / "packs"
 
     def roots(self) -> list[Path]:
         return [
             self.project_dir / self.config_dir / "packs",
-            self.bundled_root / self.config_dir / "packs",
+            self.bundled_packs_path(),
         ]
 
     def file_candidates(self, pack: str, file_name: str) -> list[Path]:
         return [
             self.project_dir / self.config_dir / "packs" / pack / file_name,
             self.project_dir / self.config_dir / "packs" / f"{pack}.{file_name}",
-            self.bundled_root / self.config_dir / "packs" / pack / file_name,
-            self.bundled_root / self.config_dir / "packs" / f"{pack}.{file_name}",
+            self.bundled_packs_path() / pack / file_name,
+            self.bundled_packs_path() / f"{pack}.{file_name}",
         ]
 
     @staticmethod

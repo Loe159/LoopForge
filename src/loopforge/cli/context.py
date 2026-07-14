@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TextIO
 
-from loopforge.ui import TerminalRenderer
+from loopforge.cli.ui import TerminalRenderer
 
 
 @dataclass(frozen=True)
