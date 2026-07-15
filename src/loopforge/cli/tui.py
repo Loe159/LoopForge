@@ -19,12 +19,16 @@ from loopforge.cli.presentation import (
     family_presentation,
     shell_snapshot,
 )
+from loopforge.cli.operations import ForegroundOperation, OperationEvent
 from loopforge.engine import (
+    continue_run,
     current_guidance,
     current_status,
+    execute_readonly_stage,
     list_registered_projects,
     list_runs,
     resume_run,
+    verify_run,
 )
 
 if TYPE_CHECKING:
@@ -61,6 +65,8 @@ class LoopForgeConsole:
         self._body_window: Any = None
         self._dialog_container: Any = None
         self._last_interrupt = False
+        self._operation: ForegroundOperation | None = None
+        self._operation_events: list[OperationEvent] = []
 
     def run(self) -> int:
         """Create and run the prompt-toolkit application only for TTY sessions."""
@@ -89,6 +95,7 @@ class LoopForgeConsole:
             full_screen=True,
             mouse_support=False,
             style=self._style(),
+            refresh_interval=0.1,
         )
         self._application.run()
         return 0
@@ -167,6 +174,11 @@ class LoopForgeConsole:
 
         @bindings.add("c-c")
         def _interrupt(event: Any) -> None:
+            if self._operation is not None and not self._operation.finished:
+                self._operation.cancel()
+                self.state.notice = "Cancelling foreground operation…"
+                self._refresh()
+                return
             if self._dialog_container is not None:
                 self._close_dialog()
                 return
@@ -176,6 +188,11 @@ class LoopForgeConsole:
             self._last_interrupt = True
             self.state.notice = "Press Ctrl+C again to exit."
             self._refresh()
+
+        @bindings.add("l")
+        def _toggle_live_output(event: Any) -> None:
+            if self._operation is not None:
+                self._show_live_output()
 
         return bindings
 
@@ -195,11 +212,16 @@ class LoopForgeConsole:
             "evidence": "↑↓ select  Enter open  Esc run  Ctrl+K actions",
             "settings": "Tab screen  Esc back  Ctrl+K actions  ? help",
         }[self.state.screen]
+        if self._operation is not None and not self._operation.finished:
+            footer = "Ctrl+C cancel  l live output"
+        elif self._operation is not None and self._operation.finished:
+            footer = "Enter close receipt  e evidence  l live output"
         notice = f"  {self.state.notice}" if self.state.notice else ""
         return [("class:secondary", footer + notice)]
 
     def _body_fragments(self) -> list[tuple[str, str]]:
         self._last_interrupt = False
+        self._collect_operation_events()
         if self.state.screen == "home":
             return self._home_fragments()
         if self.state.screen == "project":
@@ -283,6 +305,7 @@ class LoopForgeConsole:
                     ("", action.description),
                 ]
             )
+        parts.extend(self._operation_fragments())
         return parts
 
     def _evidence_fragments(self) -> list[tuple[str, str]]:
@@ -379,6 +402,13 @@ class LoopForgeConsole:
         self._refresh()
 
     def _open_selected(self) -> None:
+        if self._operation is not None:
+            if self._operation.finished:
+                self._operation = None
+                self._operation_events.clear()
+                self.state.notice = "Operation receipt closed."
+                self._refresh()
+            return
         if self.state.screen == "home":
             records = self._projects()
             if records:
@@ -473,10 +503,120 @@ class LoopForgeConsole:
             self._show_new_run_dialog()
             return
         self._close_dialog()
+        if action.executor_key in {"continue", "verify", "run-readonly-stage"}:
+            self._start_live_action(action)
+            return
         result = self.shell.execute_guided_action(action)
         self.state.notice = "Action completed." if result.exit_code == 0 else "Action was blocked; inspect evidence."
         self.state.screen = "run"
         self._refresh()
+
+    def _start_live_action(self, action: Any) -> None:
+        """Run an engine transition in a worker and keep the TUI responsive."""
+
+        if self._operation is not None and not self._operation.finished:
+            self.state.notice = "A foreground operation is already running."
+            self._refresh()
+            return
+        operation = ForegroundOperation(action.label)
+        self._operation = operation
+        self._operation_events = []
+        project = self._project_path()
+
+        def runner(emit: Any, cancel_event: Any) -> Any:
+            if action.executor_key == "continue":
+                return continue_run(
+                    project,
+                    adapter=self.shell.selected_adapter,
+                    adapter_args=self.shell.selected_adapter_args,
+                    confirmed=True,
+                    operation_callback=emit,
+                    cancel_event=cancel_event,
+                )
+            if action.executor_key == "verify":
+                return verify_run(
+                    project,
+                    confirmed=True,
+                    operation_callback=emit,
+                    cancel_event=cancel_event,
+                )
+            stage = next(
+                (
+                    item.id
+                    for item in self._snapshot(project).stages
+                    if item.family not in {"complete", "waiting"}
+                ),
+                "",
+            )
+            if not stage:
+                return execute_readonly_stage(
+                    project,
+                    stage="research",
+                    adapter=self.shell.selected_adapter,
+                    adapter_args=self.shell.selected_adapter_args,
+                    operation_callback=emit,
+                    cancel_event=cancel_event,
+                )
+            emit({"kind": "stage_started", "message": f"Running read-only {stage}."})
+            return execute_readonly_stage(
+                project,
+                stage=stage,
+                adapter=self.shell.selected_adapter,
+                adapter_args=self.shell.selected_adapter_args,
+                operation_callback=emit,
+                cancel_event=cancel_event,
+            )
+
+        operation.start(runner)
+        self.state.screen = "run"
+        self.state.notice = ""
+        self._refresh()
+
+    def _collect_operation_events(self) -> None:
+        if self._operation is None:
+            return
+        self._operation_events.extend(self._operation.drain_events())
+        self._operation_events = self._operation_events[-40:]
+        if self._operation.finished and not self.state.notice:
+            if self._operation.error is not None:
+                self.state.notice = "Operation failed; inspect live output."
+            elif bool(getattr(self._operation.result, "ok", False)):
+                self.state.notice = "Operation completed."
+            else:
+                self.state.notice = "Operation is blocked; inspect evidence."
+
+    def _operation_fragments(self) -> list[tuple[str, str]]:
+        operation = self._operation
+        if operation is None or (operation.elapsed_seconds() < 0.25 and not operation.finished):
+            return []
+        elapsed = f"{operation.elapsed_seconds():.1f}s"
+        latest = self._operation_events[-1] if self._operation_events else None
+        if not operation.finished:
+            spinner = "◐◓◑◒"[int(operation.elapsed_seconds() * 8) % 4]
+            message = latest.message if latest is not None else "Preparing operation…"
+            progress = ""
+            if latest is not None and latest.current is not None and latest.total is not None:
+                progress = f" {latest.current}/{latest.total}"
+            return [
+                ("\n", ""),
+                ("class:running", f"{spinner} {operation.label} · {elapsed}{progress}\n"),
+                ("class:secondary", _clip(message, 110)),
+            ]
+        latest_message = latest.message if latest is not None else operation.label
+        ok = operation.error is None and bool(getattr(operation.result, "ok", False))
+        role = "success" if ok else "danger"
+        marker = "✓" if ok else "×"
+        return [
+            ("\n", ""),
+            (f"class:{role}", f"{marker} {latest_message} · {elapsed}\n"),
+            ("class:secondary", "Enter closes this receipt · l shows activity"),
+        ]
+
+    def _show_live_output(self) -> None:
+        if self._operation is None:
+            return
+        lines = [event.message for event in self._operation_events[-12:]] or ["No output yet."]
+        self._show_dialog("Live operation output", lines, [("Close", self._close_dialog)])
 
     def _open_evidence(self) -> None:
         self._close_dialog()

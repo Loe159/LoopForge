@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -2623,6 +2624,36 @@ class CliTests(unittest.TestCase):
                 run_streaming_process(["fake"], Path.cwd(), 60)
         self.assertTrue(fake.terminated)
         self.assertFalse(fake.killed)
+
+    def test_streaming_process_records_cooperative_cancellation(self) -> None:
+        class FakeProcess:
+            def __init__(self) -> None:
+                self.stdout = io.BytesIO()
+                self.stderr = io.BytesIO()
+                self.terminated = False
+
+            def wait(self, timeout=None):  # type: ignore[no-untyped-def]
+                return 130
+
+            def terminate(self) -> None:
+                self.terminated = True
+
+            def kill(self) -> None:
+                raise AssertionError("cooperative cancellation should terminate first")
+
+        fake = FakeProcess()
+        cancelled = threading.Event()
+        cancelled.set()
+        with (
+            mock.patch("loopforge.engine.subprocess.Popen", return_value=fake),
+            mock.patch("loopforge.engine.isolated_process_module") as isolated,
+        ):
+            isolated.return_value.load_policy.return_value = {"max_timeout_seconds": 60}
+            isolated.return_value.build_child_environment.return_value = {}
+            result = run_streaming_process(["fake"], Path.cwd(), 60, cancel_event=cancelled)
+        self.assertTrue(fake.terminated)
+        self.assertTrue(result["interrupted"])
+        self.assertEqual(result["returncode"], 130)
 
     def test_guidance_reports_not_initialized_and_cli_guide(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
