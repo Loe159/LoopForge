@@ -1,6 +1,8 @@
-"""Prompt-toolkit full-screen navigation for the interactive LoopForge shell.
+"""Temporary full-screen backend facade for the interactive LoopForge shell.
 
-This module deliberately owns only the screen layout and keyboard navigation.
+This module deliberately owns only backend selection plus the legacy screen
+layout and keyboard navigation. Textual remains lazily imported so headless
+commands never pay its import cost.
 Workflow transitions stay in :mod:`loopforge.engine` and are executed through
 ``InteractiveShell.execute_guided_action``.  It is never imported by scripted
 ``shell --command`` or ``shell --script`` calls.
@@ -42,6 +44,31 @@ if TYPE_CHECKING:
 
 
 SCREENS = ("home", "project", "run", "evidence", "settings")
+TUI_BACKENDS = frozenset({"legacy", "textual"})
+
+
+def selected_tui_backend() -> str:
+    """Return the internal migration backend without changing public CLI flags.
+
+    The selector is intentionally environment-only while the implementations
+    coexist. Invalid values fall back to the stable legacy console so an
+    inherited shell environment cannot prevent an interactive session from
+    opening.
+    """
+
+    requested = os.environ.get("LOOPFORGE_TUI_BACKEND", "legacy").strip().lower()
+    return requested if requested in TUI_BACKENDS else "legacy"
+
+
+def run_fullscreen_console(shell: "InteractiveShell") -> int:
+    """Start the selected interactive backend, importing Textual only on demand."""
+
+    if selected_tui_backend() == "textual":
+        from loopforge.cli.textual_app import LoopForgeApp
+
+        LoopForgeApp(shell).run()
+        return 0
+    return LoopForgeConsole(shell).run()
 
 
 @dataclass

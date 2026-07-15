@@ -6,6 +6,7 @@ import contextlib
 import importlib.util
 import io
 import os
+import sys
 import tempfile
 import threading
 import unittest
@@ -15,7 +16,7 @@ from unittest import mock
 from loopforge.cli import main
 from loopforge.cli.interactive import InteractiveShell, run_interactive
 from loopforge.cli.operations import ForegroundOperation
-from loopforge.cli.tui import LoopForgeConsole, SCREENS, _clip
+from loopforge.cli.tui import LoopForgeConsole, SCREENS, _clip, selected_tui_backend
 from loopforge.engine import current_status
 
 
@@ -57,12 +58,16 @@ class CliTuiTests(unittest.TestCase):
 
     def test_headless_shell_does_not_construct_fullscreen_console(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
+            previous_textual_app = sys.modules.pop("loopforge.cli.textual_app", None)
             with (
                 mock.patch("loopforge.cli.tui.LoopForgeConsole") as console_type,
                 contextlib.redirect_stdout(io.StringIO()),
             ):
                 self.assertEqual(run_interactive(Path(temp_dir), command="/status"), 0)
         console_type.assert_not_called()
+        self.assertNotIn("loopforge.cli.textual_app", sys.modules)
+        if previous_textual_app is not None:
+            sys.modules["loopforge.cli.textual_app"] = previous_textual_app
 
     @unittest.skipUnless(
         importlib.util.find_spec("prompt_toolkit") is not None,
@@ -72,6 +77,7 @@ class CliTuiTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             shell = InteractiveShell(Path(temp_dir), output=io.StringIO())
             with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(Path(temp_dir) / "home")}),
                 mock.patch("loopforge.cli.tui.LoopForgeConsole") as console_type,
                 mock.patch("prompt_toolkit.PromptSession") as session_type,
             ):
@@ -196,6 +202,14 @@ class CliTuiTests(unittest.TestCase):
             with mock.patch.dict(os.environ, {"LOOPFORGE_ASCII": "1"}):
                 self.assertEqual(console._marker("✓"), "+")
                 self.assertEqual(_clip("a very long value", 8), "a ver...")
+
+    def test_textual_backend_selector_is_opt_in_and_safe(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(selected_tui_backend(), "legacy")
+        with mock.patch.dict(os.environ, {"LOOPFORGE_TUI_BACKEND": "textual"}):
+            self.assertEqual(selected_tui_backend(), "textual")
+        with mock.patch.dict(os.environ, {"LOOPFORGE_TUI_BACKEND": "unexpected"}):
+            self.assertEqual(selected_tui_backend(), "legacy")
 
 
 class _working_directory:

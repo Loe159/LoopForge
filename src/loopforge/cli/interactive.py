@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import shutil
 import shlex
 import subprocess
@@ -252,6 +253,8 @@ def tui_dependency_state() -> dict[str, bool]:
     return {
         "prompt_toolkit": importlib.util.find_spec("prompt_toolkit") is not None,
         "rich": importlib.util.find_spec("rich") is not None,
+        # Discovery only: keep Textual unimported for every headless command.
+        "textual": importlib.util.find_spec("textual") is not None,
     }
 
 
@@ -1983,7 +1986,10 @@ class InteractiveShell:
 
     def run_prompt(self, *, interactive_ui: bool = True) -> int:
         deps = tui_dependency_state()
-        missing = [name for name, available in deps.items() if not available]
+        required = ("prompt_toolkit", "rich")
+        if os.environ.get("LOOPFORGE_TUI_BACKEND", "legacy").strip().lower() == "textual":
+            required = ("textual",)
+        missing = [name for name in required if not deps[name]]
         if missing:
             self.write(
                 "LoopForge interactive shell requires missing dependencies: "
@@ -1999,9 +2005,9 @@ class InteractiveShell:
         # The full-screen interface is opt-in for this release.  ``--command``
         # and ``--script`` always remain on the compatibility dispatcher.
         if interactive_ui and self.renderer_mode != "plain":
-            from loopforge.cli.tui import LoopForgeConsole
+            from loopforge.cli.tui import run_fullscreen_console
 
-            return LoopForgeConsole(self).run()
+            return run_fullscreen_console(self)
 
         from prompt_toolkit import PromptSession
         from prompt_toolkit.enums import EditingMode

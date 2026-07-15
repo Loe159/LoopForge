@@ -1,0 +1,69 @@
+/* Semantic tokens shared by the initial Textual screens. */
+
+Screen {
+    background: $surface;
+    color: $text;
+}
+
+#main-content {
+    height: 1fr;
+    padding: 1 2;
+    layout: vertical;
+}
+
+#screen-title {
+    color: $accent;
+    text-style: bold;
+}
+
+#screen-state, .secondary {
+    color: $text-muted;
+}
+
+#screen-body {
+    margin-top: 1;
+    color: $text;
+}
+
+#action-summary {
+    margin-top: 1;
+    color: $warning;
+}
+
+.error-title {
+    color: $error;
+    text-style: bold;
+}
+
+#error-dialog {
+    width: 70%;
+    max-width: 90;
+    height: auto;
+    padding: 1 2;
+    border: round $error;
+    background: $panel;
+}
+
+#error-message {
+    margin: 1 0;
+}
+
+.width-60 #main-content {
+    padding: 0 1;
+}
+
+.width-60 Header, .width-60 Footer {
+    display: none;
+}
+
+.width-80 #main-content {
+    padding: 1 3;
+}
+
+.width-120 #main-content {
+    padding: 2 6;
+}
+
+.width-160 #main-content {
+    padding: 2 10;
+}
