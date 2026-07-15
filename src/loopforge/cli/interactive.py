@@ -1908,33 +1908,12 @@ class InteractiveShell:
             )
             return 1
 
-        from prompt_toolkit import PromptSession
-        from prompt_toolkit.enums import EditingMode
-        from prompt_toolkit.history import FileHistory
+        # Full-screen navigation is intentionally limited to an interactive TTY.
+        # ``run_interactive`` keeps --command and --script on ``dispatch`` so
+        # existing automations never need a terminal application.
+        from loopforge.cli.tui import LoopForgeConsole
 
-        history_dir = loopforge_home()
-        history_dir.mkdir(parents=True, exist_ok=True)
-        editing_mode = EditingMode.VI if self.editing_mode == "vim" else EditingMode.EMACS
-        session = PromptSession(
-            completer=SlashCommandCompleter(COMMANDS),
-            history=FileHistory(str(history_dir / "interactive-history.txt")),
-            bottom_toolbar=lambda: self.toolbar(),
-            editing_mode=editing_mode,
-        )
-        self.write_home()
-        exit_code = 0
-        while self.running:
-            try:
-                line = session.prompt(self.prompt_text())
-            except (EOFError, KeyboardInterrupt):
-                self.write("bye")
-                break
-            result = self.dispatch(line)
-            if result.exit_code:
-                exit_code = result.exit_code
-            if result.should_exit:
-                break
-        return exit_code
+        return LoopForgeConsole(self).run()
 
 
 def run_interactive(
