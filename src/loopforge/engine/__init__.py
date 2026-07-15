@@ -38,6 +38,13 @@ VERIFIED = "verified"
 VERIFICATION_FAILED = "verification_failed"
 SYNTHETIC_LEGACY_BASE_COMMIT = "0" * 40
 METRICS_RECORD_FILE = "record.json"
+USER_PREFERENCES_FILE = "preferences.json"
+
+DEFAULT_USER_PREFERENCES = {
+    "theme": "default",
+    "statusline": "full",
+    "keymap": "emacs",
+}
 
 SUPPORTED_ADAPTERS = (
     "codex",
@@ -651,6 +658,58 @@ def loopforge_home(home: Path | None = None) -> Path:
     if legacy_home.exists():
         return legacy_home
     return platform_data_home() / "loopforge"
+
+
+def user_preferences_path(home: Path | None = None) -> Path:
+    """Return the user-scoped interactive preferences file.
+
+    Visual choices are deliberately kept outside ``.loopforge/config.json``:
+    that file travels with a project, while a person's terminal preferences do
+    not.
+    """
+
+    return loopforge_home(home=home) / USER_PREFERENCES_FILE
+
+
+def user_preferences(home: Path | None = None) -> dict[str, str]:
+    """Load normalized user-scoped terminal preferences."""
+
+    path = user_preferences_path(home=home)
+    values = dict(DEFAULT_USER_PREFERENCES)
+    if not path.exists():
+        return values
+    try:
+        stored = read_json(path)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return values
+    for key, allowed in {
+        "theme": {"default", "light", "dark", "mono"},
+        "statusline": {"full", "compact", "off"},
+        "keymap": {"emacs", "vim"},
+    }.items():
+        value = stored.get(key)
+        if isinstance(value, str) and value in allowed:
+            values[key] = value
+    return values
+
+
+def update_user_preferences(
+    updates: dict[str, str], home: Path | None = None
+) -> dict[str, str]:
+    """Persist supported terminal preferences at user scope."""
+
+    values = user_preferences(home=home)
+    allowed_values = {
+        "theme": {"default", "light", "dark", "mono"},
+        "statusline": {"full", "compact", "off"},
+        "keymap": {"emacs", "vim"},
+    }
+    for key, value in updates.items():
+        if key not in allowed_values or value not in allowed_values[key]:
+            raise ValueError(f"unsupported user preference: {key}={value}")
+        values[key] = value
+    write_json_atomic(user_preferences_path(home=home), values)
+    return values
 
 
 def platform_data_home() -> Path:

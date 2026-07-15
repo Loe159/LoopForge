@@ -103,6 +103,16 @@ class CliTuiTests(unittest.TestCase):
 
         self.assertIn("Verification passed", text)
 
+    def test_settings_explains_user_scoped_preferences(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project = Path(temp_dir) / "project"
+            project.mkdir()
+            console = LoopForgeConsole(InteractiveShell(project, output=io.StringIO()))
+            text = "".join(fragment for _, fragment in console._settings_fragments())
+
+        self.assertIn("Statusline", text)
+        self.assertIn("saved for this user", text)
+
 
 class _working_directory:
     def __init__(self, directory: Path) -> None:
