@@ -20,8 +20,10 @@ autonomy: verification is evidence, never review or publication authority.
 - Keep `loopforge.cli:main` stable. The facade is
   `src/loopforge/cli/__init__.py`; handlers live in `src/loopforge/cli/`.
 - Keep one behavior path across top-level commands and slash commands. Reuse
-  the renderer, workflow progress, guidance, and effective pack contract; do
-  not add another command registry or live renderer.
+  the renderer, presentation/actions, workflow progress, guidance, and
+  effective pack contract; do not add another command registry or live renderer.
+- Interactive TTY sessions open the full-screen console by default. Preserve
+  `--plain`, `shell --command`, and `shell --script` as compatibility paths.
 - `src/loopforge/engine/__init__.py` owns workflow state. Use its normalizers
   and approval APIs; do not patch lifecycle fields from CLI code.
 - Product checks, adapters, policies, schemas, templates, and bundled packs

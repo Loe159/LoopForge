@@ -67,20 +67,22 @@ class CliTuiTests(unittest.TestCase):
         importlib.util.find_spec("prompt_toolkit") is not None,
         "prompt_toolkit is an optional runtime dependency in this source-tree test mode",
     )
-    def test_fullscreen_console_is_opt_in_for_this_release(self) -> None:
+    def test_fullscreen_console_is_the_interactive_default(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             shell = InteractiveShell(Path(temp_dir), output=io.StringIO())
             with (
                 mock.patch("loopforge.cli.tui.LoopForgeConsole") as console_type,
                 mock.patch("prompt_toolkit.PromptSession") as session_type,
             ):
+                console_type.return_value.run.return_value = 0
+                self.assertEqual(shell.run_prompt(), 0)
+                console_type.assert_called_once_with(shell)
+
+                shell.renderer_mode = "plain"
                 session_type.return_value.prompt.side_effect = EOFError
                 self.assertEqual(shell.run_prompt(), 0)
-                console_type.assert_not_called()
-
-                console_type.return_value.run.return_value = 0
-                self.assertEqual(shell.run_prompt(interactive_ui=True), 0)
-                console_type.assert_called_once_with(shell)
+                console_type.assert_called_once()
+                session_type.assert_called_once()
 
     def test_foreground_operation_bridges_events_and_cancellation(self) -> None:
         operation = ForegroundOperation("Verify run")

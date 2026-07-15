@@ -35,9 +35,9 @@
   `skills/<name>/SKILL.md` definitions and, when overriding the base workflow,
   keep `agents.json`, agent prompts, `permissions.json`, and `workflow.json`
   internally consistent. Use only shell-free command lists in `checks.json`.
-- Before changing shell navigation or command presentation, read
-  `docs/cli-ux-command-plan.md`. Reuse `TerminalRenderer`, status/guidance
-  helpers, `workflow_progress`, and hydrated pack workflow data.
+- Before changing navigation or command presentation, read
+  `docs/cli-ux-command-plan.md`. Reuse `TerminalRenderer`, `shell_snapshot`,
+  `ActionDescriptor`, `workflow_progress`, and hydrated pack workflow data.
 - For the current shell, add slash commands to the `SUPPORTED_COMMANDS`
   registry and a matching `InteractiveShell.cmd_<name>` method in
   `cli/interactive.py`; update aliases/groups/help/completion and tests where
@@ -46,9 +46,9 @@
   the same engine operation and keep intake, confirmation, result, and next
   action consistent. `loopforge run`/`RunCockpitService` and `/run` are the
   current duplication to remove, not a pattern to copy.
-- A multi-project UI first requires a collision-safe project identity and
-  registry. Do not build cross-project navigation by scanning basename-keyed
-  run roots or by editing `current_run_id` outside engine APIs.
+- For multi-project behavior, reuse `engine/projects.py` through its public
+  engine APIs. Do not scan storage roots or edit `current_run_id` outside
+  engine APIs. Test moved/clone conflicts and legacy-root migration.
 
 There are no HTTP endpoints, database entities/migrations, background jobs, or
 remote publication flows in the current codebase; do not scaffold them without

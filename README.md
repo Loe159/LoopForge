@@ -80,16 +80,17 @@ can override a bundled pack. Use `loopforge pack list` to compare effective
 skill, agent, and stage counts, then `loopforge pack detect` to inspect the
 selected pack before starting a run.
 
-`loopforge shell` starts an interactive prompt with slash commands such as
+`loopforge` and `loopforge shell` open the full-screen interactive console in
+a TTY. The compatibility prompt supports slash commands such as
 `/status`, `/guide`, `/actions`, `/next`, `/do`, `/context`, `/compact`,
 `/adapter`, `/continue`, `/runs`, and `/resume`. The shell keeps a project
 default adapter in `.loopforge/config.json` and uses it when `/continue` is run
 without `--adapter`.
 
-The full-screen navigation is available for this release behind
-`loopforge --interactive-ui shell` (or `LOOPFORGE_INTERACTIVE_UI=1`). Use
-`--plain` to force accessible, redirected-output-safe text with no Rich
-rendering; `LOOPFORGE_ASCII=1` uses ASCII-safe glyphs in the full-screen view.
+The full-screen navigation is the default interactive UI. `--interactive-ui`
+remains a harmless compatibility alias. Use `--plain` to force the
+prompt-based, redirected-output-safe text surface with no Rich rendering;
+`LOOPFORGE_ASCII=1` uses ASCII-safe glyphs in the full-screen view.
 
 For scripts and tests, use:
 

@@ -3727,6 +3727,20 @@ class CliTests(unittest.TestCase):
             self.assertEqual(main([]), 2)
         self.assertIn("usage: loopforge", error.getvalue())
 
+    def test_no_args_in_tty_opens_default_interactive_console(self) -> None:
+        with (
+            mock.patch("sys.stdin", TtyStringIO()),
+            mock.patch("sys.stdout", TtyStringIO()),
+            mock.patch(
+                "loopforge.cli.interactive.run_interactive",
+                return_value=0,
+            ) as run_interactive,
+        ):
+            self.assertEqual(main([]), 0)
+
+        run_interactive.assert_called_once()
+        self.assertEqual(run_interactive.call_args.kwargs["renderer_mode"], "auto")
+
     def test_shell_without_command_requires_tty(self) -> None:
         error = io.StringIO()
         with contextlib.redirect_stderr(error):

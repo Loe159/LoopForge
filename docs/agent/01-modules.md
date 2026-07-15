@@ -7,9 +7,9 @@
 | Public CLI | `cli/__init__.py` | Stable `loopforge.cli:main`, compatibility exports, global options, payload/table helpers, and CLI presentation seams. |
 | CLI parsing/contracts | `cli/parser.py`, `models.py`, `errors.py`, `context.py` | Argument tree, shared DTOs/errors, and immutable invocation dependencies. Add shared command contracts here. |
 | CLI orchestration | `cli/app.py`, `workflow.py`, `intake.py`, `github.py` | Handler dispatch, workflow commands, guided intake, and GitHub access. Add a command in its existing cohesive handler family. |
-| CLI experience | `cli/ui.py`, `interactive.py` | Rich/plain rendering, workflow progress formatting, slash-command registry, prompt, toolbar, and command methods. Reuse these seams; the redesign contract is `docs/cli-ux-command-plan.md`. |
+| CLI experience | `cli/ui.py`, `presentation.py`, `actions.py`, `interactive.py`, `tui.py`, `evidence.py`, `operations.py` | Text rendering, shared state/action view models, headless slash compatibility, the default full-screen console, evidence previews, and foreground-operation events. |
 | Engine facade | `engine/__init__.py` | Config, runs, lifecycle state, workspaces, adapters, verification, memory, metrics wrappers, and local draft preparation. It owns persisted lifecycle transitions. |
-| Engine services | `engine/storage.py`, `packs.py`, `metrics.py` | Atomic JSON objects, pack discovery/validation, and unknown-safe metric aggregation. |
+| Engine services | `engine/storage.py`, `projects.py`, `packs.py`, `metrics.py` | Atomic JSON objects, project identity/registry/migration, pack discovery/validation, and unknown-safe metric aggregation. |
 | Packaged runtime | `checks/`, `adapters/`, `contracts/`, `templates/` | Executable deterministic checks, local adapter, policy/schema paths, and legacy artifact templates. |
 | Bundled packs | `packs/<name>/` | Inheritable pack metadata plus skills, agents, permission sets, workflow stages, checks, protected paths, and memory rules. Project-local homonyms take precedence. |
 
@@ -28,11 +28,11 @@ Handlers resolve dependencies through `CliContext.api`, the injected
 `loopforge.cli` facade. This is a compatibility seam verified by
 `tests/test_cli_structure.py`.
 
-The interactive shell has a second dispatch surface in
+The headless interactive shell has a compatibility dispatch surface in
 `cli/interactive.py`: `SUPPORTED_COMMANDS`, `COMMAND_GROUPS`,
-`InteractiveShell.dispatch`, and `cmd_<name>` methods. Top-level `run` uses
-`RunCockpitService`, but `/run` calls `create_run` separately. Shell work must
-account for both paths until they share an action/presentation layer.
+`InteractiveShell.dispatch`, and `cmd_<name>` methods. The default TTY surface
+is `LoopForgeConsole` in `cli/tui.py`; it consumes `ShellSnapshot` and
+`ActionDescriptor` values rather than persisted run dictionaries directly.
 
 ## Engine ownership
 
@@ -51,6 +51,10 @@ permission sets, and workflow stages from the contribution files declared by
 `pack.json` (`engine/packs.py`). The effective pack contract stored on a run is
 the source for stage titles, actors, permissions, skills, and checks; UI code
 should not hard-code a second workflow catalog.
+
+`engine/projects.py` owns project identifiers, registry records, moved/clone
+handling, legacy-root migration, and global summaries. CLI/TUI code must call
+the exported engine APIs rather than scan `LOOPFORGE_HOME` itself.
 
 ## Compatibility material
 

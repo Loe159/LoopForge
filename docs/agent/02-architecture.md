@@ -16,15 +16,17 @@ The repository implements a local library and CLI, not an HTTP service. State
 is filesystem-backed: project state is in `.loopforge/`, while run and
 workspace data are normally outside the repository.
 
-There are currently two human interaction surfaces after engine calls:
+There are three interaction surfaces after engine calls:
 
 - one-shot commands dispatched by `LoopForgeCli` and rendered through
   `TerminalRenderer` (`cli/app.py`, `cli/workflow.py`, `cli/ui.py`);
-- a `prompt_toolkit.PromptSession` slash-command REPL whose `cmd_*` methods also
-  call engine APIs and render results (`cli/interactive.py`).
+- the default `prompt_toolkit` full-screen console (`cli/tui.py`), fed by the
+  immutable `ShellSnapshot`/`ActionDescriptor` presentation layer;
+- a prompt-based slash-command compatibility surface for `--plain` sessions
+  (`cli/interactive.py`). `shell --command` and `--script` stay headless.
 
-They share helpers but not a complete action/view-model layer, so equivalent
-commands can follow different orchestration paths.
+The TUI reuses engine guidance and lifecycle APIs; it does not own persisted
+workflow transitions.
 
 ## Workflow data flow
 
@@ -70,13 +72,9 @@ are compatibility launchers.
 
 ## Project/run indexing boundary
 
-`new_config` stores `project_name`, `run_root`, and one `current_run_id` in the
-project-local config (`engine/__init__.py`). `default_run_root` and
-`default_workspace_root` key external data by the resolved directory basename.
-`list_runs`, `resume_run`, metrics summaries, and `dashboard_snapshot` all start
-from that current project config.
-
-No repository-wide project id, global project registry, or cross-project query
-service exists. The proposed multi-project design and non-destructive migration
-requirements are documented in `docs/cli-ux-command-plan.md`; they are not
-implemented architecture yet.
+`new_config` creates a `project_id`, id-keyed run/workspace roots, and one
+`current_run_id` in project-local config. `engine/projects.py` registers the
+canonical path and last-known attention under `LOOPFORGE_HOME`, migrates legacy
+basename roots without deleting them, and rejects ambiguous moved/clone ids.
+`list_registered_projects` and `list_runs_all_projects` are the global query
+boundary used by text commands and the TUI home screen.

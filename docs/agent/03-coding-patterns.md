@@ -25,13 +25,13 @@
   `print_json_payload`; table commands share the facade’s table helpers.
 - Use `TerminalRenderer` and `render_*` helpers in `cli/ui.py`; preserve
   quiet, no-color, JSON/CSV, and stdout/stderr behavior.
-- Treat `prompt_toolkit` as the owner of the interactive prompt/toolbar and
-  `TerminalRenderer` as the Rich/plain output abstraction. The current shell
-  creates one renderer and one `PromptSession` in `cli/interactive.py`; do not
-  introduce direct ANSI output or a second live renderer.
-- Reuse `workflow_progress()` for pack-driven stage labels and actors. Status
-  colors come from semantic roles/`STATUS_STYLES`, not command-local ANSI
-  constants (`cli/ui.py`).
+- `prompt_toolkit` owns the default full-screen layout in `cli/tui.py`;
+  `TerminalRenderer` owns one-shot Rich/plain output. `--plain` retains the
+  `PromptSession` compatibility prompt in `cli/interactive.py`. Do not add
+  direct ANSI output or another live renderer.
+- Build UI state with `shell_snapshot`, `stage_views`, and
+  `ActionDescriptor`, then execute through engine APIs. Reuse semantic roles
+  and `FAMILY_PRESENTATION`; do not map persisted statuses or colors locally.
 
 ## Lifecycle and processes
 
@@ -63,7 +63,7 @@
 - Public result types end in `Result`; engine actions use snake_case;
   interactive methods use `cmd_<slash_command>`.
 - Slash-command descriptions live in `SUPPORTED_COMMANDS`; grouped discovery
-  lives in `COMMAND_GROUPS`; aliases live in `ALIASES`
-  (`cli/interactive.py`). Keep registry, dispatch method, help/completion, and
-  tests aligned until the shared action registry proposed in
-  `docs/cli-ux-command-plan.md` exists.
+  and contextual completion live in `COMMAND_GROUPS`, `ALIASES`, and
+  `contextual_commands` (`cli/interactive.py`). TUI actions derive from
+  `ActionDescriptor`; keep both compatibility surfaces aligned with the same
+  engine guidance.

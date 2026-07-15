@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
-import os
 import shutil
 import shlex
 import subprocess
@@ -256,21 +255,14 @@ def tui_dependency_state() -> dict[str, bool]:
 
 
 def interactive_ui_enabled(*, requested: bool = False) -> bool:
-    """Return whether the experimental full-screen interface is enabled.
+    """Return whether the full-screen console is the interactive default.
 
-    The prompt shell remains the compatibility default for this release.  This
-    keeps terminal multiplexers, assistive tooling, and established workflows
-    on the mature interaction path while the full-screen UI is evaluated.
+    ``requested`` remains accepted for callers that used the former opt-in
+    flag.  Interactive TTY sessions now always open the console; ``--plain``
+    selects the prompt-based compatibility surface instead.
     """
 
-    if requested:
-        return True
-    return os.environ.get("LOOPFORGE_INTERACTIVE_UI", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    return True
 
 
 def available_commands() -> dict[str, str]:
@@ -1996,7 +1988,7 @@ class InteractiveShell:
             parts.append(status.next_step)
         return " | ".join(parts)
 
-    def run_prompt(self, *, interactive_ui: bool = False) -> int:
+    def run_prompt(self, *, interactive_ui: bool = True) -> int:
         deps = tui_dependency_state()
         missing = [name for name, available in deps.items() if not available]
         if missing:

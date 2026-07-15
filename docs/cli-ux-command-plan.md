@@ -1,6 +1,7 @@
 # LoopForge shell UX redesign
 
-Status: proposed plan based on the working tree on 2026-07-15.
+Status: phases 0–7 are implemented on `master` as of 2026-07-15. This document
+also records the intended UX contract for subsequent changes.
 
 ## Outcome
 
@@ -27,7 +28,7 @@ The non-interactive CLI remains stable and scriptable. `--json`, CSV, plain
 text, exit codes, stdout/stderr separation, `NO_COLOR`, and `--no-input` must
 not depend on the full-screen interface.
 
-## Evidence from the current code
+## Historical baseline evidence (before phases 1–7)
 
 - `src/loopforge/cli/interactive.py` exposes 64 supported and 30 recognized but
   unsupported commands through one completion catalog. This is too much
@@ -661,8 +662,9 @@ a proposed extension, not evidence that these files already exist.
    redirected-output behavior.
 3. Measure warm start, project index, 1,000-run list, and large-log rendering.
 4. Add an opt-out `--plain` path and preserve all machine formats.
-5. Ship behind an interactive feature flag for one release, then make it the
-   default after compatibility tests and real-user sessions pass.
+5. The full-screen console is now the default for interactive TTY sessions.
+   Preserve `--plain` as the compatibility/accessible opt-out, and keep
+   `--interactive-ui` accepted as a no-op compatibility flag.
 
 ## Acceptance criteria
 

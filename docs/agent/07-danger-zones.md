@@ -49,28 +49,25 @@ incorrect when a child or project-local pack overrides data.
 
 ## Project identity and external run roots
 
-**Path:** `src/loopforge/engine/__init__.py` (`project_name`,
-`default_run_root`, `default_workspace_root`, `new_config`, `list_runs`,
-`resume_run`).
+**Paths:** `src/loopforge/engine/projects.py`, `engine/__init__.py`
+(`new_config`, `normalize_config`, run/workspace roots, project APIs).
 
-External data is currently keyed by project directory basename. Changing this
-layout can orphan existing runs, collide same-named repositories, or make
-`current_run_id` point at a different root. Any project registry/id migration
-must be non-destructive, preserve legacy discovery, cover moved/cloned
-projects, and test two repositories with the same basename.
+External data is keyed by generated project id and legacy basename roots can be
+migrated. Changing this contract can orphan runs, merge moved/cloned projects,
+or make `current_run_id` point at a different root. Preserve non-destructive
+migration and registry conflict handling; test two same-named repositories.
 
 ## Interactive rendering and duplicated command paths
 
 **Paths:** `src/loopforge/cli/ui.py`, `interactive.py`, `app.py`, `workflow.py`,
 and `tests/test_cli.py`.
 
-The shell combines a `prompt_toolkit` prompt with Rich output and has a second
-`cmd_*` dispatch surface. Top-level and slash commands do not always use the
-same orchestration (`run` is the clearest example). A full-screen TUI can
-flicker, corrupt scrollback, break redirected output, or diverge from CLI
-behavior if it adds another renderer/action implementation. Preserve headless
-`--command`/`--script`, JSON/CSV/plain behavior, TTY detection, confirmation
-rules, Ctrl-C semantics, and semantic no-color fallbacks.
+The full-screen TUI is the default in an interactive TTY, while `--plain`,
+`--command`, and `--script` use compatibility paths. It can flicker, corrupt
+scrollback, break redirected output, or diverge from CLI behavior if it adds
+another renderer/action implementation. Preserve headless commands, JSON/CSV,
+TTY detection, confirmation rules, Ctrl-C semantics, 60-column clipping,
+ASCII fallback, and bounded list rendering.
 
 ## External effects and generated files
 

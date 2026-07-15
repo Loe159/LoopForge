@@ -16,10 +16,9 @@ artifact. The persisted workflow and its approval gates live in
   `src/loopforge/cli/__init__.py`.
 - Runtime dependencies are `prompt_toolkit` and `rich` (`pyproject.toml`),
   both with reduced fallbacks in the CLI UI/shell.
-- The interactive registry currently contains 64 supported slash commands and
-  30 recognized unsupported names (`src/loopforge/cli/interactive.py`). The
-  shell is a `PromptSession` REPL with a Rich-aware renderer, not a full-screen
-  multi-project application.
+- Interactive TTY sessions open the `prompt_toolkit` full-screen console by
+  default (`cli/tui.py`). `shell --command` and `--script` remain headless;
+  `--plain` uses the prompt-based compatibility surface.
 - Tests are `unittest` suites under `tests/`; no database, HTTP server,
   container definition, Makefile, or GitHub Actions workflow was found.
 - `.github/` contains an issue template only. Release/deployment automation is
@@ -29,8 +28,8 @@ artifact. The persisted workflow and its approval gates live in
 
 | Path | Current role |
 | --- | --- |
-| `src/loopforge/cli/` | CLI facade, parser, command handlers, interactive shell, intake, and rendering |
-| `src/loopforge/engine/` | Workflow API plus JSON storage, pack registry, and metrics service |
+| `src/loopforge/cli/` | CLI facade, parser, handlers, shared presentation/actions, TUI, evidence, operations, and rendering |
+| `src/loopforge/engine/` | Workflow API plus JSON storage, project registry, pack registry, and metrics service |
 | `src/loopforge/checks/`, `adapters/` | Packaged deterministic checks and local implementation adapter |
 | `src/loopforge/contracts/`, `templates/`, `packs/` | Policies/schemas, legacy templates, and bundled packs with skills, agents, permissions, workflows, checks, and protected paths |
 | `.agent/` | Compatibility launchers for migrated scripts and remaining inherited bootstrap material |
@@ -45,11 +44,10 @@ uses platform-aware locations (`loopforge_home` in `engine/__init__.py`).
 Project-local packs under `.loopforge/packs/` override bundled packs in
 `src/loopforge/packs/`.
 
-Run and workspace roots currently use only `project_dir.name`
-(`default_run_root`/`default_workspace_root` in `engine/__init__.py`). There is
-no global project registry, and `list_runs`/`dashboard_snapshot` inspect only
-the current project. This is a concrete limitation for same-named repositories
-and a multi-project shell.
+Each configuration has a generated `project_id`. `engine/projects.py` stores
+registered project metadata under `LOOPFORGE_HOME`; run and workspace roots are
+keyed by that id. Legacy basename-keyed roots are migrated non-destructively by
+the engine. `projects`, `open`, and `runs --all-projects` expose global views.
 
 ## Generated and uncertain material
 
