@@ -385,20 +385,7 @@ class LoopForgeConsole:
 
         @bindings.add("c-c")
         def _interrupt(event: Any) -> None:
-            if self._operation is not None and not self._operation.finished:
-                self._operation.cancel()
-                self.state.notice = "Cancelling foreground operation…"
-                self._refresh()
-                return
-            if self._dialog_container is not None:
-                self._close_dialog()
-                return
-            if self._last_interrupt:
-                event.app.exit()
-                return
-            self._last_interrupt = True
-            self.state.notice = "Press Ctrl+C again to exit."
-            self._refresh()
+            self._handle_interrupt(event.app)
 
         @bindings.add("l")
         def _toggle_live_output(event: Any) -> None:
@@ -406,6 +393,29 @@ class LoopForgeConsole:
                 self._show_live_output()
 
         return bindings
+
+    def _handle_interrupt(self, application: Any) -> None:
+        """Cancel active work first; otherwise require a second interrupt to exit.
+
+        The confirmation flag must outlive a redraw.  Rendering is triggered by
+        the first interrupt, so resetting it in a render callback made the
+        second ``Ctrl+C`` indistinguishable from the first.
+        """
+
+        if self._operation is not None and not self._operation.finished:
+            self._operation.cancel()
+            self.state.notice = "Cancelling foreground operation…"
+            self._refresh()
+            return
+        if self._dialog_container is not None:
+            self._close_dialog()
+            return
+        if self._last_interrupt:
+            application.exit()
+            return
+        self._last_interrupt = True
+        self.state.notice = "Press Ctrl+C again to exit."
+        self._refresh()
 
     def _header_fragments(self) -> list[tuple[str, str]]:
         project = self._project_path()
@@ -435,7 +445,6 @@ class LoopForgeConsole:
         return [("class:secondary", self._line(footer + notice))]
 
     def _body_fragments(self) -> list[tuple[str, str]]:
-        self._last_interrupt = False
         self._collect_operation_events()
         self._collect_evidence_search_results()
         if self.state.screen == "home":

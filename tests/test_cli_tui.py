@@ -110,6 +110,20 @@ class CliTuiTests(unittest.TestCase):
         self.assertTrue(any(event.kind == "cancellation_requested" for event in events))
         self.assertTrue(any(event.kind == "cancelled" for event in events))
 
+    def test_second_ctrl_c_exits_after_the_first_interrupt_redraws(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project = Path(temp_dir) / "project"
+            project.mkdir()
+            console = LoopForgeConsole(InteractiveShell(project, output=io.StringIO()))
+            application = mock.Mock()
+
+            console._handle_interrupt(application)
+            console._body_fragments()
+            console._handle_interrupt(application)
+
+        self.assertEqual(console.state.notice, "Press Ctrl+C again to exit.")
+        application.exit.assert_called_once_with()
+
     def test_live_operation_receipt_uses_real_worker_result(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             project = Path(temp_dir) / "project"

@@ -136,48 +136,9 @@ SUPPORTED_COMMANDS = {
 }
 
 
-UNSUPPORTED_COMMANDS = {
-    "advisor": "LoopForge does not manage a second-model advisor yet.",
-    "agent": "LoopForge adapter attempts are tracked as runs, not live agent thread switches.",
-    "agents": "LoopForge does not manage background subagent fleets yet.",
-    "apps": "Connector browsing belongs to the agent client, not the LoopForge engine.",
-    "background": "Detaching interactive sessions is not supported yet.",
-    "batch": "Parallel worktree orchestration is not implemented yet.",
-    "bg": "Detaching interactive sessions is not supported yet.",
-    "btw": "Side conversations are not persisted by LoopForge yet.",
-    "delete": "Deletion is intentionally not implemented in v1 to avoid destructive actions.",
-    "effort": "Model reasoning effort is owned by the selected adapter CLI.",
-    "experimental": "LoopForge does not expose experimental feature toggles yet.",
-    "fast": "Fast tier selection is owned by the selected adapter CLI.",
-    "feedback": "Feedback submission is not implemented yet.",
-    "hooks": "Lifecycle hook management is not implemented yet.",
-    "ide": "IDE context import is not implemented yet; mention files in the task or run scratch.",
-    "import": "External agent configuration import is not implemented yet.",
-    "keybindings": (
-        "Use /keymap for session editing mode; persistent keybindings are not implemented."
-    ),
-    "login": "LoopForge does not own provider authentication.",
-    "logout": "LoopForge does not own provider authentication.",
-    "mcp": "MCP tool status belongs to the adapter/client layer for now.",
-    "model": "Model selection is owned by the selected adapter CLI.",
-    "personality": "Response style is owned by the adapter/client layer.",
-    "rewind": "Checkpoint rewind is not implemented yet.",
-    "sandbox-add-read-dir": (
-        "Windows sandbox read-dir grants are owned by the adapter/client layer."
-    ),
-    "schedule": "Scheduled cloud routines are not implemented yet.",
-    "side": "Side conversations are not persisted by LoopForge yet.",
-    "stop": "Background task stopping is not implemented yet.",
-    "ultraplan": "Cloud planning sessions are not implemented yet.",
-    "ultrareview": "Cloud multi-agent review is not implemented yet.",
-    "usage-credits": "Usage credit management is not implemented yet.",
-}
-
-
-# ``SUPPORTED_COMMANDS`` remains the complete local surface for explicit
-# compatibility commands.  Discovery deliberately uses the smaller contextual
-# catalog below; recognized-but-unavailable commands never pollute completion.
-COMMANDS = dict(sorted({**SUPPORTED_COMMANDS, **UNSUPPORTED_COMMANDS}.items()))
+# ``SUPPORTED_COMMANDS`` is the complete local command surface. Discovery uses
+# the smaller contextual catalog below, while ``/commands all`` shows it all.
+COMMANDS = dict(sorted(SUPPORTED_COMMANDS.items()))
 ALIASES = {
     "?": "help",
     "adapters": "adapter",
@@ -351,10 +312,6 @@ class InteractiveShell:
         command, args = self.canonical_command(command, args)
         if implicit_run:
             return self.cmd_run(args)
-        if command in UNSUPPORTED_COMMANDS:
-            self.write(f"/{command} is recognized but not supported yet.")
-            self.write(f"LoopForge equivalent: {UNSUPPORTED_COMMANDS[command]}")
-            return DispatchResult(0)
         handler = getattr(self, f"cmd_{command.replace('-', '_')}", None)
         if handler is None:
             self.write(f"Unknown command: /{command}", error=True)
@@ -754,8 +711,6 @@ class InteractiveShell:
             command, _ = self.canonical_command(command, "")
             if command in COMMANDS:
                 self.write(f"/{command}: {COMMANDS[command]}")
-                if command in UNSUPPORTED_COMMANDS:
-                    self.write(f"Status: not supported yet. {UNSUPPORTED_COMMANDS[command]}")
                 return DispatchResult(0)
             self.write(f"Unknown command: /{command}", error=True)
             return DispatchResult(2)
@@ -769,11 +724,8 @@ class InteractiveShell:
     def cmd_commands(self, raw: str = "") -> DispatchResult:
         show_all = raw.strip().lower() == "all"
         if show_all:
-            rows = []
-            for command, description in COMMANDS.items():
-                state = "local" if command in SUPPORTED_COMMANDS else "not supported yet"
-                rows.append([f"/{command}", state, description])
-            self.write_table("LoopForge commands", ["Command", "Status", "Description"], rows)
+            rows = [[f"/{command}", description] for command, description in COMMANDS.items()]
+            self.write_table("LoopForge commands", ["Command", "Description"], rows)
             return DispatchResult(0)
 
         available = contextual_commands(self.project_dir)
@@ -790,7 +742,7 @@ class InteractiveShell:
         if remaining:
             rows = [[f"/{command}", SUPPORTED_COMMANDS[command]] for command in remaining]
             self.write_table("More", ["Command", "Use"], rows)
-        self.write("Use /commands all for expert, alias, and unavailable-command details.")
+        self.write("Use /commands all for the complete command catalog.")
         return DispatchResult(0)
 
     def cmd_adapters(self, raw: str = "") -> DispatchResult:

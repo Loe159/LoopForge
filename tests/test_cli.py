@@ -1170,36 +1170,37 @@ class CliTests(unittest.TestCase):
             self.assertIn("Second run", text)
             self.assertIn("LoopForge resumed run", text)
 
-    def test_shell_catalog_and_unsupported_commands_are_honest(self) -> None:
+    def test_shell_catalog_contains_only_implemented_commands(self) -> None:
         commands = available_commands()
         for name in (
             "status",
             "context",
             "compact",
-            "model",
             "permissions",
-            "mcp",
             "review",
             "security-review",
             "statusline",
             "keymap",
         ):
             self.assertIn(name, commands)
+        self.assertNotIn("model", commands)
+        self.assertNotIn("mcp", commands)
 
         with tempfile.TemporaryDirectory() as temp_dir:
             output = io.StringIO()
+            error = io.StringIO()
             with working_directory(Path(temp_dir)), contextlib.redirect_stdout(output):
                 self.assertEqual(main(["shell", "--command", "/commands"]), 0)
                 self.assertEqual(main(["shell", "--command", "/commands all"]), 0)
-                self.assertEqual(main(["shell", "--command", "/model"]), 0)
+                with contextlib.redirect_stderr(error):
+                    self.assertEqual(main(["shell", "--command", "/model"]), 2)
 
             text = output.getvalue()
             useful_catalog, full_catalog = text.split("Use /commands all", 1)
             self.assertIn("/status", useful_catalog)
             self.assertNotIn("/model", useful_catalog)
-            self.assertIn("/model", full_catalog)
-            self.assertIn("/model is recognized but not supported yet", text)
-            self.assertIn("Model selection is owned", text)
+            self.assertNotIn("/model", full_catalog)
+            self.assertIn("Unknown command: /model", error.getvalue())
 
     def test_shell_discovery_is_contextual_and_hides_aliases(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
