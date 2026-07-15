@@ -9,6 +9,7 @@ from unittest import mock
 
 import loopforge
 from loopforge.adapters import local_implementation_adapter
+from loopforge.adapters import kilo_code
 from loopforge.contracts import policy_path
 from loopforge.checks import diff_policy, isolated_process
 from loopforge.engine import (
@@ -321,6 +322,26 @@ class PackagedRuntimeLayoutTests(unittest.TestCase):
         )
 
         self.assertEqual(selected, {"PATH": "canonical"})
+
+    def test_kilo_code_is_allowlisted_and_receives_the_loopforge_prompt(self) -> None:
+        policy = local_implementation_adapter.load_policy()
+        self.assertIn("kilo", policy["allowed_command_basenames"])
+        self.assertIn("kilo.exe", policy["allowed_command_basenames"])
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            prompt_path = Path(temp_dir) / "adapter-prompt.md"
+            prompt_path.write_text("Implement the bounded task.\n", encoding="utf-8")
+
+            command = local_implementation_adapter.command_with_kilo_prompt(
+                ["kilo", "run", "--model", "openai/gpt-5"], prompt_path
+            )
+
+        self.assertEqual(command[:-1], ["kilo", "run", "--model", "openai/gpt-5"])
+        self.assertEqual(command[-1], "Implement the bounded task.\n")
+        self.assertEqual(
+            kilo_code.command_with_prompt(["kilo", "run", "--agent", "read-only"], "Inspect only."),
+            ["kilo", "run", "--agent", "read-only", "Inspect only."],
+        )
 
 
 class PackRegistryTests(unittest.TestCase):

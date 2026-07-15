@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from loopforge.adapters.kilo_code import command_with_prompt as kilo_command_with_prompt
+from loopforge.adapters.kilo_code import is_kilo_run_command
 from loopforge.engine.packs import PackRegistry
 from loopforge.engine.metrics import MetricsService
 from loopforge.engine.storage import DEFAULT_JSON_STORE
@@ -50,6 +52,7 @@ DEFAULT_USER_PREFERENCES = {
 SUPPORTED_ADAPTERS = (
     "codex",
     "claude-code",
+    "kilo-code",
     "aider",
     "opencode",
     "mini-swe-agent",
@@ -98,6 +101,7 @@ PROFILE_POLICIES: dict[str, dict[str, Any]] = {
 AGENT_COMMANDS = {
     "codex": "codex",
     "claude-code": "claude",
+    "kilo-code": "kilo",
     "aider": "aider",
     "opencode": "opencode",
     "mini-swe-agent": "mini-swe-agent",
@@ -4908,6 +4912,15 @@ def command_for_readonly_stage(
         return ["codex", *args]
     if adapter == "claude-code" and not adapter_args:
         return ["claude", "-p", "--permission-mode", "plan"]
+    if adapter == "kilo-code":
+        if not adapter_args:
+            raise ValueError(
+                "read-only kilo-code requires non-interactive arguments that select a read-only agent"
+            )
+        args = list(adapter_args)
+        if args[0] != "run":
+            args.insert(0, "run")
+        return ["kilo", *args]
     if not adapter_args:
         raise ValueError(f"read-only {adapter} requires non-interactive adapter arguments")
     return command_for_adapter(adapter, adapter_args)
@@ -4940,9 +4953,13 @@ def execute_readonly_adapter_command(
     timeout_seconds: int,
 ) -> tuple[dict[str, Any], bytes, bytes]:
     resolved = resolve_child_executable(command)
+    kilo_prompted = is_kilo_run_command(resolved)
+    prepared_command = (
+        kilo_command_with_prompt(resolved, decode_output(prompt)) if kilo_prompted else resolved
+    )
     isolated = isolated_process_module()
     policy = isolated.load_policy()
-    isolated.validate_command(resolved, project_dir, policy)
+    isolated.validate_command(prepared_command, project_dir, policy)
     environment = isolated.build_child_environment(
         isolated.select_allowed_parent_environment(os.environ, policy),
         policy,
@@ -4950,10 +4967,10 @@ def execute_readonly_adapter_command(
     bounded_timeout = min(float(timeout_seconds), float(policy["max_timeout_seconds"]))
     try:
         completed = subprocess.run(
-            resolved,
+            prepared_command,
             cwd=project_dir,
             env=environment,
-            input=prompt,
+            input=None if kilo_prompted else prompt,
             capture_output=True,
             timeout=bounded_timeout,
             shell=False,
@@ -5012,6 +5029,13 @@ def command_for_attempt(
         if "-" not in args:
             args.append("-")
         return ["codex", *args]
+    if adapter == "kilo-code":
+        args = list(adapter_args)
+        if not args:
+            args = ["run"]
+        elif args[0] != "run":
+            args.insert(0, "run")
+        return ["kilo", *args]
     return command_for_adapter(adapter, adapter_args)
 
 

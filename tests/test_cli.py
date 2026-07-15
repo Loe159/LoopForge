@@ -21,6 +21,7 @@ from loopforge.engine import (
     apply_plan_approval,
     approve_review,
     command_for_attempt,
+    command_for_readonly_stage,
     current_guidance,
     current_status,
     loopforge_home,
@@ -4337,6 +4338,30 @@ class CliTests(unittest.TestCase):
         self.assertIn("workspace", command)
         self.assertIn("--add-dir", command)
         self.assertIn("run", command)
+
+    def test_kilo_code_commands_use_documented_headless_run_mode(self) -> None:
+        self.assertEqual(
+            command_for_attempt(adapter="kilo-code", adapter_args=[]),
+            ["kilo", "run"],
+        )
+        self.assertEqual(
+            command_for_attempt(adapter="kilo-code", adapter_args=["--model", "openai/gpt-5"]),
+            ["kilo", "run", "--model", "openai/gpt-5"],
+        )
+        with self.assertRaisesRegex(ValueError, "select a read-only agent"):
+            command_for_readonly_stage(
+                adapter="kilo-code",
+                adapter_args=[],
+                workspace_dir=Path("workspace"),
+            )
+        self.assertEqual(
+            command_for_readonly_stage(
+                adapter="kilo-code",
+                adapter_args=["--agent", "loopforge-read-only"],
+                workspace_dir=Path("workspace"),
+            ),
+            ["kilo", "run", "--agent", "loopforge-read-only"],
+        )
 
     def test_continue_fixture_adapter_failure_blocks_readably(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

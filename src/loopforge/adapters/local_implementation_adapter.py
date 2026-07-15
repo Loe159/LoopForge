@@ -12,6 +12,7 @@ import threading
 from pathlib import Path
 from typing import Any, Sequence
 
+from loopforge.adapters.kilo_code import command_with_prompt, is_kilo_command
 from loopforge.checks import isolated_process, validate_implementation_result
 from loopforge.contracts import policy_path
 
@@ -36,6 +37,8 @@ EXPECTED_POLICY: dict[str, Any] = {
         "claude-code.exe",
         "codex",
         "codex.exe",
+        "kilo",
+        "kilo.exe",
         "mini-swe-agent",
         "mini-swe-agent.exe",
         "opencode",
@@ -148,6 +151,24 @@ def compact_stream_text(value: object, limit: int = 180) -> str:
 
 def is_codex_command(command: Sequence[str]) -> bool:
     return command_basename(command) in {"codex", "codex.exe"}
+
+
+def command_with_kilo_prompt(
+    command: Sequence[str], stdin_file: Path | None
+) -> list[str]:
+    """Pass the LoopForge prompt to Kilo's positional ``kilo run`` message.
+
+    Kilo's non-interactive command accepts the task as a positional argument,
+    rather than reading it from stdin like Codex.  Keep this conversion in the
+    shared protocol wrapper so command allowlisting, isolated execution, and
+    result validation remain identical for every implementation adapter.
+    """
+
+    prepared = list(command)
+    if stdin_file is None or not is_kilo_command(prepared):
+        return prepared
+    prompt = stdin_file.read_text(encoding="utf-8")
+    return command_with_prompt(prepared, prompt)
 
 
 def is_codex_json_stream(command: Sequence[str]) -> bool:
@@ -343,13 +364,18 @@ def run_adapter(
         )
         return validate_implementation_result.canonical_result_bytes(value)
 
+    prepared_command = command_with_kilo_prompt(command, stdin_file)
     completed: subprocess.CompletedProcess[bytes] | None = None
     timed_out = False
     try:
-        stdin_handle = stdin_file.open("rb") if stdin_file is not None else None
+        stdin_handle = (
+            stdin_file.open("rb")
+            if stdin_file is not None and not is_kilo_command(prepared_command)
+            else None
+        )
         isolation_policy = isolated_process.load_policy()
         process = subprocess.Popen(
-            list(command),
+            prepared_command,
             cwd=workspace,
             stdin=stdin_handle,
             stdout=subprocess.PIPE,
@@ -365,8 +391,8 @@ def run_adapter(
         )
         stdout_buffer = bytearray()
         stderr_buffer = bytearray()
-        present_codex_json = is_codex_json_stream(command)
-        present_codex_text = is_codex_command(command) and not present_codex_json
+        present_codex_json = is_codex_json_stream(prepared_command)
+        present_codex_text = is_codex_command(prepared_command) and not present_codex_json
 
         def read_available(source) -> bytes:  # type: ignore[no-untyped-def]
             if hasattr(source, "read1"):
@@ -428,7 +454,7 @@ def run_adapter(
         if stdin_handle is not None:
             stdin_handle.close()
         completed = subprocess.CompletedProcess(
-            list(command),
+            prepared_command,
             returncode=returncode,
             stdout=bytes(stdout_buffer),
             stderr=bytes(stderr_buffer),
