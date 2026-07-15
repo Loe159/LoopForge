@@ -1,0 +1,138 @@
+{
+  "debug_timings": {
+    "render.body": {
+      "count": 4,
+      "median_ms": 82.1,
+      "p95_ms": 82.208,
+      "total_ms": 322.748
+    }
+  },
+  "environment": {
+    "commit": "805a7151615af4ebc895d94ebd2fd6c1aca0a6ce",
+    "filesystem": 4096,
+    "platform": "Linux-6.12.47-x86_64-with-glibc2.39",
+    "python": "3.12.13"
+  },
+  "fixture": {
+    "evidence_paths": 10000,
+    "git_mode": "normal",
+    "process_startup_delay_ms": 0.0,
+    "projects": 20,
+    "runs": 1000
+  },
+  "operations": [
+    {
+      "calls": 3,
+      "io": {
+        "file_read_ms": 0.228,
+        "file_reads": 6,
+        "json_read_ms": 0.47,
+        "json_reads": 6,
+        "path_rglob": 0,
+        "path_rglob_ms": 0.0,
+        "subprocess_ms": 130.75,
+        "subprocess_starts": 3
+      },
+      "median_ms": 44.535,
+      "name": "current_status",
+      "p95_ms": 44.95
+    },
+    {
+      "calls": 3,
+      "io": {
+        "file_read_ms": 0.225,
+        "file_reads": 6,
+        "json_read_ms": 0.376,
+        "json_reads": 6,
+        "path_rglob": 0,
+        "path_rglob_ms": 0.0,
+        "subprocess_ms": 132.668,
+        "subprocess_starts": 3
+      },
+      "median_ms": 43.114,
+      "name": "current_guidance",
+      "p95_ms": 49.983
+    },
+    {
+      "calls": 3,
+      "io": {
+        "file_read_ms": 0.201,
+        "file_reads": 6,
+        "json_read_ms": 195.709,
+        "json_reads": 3006,
+        "path_rglob": 0,
+        "path_rglob_ms": 0.0,
+        "subprocess_ms": 125.194,
+        "subprocess_starts": 3
+      },
+      "median_ms": 135.487,
+      "name": "list_runs",
+      "p95_ms": 139.744
+    },
+    {
+      "calls": 3,
+      "io": {
+        "file_read_ms": 298.564,
+        "file_reads": 30051,
+        "json_read_ms": 0.0,
+        "json_reads": 0,
+        "path_rglob": 3,
+        "path_rglob_ms": 2112.58,
+        "subprocess_ms": 0.0,
+        "subprocess_starts": 0
+      },
+      "median_ms": 1554.416,
+      "name": "evidence_scan",
+      "p95_ms": 1664.426
+    },
+    {
+      "calls": 3,
+      "io": {
+        "file_read_ms": 0.0,
+        "file_reads": 0,
+        "json_read_ms": 0.0,
+        "json_reads": 0,
+        "path_rglob": 0,
+        "path_rglob_ms": 0.0,
+        "subprocess_ms": 0.0,
+        "subprocess_starts": 0
+      },
+      "median_ms": 0.005,
+      "name": "run_snapshot_formatting",
+      "p95_ms": 0.026
+    },
+    {
+      "calls": 1,
+      "io": {
+        "file_read_ms": 0.234,
+        "file_reads": 8,
+        "json_read_ms": 0.548,
+        "path_rglob": 0,
+        "path_rglob_ms": 0.0,
+        "subprocess_ms": 151.554,
+        "subprocess_starts": 5
+      },
+      "median_ms": 155.868,
+      "name": "first_frame",
+      "p95_ms": 155.868
+    },
+    {
+      "calls": 3,
+      "io": {
+        "file_read_ms": 0.515,
+        "file_reads": 12,
+        "json_read_ms": 0.876,
+        "json_reads": 12,
+        "path_rglob": 0,
+        "path_rglob_ms": 0.0,
+        "subprocess_ms": 238.153,
+        "subprocess_starts": 6
+      },
+      "median_ms": 82.126,
+      "name": "run_screen",
+      "p95_ms": 82.217
+    }
+  ],
+  "recorded_at": "2026-07-15T14:40:28+00:00",
+  "schema_version": 1
+}

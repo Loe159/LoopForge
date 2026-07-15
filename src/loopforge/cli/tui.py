@@ -10,10 +10,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from collections import defaultdict
+from math import ceil
 import os
 import shutil
 import shlex
 import sys
+from time import perf_counter
 from typing import TYPE_CHECKING, Any
 
 from loopforge.cli.presentation import (
@@ -40,6 +43,62 @@ if TYPE_CHECKING:
 
 
 SCREENS = ("home", "project", "run", "evidence", "settings")
+
+
+@dataclass
+class DebugTiming:
+    """Bounded local timing samples for diagnosing one interactive session."""
+
+    count: int = 0
+    total_ms: float = 0.0
+    samples_ms: list[float] | None = None
+
+    def add(self, milliseconds: float) -> None:
+        self.count += 1
+        self.total_ms += milliseconds
+        if self.samples_ms is None:
+            self.samples_ms = []
+        # Debug output must remain bounded even in a long-running console.
+        if len(self.samples_ms) < 256:
+            self.samples_ms.append(milliseconds)
+
+    def summary(self) -> dict[str, float | int]:
+        samples = sorted(self.samples_ms or [])
+        p95_index = max(0, ceil(len(samples) * 0.95) - 1)
+        return {
+            "count": self.count,
+            "total_ms": round(self.total_ms, 3),
+            "median_ms": round(samples[len(samples) // 2], 3) if samples else 0.0,
+            "p95_ms": round(samples[p95_index], 3) if samples else 0.0,
+        }
+
+
+def format_run_snapshot(snapshot: ShellSnapshot, *, ascii_mode: bool) -> list[tuple[str, str]]:
+    """Format a hydrated run snapshot without filesystem or engine access.
+
+    This is the first explicit render-only boundary.  Later phases move the
+    remaining screens behind the same contract; the AST performance contract
+    protects this function from accidentally acquiring I/O dependencies.
+    """
+
+    if snapshot.run is None:
+        return [("class:attention", "* No selected run\n" if ascii_mode else "◆ No selected run\n"), ("", "Create a run from the action palette.")]
+
+    label, marker, role = family_presentation(snapshot.family)
+    if ascii_mode:
+        marker = {"◆": "*", "●": "o", "◉": "@", "○": "o", "×": "x", "✓": "+", "–": "-"}.get(marker, marker)
+    separator = "-" if ascii_mode else "·"
+    parts: list[tuple[str, str]] = [
+        ("class:brand", f"{snapshot.run.task or 'Untitled run'}  {marker} {label}\n"),
+        ("class:secondary", f"{snapshot.run.short_id} {separator} {snapshot.run.current_stage} {separator} {snapshot.run.actor}\n\n"),
+    ]
+    for stage in snapshot.stages:
+        stage_marker = stage.marker
+        if ascii_mode:
+            stage_marker = {"◆": "*", "●": "o", "◉": "@", "○": "o", "×": "x", "✓": "+", "–": "-"}.get(stage_marker, stage_marker)
+        parts.append((f"class:{FAMILY_PRESENTATION[stage.family][2]}", f"{stage_marker} {stage.title}"))
+        parts.append(("class:secondary", f"  {stage.actor} {separator} {stage.label}\n"))
+    return parts
 
 
 @dataclass
@@ -85,6 +144,40 @@ class LoopForgeConsole:
         self._last_interrupt = False
         self._operation: ForegroundOperation | None = None
         self._operation_events: list[OperationEvent] = []
+        self._debug_timings: dict[str, DebugTiming] = defaultdict(DebugTiming)
+        self._refresh_requested_at: float | None = None
+
+    @property
+    def debug_timing_enabled(self) -> bool:
+        """Timing is opt-in and stays local to the current console process."""
+
+        return os.environ.get("LOOPFORGE_DEBUG") == "1"
+
+    def debug_timing_summary(self) -> dict[str, dict[str, float | int]]:
+        """Return local timing data for diagnostics or the benchmark harness."""
+
+        if not self.debug_timing_enabled:
+            return {}
+        return {name: metric.summary() for name, metric in sorted(self._debug_timings.items())}
+
+    def _timed_render_callback(self, name: str, callback: Any) -> Any:
+        """Wrap a prompt-toolkit callback without changing its rendering contract."""
+
+        def timed() -> Any:
+            started_at = perf_counter()
+            try:
+                return callback()
+            finally:
+                if self.debug_timing_enabled:
+                    finished_at = perf_counter()
+                    self._debug_timings[f"render.{name}"].add((finished_at - started_at) * 1_000)
+                    if self._refresh_requested_at is not None:
+                        self._debug_timings["key_to_render"].add(
+                            (finished_at - self._refresh_requested_at) * 1_000
+                        )
+                        self._refresh_requested_at = None
+
+        return timed
 
     def _terminal_width(self) -> int:
         return max(60, shutil.get_terminal_size(fallback=(80, 24)).columns)
@@ -128,17 +221,17 @@ class LoopForgeConsole:
         from prompt_toolkit.layout.controls import FormattedTextControl
 
         self._body_window = Window(
-            FormattedTextControl(self._body_fragments),
+            FormattedTextControl(self._timed_render_callback("body", self._body_fragments)),
             wrap_lines=True,
             always_hide_cursor=True,
         )
         root = HSplit(
             [
-                Window(FormattedTextControl(self._header_fragments), height=1),
+                Window(FormattedTextControl(self._timed_render_callback("header", self._header_fragments)), height=1),
                 Window(height=1, char="-" if ascii_ui_enabled() else "─"),
                 self._body_window,
                 Window(height=1, char="-" if ascii_ui_enabled() else "─"),
-                Window(FormattedTextControl(self._footer_fragments), height=1),
+                Window(FormattedTextControl(self._timed_render_callback("footer", self._footer_fragments)), height=1),
             ]
         )
         self._application = Application(
@@ -367,17 +460,9 @@ class LoopForgeConsole:
 
     def _run_fragments(self) -> list[tuple[str, str]]:
         snapshot = self._snapshot(self._project_path())
+        parts = [(style, self._line(fragment.rstrip("\n")) + ("\n" if fragment.endswith("\n") else "")) for style, fragment in format_run_snapshot(snapshot, ascii_mode=ascii_ui_enabled())]
         if snapshot.run is None:
-            return [("class:attention", f"{self._marker('◆')} No selected run\n"), ("", "Create a run from the action palette.")]
-        label, marker, role = family_presentation(snapshot.family)
-        parts: list[tuple[str, str]] = [
-            ("class:brand", self._line(f"{snapshot.run.task or 'Untitled run'}  {self._marker(marker)} {label}") + "\n"),
-            ("class:secondary", self._line(f"{snapshot.run.short_id} {'-' if ascii_ui_enabled() else '·'} {snapshot.run.current_stage} {'-' if ascii_ui_enabled() else '·'} {snapshot.run.actor}") + "\n\n"),
-        ]
-        for stage in snapshot.stages:
-            style = f"class:{FAMILY_PRESENTATION[stage.family][2]}"
-            parts.append((style, self._line(f"{self._marker(stage.marker)} {stage.title}")))
-            parts.append(("class:secondary", self._line(f"  {stage.actor} {'-' if ascii_ui_enabled() else '·'} {stage.label}") + "\n"))
+            return parts
         if snapshot.blockers:
             parts.extend([( "\n", ""), ("class:danger", "Blocked\n"), ("", self._line(snapshot.blockers[0]))])
             if snapshot.run.next_action is not None:
@@ -892,5 +977,7 @@ class LoopForgeConsole:
         self._refresh()
 
     def _refresh(self) -> None:
+        if self.debug_timing_enabled:
+            self._refresh_requested_at = perf_counter()
         if self._application is not None:
             self._application.invalidate()
