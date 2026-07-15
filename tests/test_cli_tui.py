@@ -16,6 +16,7 @@ from loopforge.cli import main
 from loopforge.cli.interactive import InteractiveShell, run_interactive
 from loopforge.cli.operations import ForegroundOperation
 from loopforge.cli.tui import LoopForgeConsole, SCREENS, _clip
+from loopforge.engine import current_status
 
 
 class CliTuiTests(unittest.TestCase):
@@ -160,9 +161,8 @@ class CliTuiTests(unittest.TestCase):
                 {"run_id": f"run-{index}", "task": f"Task {index}", "status": "ready"}
                 for index in range(1_000)
             ]
-            result = type("Runs", (), {"blockers": [], "runs": runs})()
+            console._runs[project.resolve()] = runs
             with (
-                mock.patch("loopforge.cli.tui.list_runs", return_value=result),
                 mock.patch(
                     "loopforge.cli.tui.shutil.get_terminal_size",
                     return_value=os.terminal_size((80, 24)),
@@ -172,6 +172,21 @@ class CliTuiTests(unittest.TestCase):
 
         rendered_runs = [fragment for _, fragment in fragments if "Task " in fragment]
         self.assertLessEqual(len(rendered_runs), 16)
+
+    def test_cached_snapshot_serves_rendering_and_selection_without_reload(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project = Path(temp_dir) / "project"
+            project.mkdir()
+            with mock.patch("loopforge.cli.tui.current_status", wraps=current_status) as status_read:
+                console = LoopForgeConsole(InteractiveShell(project, output=io.StringIO()))
+                console._load_revision(project)
+                calls_after_refresh = status_read.call_count
+                console._header_fragments()
+                console._body_fragments()
+                console._footer_fragments()
+                console._move(1)
+
+        self.assertEqual(status_read.call_count, calls_after_refresh)
 
     def test_ascii_mode_uses_ascii_markers_and_ellipsis(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

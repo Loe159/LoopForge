@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from loopforge.cli.actions import action_descriptors, primary_action
-from loopforge.cli.presentation import shell_snapshot, state_family, workflow_progress
-from loopforge.engine import GuidedAction, GuidanceResult, StatusResult
+from loopforge.cli.presentation import shell_snapshot, shell_snapshot_from_status, state_family, workflow_progress
+from loopforge.engine import GuidedAction, GuidanceResult, StatusResult, current_guidance, current_status, guidance_from_status
 
 
 class CliPresentationTests(unittest.TestCase):
@@ -87,6 +88,25 @@ class CliPresentationTests(unittest.TestCase):
         self.assertEqual(state_family("verification_pending"), "ready")
         self.assertEqual(state_family("verification_pending", blocked=True), "blocked")
         self.assertEqual(state_family("draft_publication_ready", archived=True), "archived")
+
+    def test_current_guidance_is_a_single_status_compatibility_wrapper(self) -> None:
+        project = Path("/workspace/LoopForge")
+        status = current_status(project)
+        with (
+            mock.patch("loopforge.engine.current_status", return_value=status) as status_read,
+            mock.patch("loopforge.engine.guidance_from_status", wraps=guidance_from_status) as from_status,
+        ):
+            current_guidance(project)
+
+        status_read.assert_called_once_with(project)
+        from_status.assert_called_once_with(status)
+
+    def test_snapshot_from_status_does_not_reload_status(self) -> None:
+        status = current_status(Path("/workspace/LoopForge"))
+        with mock.patch("loopforge.engine.current_status") as status_read:
+            shell_snapshot_from_status(status)
+
+        status_read.assert_not_called()
 
     @staticmethod
     def _guidance(action: GuidedAction, *, state: str = "plan_awaiting_approval") -> GuidanceResult:

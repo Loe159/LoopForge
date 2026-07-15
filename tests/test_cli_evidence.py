@@ -4,7 +4,6 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
-from unittest import mock
 
 from loopforge.cli.evidence import approval_summary, evidence_items, preview_evidence
 from loopforge.cli.tui import LoopForgeConsole
@@ -75,12 +74,13 @@ class EvidenceViewerTests(unittest.TestCase):
             console.state.evidence_query = "blocked"
             status = SimpleNamespace(run_dir=run_dir, run={})
 
-            with mock.patch("loopforge.cli.tui.current_status", return_value=status):
-                fragments = console._evidence_fragments()
-                self.assertIn("stderr.txt", "".join(text for _, text in fragments))
-                console._open_selected_evidence()
-                self.assertTrue(console.state.evidence_preview)
-                exported = console._export_evidence_item(console._selected_evidence_item())
+            console._statuses[run_dir.resolve()] = status
+            console._load_evidence_snapshot(run_dir)
+            fragments = console._evidence_fragments()
+            self.assertIn("stderr.txt", "".join(text for _, text in fragments))
+            console._open_selected_evidence()
+            self.assertTrue(console.state.evidence_preview)
+            exported = console._export_evidence_item(console._selected_evidence_item())
 
             self.assertEqual(exported, Path("artifacts/exports/stderr-evidence.txt"))
             self.assertEqual(

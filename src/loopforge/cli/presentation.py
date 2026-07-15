@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from loopforge.cli.actions import ActionDescriptor, action_descriptors
-from loopforge.engine import GuidanceResult, StatusResult
+from loopforge.engine import GuidanceResult, StatusResult, guidance_from_status
 
 
 STATE_FAMILIES = {
@@ -246,3 +246,9 @@ def shell_snapshot(result: StatusResult, guidance: GuidanceResult) -> ShellSnaps
         state=guidance.state,
         family=run_summary.family,
     )
+
+
+def shell_snapshot_from_status(result: StatusResult) -> ShellSnapshot:
+    """Build one render-safe snapshot from a status already read by the caller."""
+
+    return shell_snapshot(result, guidance_from_status(result))

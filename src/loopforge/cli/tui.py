@@ -16,6 +16,7 @@ import os
 import shutil
 import shlex
 import sys
+from threading import Timer
 from time import perf_counter
 from typing import TYPE_CHECKING, Any
 
@@ -23,17 +24,16 @@ from loopforge.cli.presentation import (
     FAMILY_PRESENTATION,
     ShellSnapshot,
     family_presentation,
-    shell_snapshot,
+    shell_snapshot_from_status,
 )
 from loopforge.cli.operations import ForegroundOperation, OperationEvent
 from loopforge.cli.evidence import ApprovalSummary, EvidenceItem, approval_summary, evidence_items, preview_evidence
 from loopforge.engine import (
     continue_run,
-    current_guidance,
     current_status,
     execute_readonly_stage,
     list_registered_projects,
-    list_runs,
+    list_runs_from_status,
     resume_run,
     verify_run,
 )
@@ -146,6 +146,16 @@ class LoopForgeConsole:
         self._operation_events: list[OperationEvent] = []
         self._debug_timings: dict[str, DebugTiming] = defaultdict(DebugTiming)
         self._refresh_requested_at: float | None = None
+        self._revision = 0
+        self._snapshots: dict[Path, ShellSnapshot] = {}
+        self._statuses: dict[Path, Any] = {}
+        self._runs: dict[Path, list[dict[str, Any]]] = {}
+        self._run_blockers: dict[Path, list[str]] = {}
+        self._evidence: dict[Path, tuple[EvidenceItem, ...]] = {}
+        self._project_records: list[dict[str, Any]] = []
+        self._branches: dict[Path, str] = {}
+        self._spinner_timer: Timer | None = None
+        self._load_revision(shell.project_dir)
 
     @property
     def debug_timing_enabled(self) -> bool:
@@ -240,7 +250,6 @@ class LoopForgeConsole:
             full_screen=True,
             mouse_support=False,
             style=self._style(),
-            refresh_interval=0.1,
         )
         self._application.run()
         return 0
@@ -320,6 +329,7 @@ class LoopForgeConsole:
 
         @bindings.add("e")
         def _evidence(event: Any) -> None:
+            self._load_evidence_snapshot(self._project_path())
             self.state.screen = "evidence"
             self.state.selected_index = 0
             self.state.evidence_preview = False
@@ -434,15 +444,16 @@ class LoopForgeConsole:
 
     def _project_fragments(self) -> list[tuple[str, str]]:
         project = self._project_path()
-        result = list_runs(project)
+        runs = self._cached_runs(project)
+        blockers = self._run_blockers.get(project, [])
         snapshot = self._snapshot(project)
         separator = " - " if ascii_ui_enabled() else " · "
         parts: list[tuple[str, str]] = [("class:brand", self._line(snapshot.project.name) + "\n")]
         parts.append(("class:secondary", self._line(f"{project}{separator}{snapshot.project.profile or 'default'}{separator}{snapshot.project.pack or 'no pack'}") + "\n\n"))
-        if result.blockers:
-            return parts + [("class:attention", f"{self._marker('◆')} Project setup required\n"), ("", self._line(result.blockers[0]))]
+        if blockers:
+            return parts + [("class:attention", f"{self._marker('◆')} Project setup required\n"), ("", self._line(blockers[0]))]
         parts.append(("class:secondary", "Runs\n"))
-        runs = self._filtered_runs(result.runs)
+        runs = self._filtered_runs(runs)
         if not runs:
             return parts + [("", "No runs. Press n, then choose Create run in the action palette.")]
         for index, run in self._visible_items(runs):
@@ -520,22 +531,9 @@ class LoopForgeConsole:
         ]
 
     def _projects(self) -> list[dict[str, Any]]:
-        records = list(list_registered_projects().projects)
-        current = self.shell.project_dir.resolve()
-        if not any(Path(str(record.get("path") or "")).resolve() == current for record in records):
-            status = current_status(current)
-            records.insert(
-                0,
-                {
-                    "name": current.name,
-                    "path": str(current),
-                    "initialized": status.initialized,
-                    "run_count": len(list_runs(current).runs),
-                    "attention": self._snapshot(current).family,
-                    "branch": self._branch_label(current),
-                    "last_activity": "current session",
-                },
-            )
+        """Return the current revision's project rows without reloading storage."""
+
+        records = list(self._project_records)
         if self.state.filter_text:
             needle = self.state.filter_text.casefold()
             records = [record for record in records if needle in str(record).casefold()]
@@ -543,13 +541,17 @@ class LoopForgeConsole:
         return records
 
     def _snapshot(self, project: Path) -> ShellSnapshot:
-        return shell_snapshot(current_status(project), current_guidance(project))
+        project = project.resolve()
+        snapshot = self._snapshots.get(project)
+        if snapshot is None:
+            raise RuntimeError("TUI snapshot was not loaded for the selected project")
+        return snapshot
 
     def _project_path(self) -> Path:
         return (self.state.selected_project or self.shell.project_dir).resolve()
 
     @staticmethod
-    def _branch_label(project: Path) -> str:
+    def _read_branch_label(project: Path) -> str:
         try:
             import subprocess
 
@@ -557,6 +559,64 @@ class LoopForgeConsole:
             return result.stdout.strip() or "no Git branch"
         except OSError:
             return "no Git branch"
+
+    def _branch_label(self, project: Path) -> str:
+        return self._branches.get(project.resolve(), "no Git branch")
+
+    def _load_revision(self, project: Path) -> None:
+        """Publish one coherent UI revision before prompt-toolkit renders it.
+
+        Every potentially blocking read is deliberately concentrated here. UI
+        callbacks only consume these immutable-ish values until the next
+        explicit invalidation point.
+        """
+
+        project = project.resolve()
+        status = current_status(project)
+        snapshot = shell_snapshot_from_status(status)
+        runs_result = list_runs_from_status(status)
+        records = list(list_registered_projects().projects)
+        if not any(Path(str(record.get("path") or "")).resolve() == project for record in records):
+            records.insert(
+                0,
+                {
+                    "name": project.name,
+                    "path": str(project),
+                    "initialized": status.initialized,
+                    "run_count": len(runs_result.runs),
+                    "attention": snapshot.family,
+                    "branch": self._read_branch_label(project),
+                    "last_activity": "current session",
+                },
+            )
+        self._revision += 1
+        self._statuses = {project: status}
+        self._snapshots = {project: snapshot}
+        self._runs = {project: list(runs_result.runs)}
+        self._run_blockers = {project: list(runs_result.blockers)}
+        self._evidence = {}
+        self._project_records = records
+        self._branches = {project: str(next((record.get("branch") for record in records if Path(str(record.get("path") or "")).resolve() == project), "") or self._read_branch_label(project))}
+
+    def _load_evidence_snapshot(self, project: Path) -> None:
+        """Load evidence once when its screen is entered, never from rendering."""
+
+        project = project.resolve()
+        if project not in self._evidence:
+            self._evidence[project] = evidence_items(self._statuses[project].run_dir)
+
+    def _cached_runs(self, project: Path) -> list[dict[str, Any]]:
+        return self._runs.get(project.resolve(), [])
+
+    def _cached_evidence_items(self) -> tuple[EvidenceItem, ...]:
+        items = self._evidence.get(self._project_path(), ())
+        needle = self.state.evidence_query.strip().casefold()
+        if not needle:
+            return items
+        return tuple(
+            item for item in items
+            if needle in f"{item.label} {item.relative_path}\n{item.searchable_text}".casefold()
+        )
 
     def _filtered_runs(self, runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not self.state.filter_text:
@@ -580,8 +640,8 @@ class LoopForgeConsole:
     def _move(self, change: int) -> None:
         counts = {
             "home": len(self._projects()),
-            "project": len(self._filtered_runs(list_runs(self._project_path()).runs)),
-            "evidence": len(self._evidence_items()),
+            "project": len(self._filtered_runs(self._cached_runs(self._project_path()))),
+            "evidence": len(self._cached_evidence_items()),
         }
         count = counts.get(self.state.screen, 0)
         if count:
@@ -591,8 +651,10 @@ class LoopForgeConsole:
     def _open_selected(self) -> None:
         if self._operation is not None:
             if self._operation.finished:
+                self._stop_spinner_timer()
                 self._operation = None
                 self._operation_events.clear()
+                self._load_revision(self._project_path())
                 self.state.notice = "Operation receipt closed."
                 self._refresh()
             return
@@ -604,10 +666,11 @@ class LoopForgeConsole:
                 # navigation choice, not a workflow-state mutation. Guided
                 # actions below now target the project visible on screen.
                 self.shell.project_dir = self.state.selected_project
+                self._load_revision(self.state.selected_project)
                 self.state.selected_index = 0
                 self.state.screen = "project"
         elif self.state.screen == "project":
-            runs = self._filtered_runs(list_runs(self._project_path()).runs)
+            runs = self._filtered_runs(self._cached_runs(self._project_path()))
             if runs:
                 self.state.selected_run_id = str(runs[self.state.selected_index].get("run_id") or "")
                 result = resume_run(self._project_path(), self.state.selected_run_id)
@@ -615,6 +678,7 @@ class LoopForgeConsole:
                     self.state.notice = result.message
                     self._refresh()
                     return
+                self._load_revision(self._project_path())
                 self.state.selected_index = 0
                 self.state.screen = "run"
         elif self.state.screen == "run":
@@ -638,12 +702,13 @@ class LoopForgeConsole:
     def _cycle_screen(self) -> None:
         index = SCREENS.index(self.state.screen)
         self.state.screen = SCREENS[(index + 1) % len(SCREENS)]
+        if self.state.screen == "evidence":
+            self._load_evidence_snapshot(self._project_path())
         self.state.selected_index = 0
         self._refresh()
 
     def _evidence_items(self) -> tuple[EvidenceItem, ...]:
-        status = current_status(self._project_path())
-        return evidence_items(status.run_dir, query=self.state.evidence_query)
+        return self._cached_evidence_items()
 
     def _selected_evidence_item(self, items: tuple[EvidenceItem, ...] | None = None) -> EvidenceItem | None:
         items = self._evidence_items() if items is None else items
@@ -684,7 +749,7 @@ class LoopForgeConsole:
         self._refresh()
 
     def _export_evidence_item(self, item: EvidenceItem) -> Path | None:
-        status = current_status(self._project_path())
+        status = self._statuses[self._project_path()]
         if status.run_dir is None:
             return None
         destination = status.run_dir / "artifacts" / "exports" / f"{item.path.stem}-evidence{item.path.suffix}"
@@ -744,7 +809,7 @@ class LoopForgeConsole:
         stage = stages.get(action.id)
         if stage is None:
             return None
-        status = current_status(self._project_path())
+        status = self._statuses[self._project_path()]
         return approval_summary(status.run_dir, status.run, stage)
 
     def _execute_action(self, action: Any) -> None:
@@ -757,6 +822,7 @@ class LoopForgeConsole:
             self._start_live_action(action)
             return
         result = self.shell.execute_guided_action(action)
+        self._load_revision(self._project_path())
         self.state.notice = "Action completed." if result.exit_code == 0 else "Action was blocked; inspect evidence."
         self.state.screen = "run"
         self._refresh()
@@ -818,6 +884,7 @@ class LoopForgeConsole:
             )
 
         operation.start(runner)
+        self._start_spinner_timer()
         self.state.screen = "run"
         self.state.notice = ""
         self._refresh()
@@ -834,6 +901,34 @@ class LoopForgeConsole:
                 self.state.notice = "Operation completed."
             else:
                 self.state.notice = "Operation is blocked; inspect evidence."
+
+    def _start_spinner_timer(self) -> None:
+        """Invalidate only the operation panel while a foreground task is active."""
+
+        if self._spinner_timer is not None:
+            return
+
+        def tick() -> None:
+            operation = self._operation
+            if operation is None or operation.finished:
+                self._spinner_timer = None
+                self._collect_operation_events()
+                self._refresh()
+                return
+            self._collect_operation_events()
+            self._refresh()
+            self._spinner_timer = Timer(0.125, tick)
+            self._spinner_timer.daemon = True
+            self._spinner_timer.start()
+
+        self._spinner_timer = Timer(0.125, tick)
+        self._spinner_timer.daemon = True
+        self._spinner_timer.start()
+
+    def _stop_spinner_timer(self) -> None:
+        if self._spinner_timer is not None:
+            self._spinner_timer.cancel()
+            self._spinner_timer = None
 
     def _operation_fragments(self) -> list[tuple[str, str]]:
         operation = self._operation
@@ -870,6 +965,7 @@ class LoopForgeConsole:
 
     def _open_evidence(self) -> None:
         self._close_dialog()
+        self._load_evidence_snapshot(self._project_path())
         self.state.screen = "evidence"
         self.state.selected_index = 0
         self.state.evidence_preview = False
@@ -896,6 +992,7 @@ class LoopForgeConsole:
                 return
             self._close_dialog()
             result = self.shell.cmd_run(f"--task {shlex.quote(task)}")
+            self._load_revision(self._project_path())
             self.state.notice = "Run created." if result.exit_code == 0 else "Run creation was blocked."
             self.state.screen = "run" if result.exit_code == 0 else self.state.screen
             self._refresh()

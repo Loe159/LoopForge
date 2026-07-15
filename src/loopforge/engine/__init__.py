@@ -2990,8 +2990,8 @@ def workflow_stage_guidance(
     return "draft_publication_ready", "The supervised workflow is complete.", "complete", action
 
 
-def current_guidance(project_dir: Path) -> GuidanceResult:
-    status = current_status(project_dir)
+def guidance_from_status(status: StatusResult) -> GuidanceResult:
+    """Build guidance from an already loaded status without performing another read."""
     actions: list[GuidedAction] = []
     diagnostics: list[str] = []
     evidence: list[str] = [f"project: {status.project_dir}"]
@@ -3300,6 +3300,12 @@ def current_guidance(project_dir: Path) -> GuidanceResult:
     )
 
 
+def current_guidance(project_dir: Path) -> GuidanceResult:
+    """Compatibility wrapper for callers that only have a project path."""
+
+    return guidance_from_status(current_status(project_dir))
+
+
 def run_summary_from_path(run_path: Path, *, current_run_id: str | None = None) -> dict[str, Any]:
     run_json_path = run_path / "run.json"
     summary: dict[str, Any] = {
@@ -3332,8 +3338,8 @@ def run_summary_from_path(run_path: Path, *, current_run_id: str | None = None) 
     return summary
 
 
-def list_runs(project_dir: Path) -> RunListResult:
-    status = current_status(project_dir)
+def list_runs_from_status(status: StatusResult) -> RunListResult:
+    """Summarize runs from an already loaded project status."""
     if not status.initialized or status.config is None:
         return RunListResult(
             project_dir=status.project_dir,
@@ -3366,6 +3372,12 @@ def list_runs(project_dir: Path) -> RunListResult:
         runs=runs,
         blockers=[],
     )
+
+
+def list_runs(project_dir: Path) -> RunListResult:
+    """Compatibility wrapper for callers that only have a project path."""
+
+    return list_runs_from_status(current_status(project_dir))
 
 
 def run_attention(run: dict[str, Any]) -> str:
