@@ -1,0 +1,103 @@
+{
+  "workflow": [
+    {"id": "task", "title": "Validate task", "actor": {"id": "task-owner"}},
+    {"id": "research", "title": "Research repository", "actor": {"id": "researcher"}},
+    {"id": "plan", "title": "Plan implementation", "actor": {"id": "planner"}},
+    {"id": "implementation", "title": "Implement plan", "actor": {"id": "developer"}},
+    {"id": "verification", "title": "Verify deterministically", "actor": {"id": "verifier"}},
+    {"id": "review", "title": "Review patch", "actor": {"id": "reviewer"}},
+    {"id": "publication", "title": "Prepare draft publication", "actor": {"id": "publisher"}}
+  ],
+  "cases": [
+    {
+      "id": "uninitialized",
+      "guidance_state": "not_initialized",
+      "state_family": "setup",
+      "initialized": false,
+      "next_command": "loopforge init",
+      "plain_output": "LoopForge status\nstatus   not initialized\nproject  LoopForge\nconfig   .loopforge/config.json\n\nNext\nloopforge init\n",
+      "rich_tokens": ["LoopForge status", "not initialized", "loopforge init"]
+    },
+    {
+      "id": "no_run",
+      "guidance_state": "ready_for_run",
+      "state_family": "ready",
+      "initialized": true,
+      "next_command": "loopforge run --task \"...\"",
+      "plain_output": "LoopForge status\nstatus   ready_for_run\nproject  LoopForge\nprofile  supervised\nrun      none\n\nNext\nloopforge run --task \"...\"\n",
+      "rich_tokens": ["LoopForge status", "ready_for_run", "loopforge run --task"]
+    },
+    {
+      "id": "approval",
+      "guidance_state": "task_awaiting_approval",
+      "state_family": "needs_human",
+      "initialized": true,
+      "status": "awaiting_approval",
+      "run_id": "run-approval",
+      "task": "Approve the dashboard scope",
+      "stage_statuses": {"task": "pending"},
+      "verification": "not run",
+      "next_command": "loopforge run",
+      "plain_output": "LoopForge status\nstatus  awaiting_approval\nstep    1/7 Validate task\nactor   human-approver\nrun     run-approval\ntask    Approve the dashboard scope\npack    generic-code\nchecks  1 success checks\nverify  not run\n\nNext\nloopforge run\n",
+      "rich_tokens": ["awaiting_approval", "1/7 Validate task", "human-approver"]
+    },
+    {
+      "id": "blocked_adapter",
+      "guidance_state": "implementation_blocked",
+      "state_family": "blocked",
+      "initialized": true,
+      "status": "adapter_blocked",
+      "run_id": "run-blocked",
+      "task": "Recover from an adapter failure",
+      "stage_statuses": {"task": "approved", "research": "complete", "plan": "approved", "implementation": "blocked"},
+      "verification": "not run",
+      "blockers": ["adapter execution halted"],
+      "next_command": "loopforge continue --adapter codex",
+      "plain_output": "LoopForge status\nstatus   adapter_blocked\nstep     4/7 Implement plan\nactor    developer\nrun      run-blocked\ntask     Recover from an adapter failure\npack     generic-code\nchecks   1 success checks\nverify   not run\nblocker  adapter execution halted\n\nNext\nloopforge continue --adapter codex\n",
+      "rich_tokens": ["adapter_blocked", "4/7 Implement plan", "adapter execution halted"]
+    },
+    {
+      "id": "failed_verification",
+      "guidance_state": "verification_blocked",
+      "state_family": "blocked",
+      "initialized": true,
+      "status": "verification_failed",
+      "run_id": "run-verification",
+      "task": "Fix the failing deterministic check",
+      "stage_statuses": {"task": "approved", "research": "complete", "plan": "approved", "implementation": "complete", "verification": "blocked"},
+      "verification": "failed",
+      "blockers": ["targeted verification failed"],
+      "next_command": "loopforge verify",
+      "plain_output": "LoopForge status\nstatus   verification_failed\nstep     5/7 Verify deterministically\nactor    verifier\nrun      run-verification\ntask     Fix the failing deterministic check\npack     generic-code\nchecks   1 success checks\nverify   failed\nblocker  targeted verification failed\n\nNext\nloopforge verify\n",
+      "rich_tokens": ["verification_failed", "5/7 Verify deterministically", "targeted verification failed"]
+    },
+    {
+      "id": "review",
+      "guidance_state": "review_pending",
+      "state_family": "ready",
+      "initialized": true,
+      "status": "review_pending",
+      "run_id": "run-review",
+      "task": "Review the verified patch",
+      "stage_statuses": {"task": "approved", "research": "complete", "plan": "approved", "implementation": "complete", "verification": "complete", "review": "pending"},
+      "verification": "passed",
+      "next_command": "loopforge run",
+      "plain_output": "LoopForge status\nstatus  review_pending\nstep    6/7 Review patch\nactor   reviewer\nrun     run-review\ntask    Review the verified patch\npack    generic-code\nchecks  1 success checks\nverify  passed\n\nNext\nloopforge run\n",
+      "rich_tokens": ["review_pending", "6/7 Review patch", "reviewer"]
+    },
+    {
+      "id": "archived",
+      "guidance_state": "archived",
+      "state_family": "complete",
+      "initialized": true,
+      "status": "archived",
+      "run_id": "run-archived",
+      "task": "Inspect a completed historical run",
+      "stage_statuses": {"task": "approved", "research": "complete", "plan": "approved", "implementation": "complete", "verification": "complete", "review": "approved", "publication": "draft_prepared"},
+      "verification": "passed",
+      "next_command": "loopforge runs",
+      "plain_output": "LoopForge status\nstatus  archived\nstep    7/7 Prepare draft publication\nactor   publisher\nrun     run-archived\ntask    Inspect a completed historical run\npack    generic-code\nchecks  1 success checks\nverify  passed\n\nNext\nloopforge runs\n",
+      "rich_tokens": ["archived", "7/7 Prepare draft publication", "publisher"]
+    }
+  ]
+}
