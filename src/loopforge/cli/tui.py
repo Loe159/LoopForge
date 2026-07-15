@@ -12,11 +12,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from collections import defaultdict
 from math import ceil
+from queue import Empty, Queue
 import os
 import shutil
 import shlex
 import sys
-from threading import Timer
+from threading import Event, Thread, Timer
 from time import perf_counter
 from typing import TYPE_CHECKING, Any
 
@@ -27,7 +28,7 @@ from loopforge.cli.presentation import (
     shell_snapshot_from_status,
 )
 from loopforge.cli.operations import ForegroundOperation, OperationEvent
-from loopforge.cli.evidence import ApprovalSummary, EvidenceItem, approval_summary, evidence_items, preview_evidence
+from loopforge.cli.evidence import ApprovalSummary, EvidenceIndex, EvidenceItem, approval_summary
 from loopforge.engine import (
     continue_run,
     current_status,
@@ -113,6 +114,8 @@ class ConsoleState:
     filter_text: str = ""
     evidence_query: str = ""
     evidence_preview: bool = False
+    evidence_searching: bool = False
+    evidence_results: tuple[EvidenceItem, ...] = ()
     notice: str = ""
 
 
@@ -152,7 +155,11 @@ class LoopForgeConsole:
         self._statuses: dict[Path, Any] = {}
         self._runs: dict[Path, list[dict[str, Any]]] = {}
         self._run_blockers: dict[Path, list[str]] = {}
-        self._evidence: dict[Path, tuple[EvidenceItem, ...]] = {}
+        self._evidence: dict[Path, EvidenceIndex] = {}
+        self._evidence_search_results: Queue[tuple[int, tuple[EvidenceItem, ...], bool]] = Queue()
+        self._evidence_search_cancel: Event | None = None
+        self._evidence_search_token = 0
+        self._evidence_search_timer: Timer | None = None
         self._project_records: list[dict[str, Any]] = []
         self._branches: dict[Path, str] = {}
         self._spinner_timer: Timer | None = None
@@ -402,6 +409,7 @@ class LoopForgeConsole:
     def _body_fragments(self) -> list[tuple[str, str]]:
         self._last_interrupt = False
         self._collect_operation_events()
+        self._collect_evidence_search_results()
         if self.state.screen == "home":
             return self._home_fragments()
         if self.state.screen == "project":
@@ -507,10 +515,11 @@ class LoopForgeConsole:
             return [("class:attention", f"{self._marker('◆')} No evidence yet\n"), ("", "This stage has not started.")]
         selected = self._selected_evidence_item(items)
         if selected is not None and self.state.evidence_preview:
+            preview = self._evidence_index().cached_preview(selected, query=self.state.evidence_query)
             return [
                 ("class:secondary", self._line(f"Evidence preview {'-' if ascii_ui_enabled() else '·'} {selected.label}") + "\n"),
                 ("class:secondary", selected.relative_path + "\n\n"),
-                ("", preview_evidence(selected, query=self.state.evidence_query)),
+                ("", preview or "Preview unavailable; open the item again."),
             ]
         separator = " - " if ascii_ui_enabled() else " · "
         query = f"{separator}search: {self.state.evidence_query}" if self.state.evidence_query else ""
@@ -580,12 +589,18 @@ class LoopForgeConsole:
                     "last_activity": "current session",
                 },
             )
+        previous_status = self._statuses.get(project)
+        previous_run_dir = getattr(previous_status, "run_dir", None)
+        if previous_run_dir != status.run_dir:
+            self._evidence.pop(project, None)
+            self._cancel_evidence_search()
+            self.state.evidence_results = ()
+            self.state.evidence_preview = False
         self._revision += 1
         self._statuses = {project: status}
         self._snapshots = {project: snapshot}
         self._runs = {project: list(runs_result.runs)}
         self._run_blockers = {project: list(runs_result.blockers)}
-        self._evidence = {}
         self._project_records = records
         self._branches = {project: str(next((record.get("branch") for record in records if Path(str(record.get("path") or "")).resolve() == project), "") or DEFAULT_GIT_STATE_SERVICE.get(project).branch or "no Git branch")}
 
@@ -594,20 +609,83 @@ class LoopForgeConsole:
 
         project = project.resolve()
         if project not in self._evidence:
-            self._evidence[project] = evidence_items(self._statuses[project].run_dir)
+            self._evidence[project] = EvidenceIndex.build(self._statuses[project].run_dir)
+            self._begin_evidence_search()
+
+    def _evidence_index(self) -> EvidenceIndex:
+        project = self._project_path()
+        index = self._evidence.get(project)
+        if index is None:
+            self._load_evidence_snapshot(project)
+            index = self._evidence[project]
+        return index
 
     def _cached_runs(self, project: Path) -> list[dict[str, Any]]:
         return self._runs.get(project.resolve(), [])
 
     def _cached_evidence_items(self) -> tuple[EvidenceItem, ...]:
-        items = self._evidence.get(self._project_path(), ())
-        needle = self.state.evidence_query.strip().casefold()
-        if not needle:
-            return items
-        return tuple(
-            item for item in items
-            if needle in f"{item.label} {item.relative_path}\n{item.searchable_text}".casefold()
-        )
+        index = self._evidence.get(self._project_path())
+        if index is None:
+            return ()
+        return self.state.evidence_results if self.state.evidence_query.strip() else index.items
+
+    def _begin_evidence_search(self) -> None:
+        """Debounce and search content off the prompt-toolkit event loop."""
+
+        index = self._evidence.get(self._project_path())
+        if index is None:
+            return
+        self._cancel_evidence_search()
+        query = self.state.evidence_query.strip()
+        if not query:
+            self.state.evidence_searching = False
+            self.state.evidence_results = index.items
+            return
+        self._evidence_search_token += 1
+        token = self._evidence_search_token
+        cancelled = Event()
+        self._evidence_search_cancel = cancelled
+        self.state.evidence_searching = True
+        self.state.evidence_results = index.metadata_matches(query)
+
+        def search() -> None:
+            for result in index.search_batches(query):
+                if cancelled.is_set():
+                    return
+                self._evidence_search_results.put((token, result, False))
+                self._refresh()
+            if not cancelled.is_set():
+                self._evidence_search_results.put((token, (), True))
+                self._refresh()
+
+        def start() -> None:
+            if not cancelled.is_set():
+                Thread(target=search, name=f"loopforge-evidence-{token}", daemon=True).start()
+
+        self._evidence_search_timer = Timer(0.2, start)
+        self._evidence_search_timer.daemon = True
+        self._evidence_search_timer.start()
+
+    def _cancel_evidence_search(self) -> None:
+        if self._evidence_search_timer is not None:
+            self._evidence_search_timer.cancel()
+            self._evidence_search_timer = None
+        if self._evidence_search_cancel is not None:
+            self._evidence_search_cancel.set()
+            self._evidence_search_cancel = None
+
+    def _collect_evidence_search_results(self) -> None:
+        while True:
+            try:
+                token, items, finished = self._evidence_search_results.get_nowait()
+            except Empty:
+                return
+            if token != self._evidence_search_token:
+                continue
+            if finished:
+                self.state.evidence_searching = False
+            else:
+                self.state.evidence_results = items
 
     def _filtered_runs(self, runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not self.state.filter_text:
@@ -715,6 +793,7 @@ class LoopForgeConsole:
         if item is None:
             self.state.notice = "No evidence is available."
         else:
+            self._evidence_index().preview(item, query=self.state.evidence_query)
             self.state.evidence_preview = True
             self.state.notice = f"Opened {item.relative_path}"
         self._refresh()
@@ -723,7 +802,7 @@ class LoopForgeConsole:
         item = self._selected_evidence_item()
         if item is None:
             self.state.notice = "No evidence is available to copy."
-        elif self.shell.copy_to_clipboard(preview_evidence(item)):
+        elif self.shell.copy_to_clipboard(self._evidence_index().preview(item, query=self.state.evidence_query)):
             self.state.notice = f"Copied {item.relative_path}"
         else:
             path = self._export_evidence_item(item)
@@ -883,8 +962,11 @@ class LoopForgeConsole:
     def _collect_operation_events(self) -> None:
         if self._operation is None:
             return
-        self._operation_events.extend(self._operation.drain_events())
+        events = self._operation.drain_events()
+        self._operation_events.extend(events)
         self._operation_events = self._operation_events[-40:]
+        for event in events:
+            self._invalidate_evidence_for_event(event)
         if self._operation.finished and not self.state.notice:
             if self._operation.error is not None:
                 self.state.notice = "Operation failed; inspect live output."
@@ -892,6 +974,15 @@ class LoopForgeConsole:
                 self.state.notice = "Operation completed."
             else:
                 self.state.notice = "Operation is blocked; inspect evidence."
+
+    def _invalidate_evidence_for_event(self, event: OperationEvent) -> None:
+        """Refresh only the exact evidence artifact named by an operation event."""
+
+        if event.artifact is None:
+            return
+        index = self._evidence.get(self._project_path())
+        if index is not None and index.invalidate(event.artifact):
+            self._begin_evidence_search()
 
     def _start_spinner_timer(self) -> None:
         """Invalidate only the operation panel while a foreground task is active."""
@@ -1006,6 +1097,7 @@ class LoopForgeConsole:
             if is_evidence:
                 self.state.evidence_query = field.text.strip()
                 self.state.evidence_preview = False
+                self._begin_evidence_search()
             else:
                 self.state.filter_text = field.text.strip()
             self.state.selected_index = 0
@@ -1023,6 +1115,7 @@ class LoopForgeConsole:
         if self.state.screen == "evidence":
             self.state.evidence_query = ""
             self.state.evidence_preview = False
+            self._begin_evidence_search()
         else:
             self.state.filter_text = ""
         self.state.selected_index = 0

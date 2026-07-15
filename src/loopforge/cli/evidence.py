@@ -9,10 +9,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, Iterator
 
 
 MAX_PREVIEW_CHARS = 12_000
+MAX_PREVIEW_BYTES = 64 * 1024
+PREVIEW_LINE_WINDOW = 240
 TEXT_SUFFIXES = {".md", ".txt", ".log", ".json", ".diff", ".patch"}
 KIND_ORDER = {"plan": 0, "review": 1, "check": 2, "diff": 3, "log": 4, "memory": 5, "markdown": 6, "file": 7}
 
@@ -25,7 +27,14 @@ class EvidenceItem:
     relative_path: str
     kind: str
     label: str
-    searchable_text: str
+    size: int
+    mtime_ns: int
+
+    @property
+    def cache_key(self) -> tuple[Path, int, int]:
+        """Return the versioned key shared by preview and search caches."""
+
+        return (self.path, self.size, self.mtime_ns)
 
 
 @dataclass(frozen=True)
@@ -37,47 +46,137 @@ class ApprovalSummary:
     lines: tuple[str, ...]
 
 
-def evidence_items(run_dir: Path | None, *, query: str = "") -> tuple[EvidenceItem, ...]:
-    """Return searchable artifacts without following paths outside a run."""
+class EvidenceIndex:
+    """Lazy, metadata-only index for one run's evidence directory.
 
-    if run_dir is None or not run_dir.exists():
-        return ()
-    root = run_dir.resolve()
-    paths = {
-        path
-        for path in root.rglob("*")
-        if path.is_file() and _is_within_root(path, root)
-    }
-    items = [_evidence_item(root, path) for path in paths]
-    items.sort(key=lambda item: (KIND_ORDER[item.kind], item.relative_path.casefold()))
-    needle = query.strip().casefold()
-    if not needle:
-        return tuple(items)
-    return tuple(item for item in items if needle in _searchable(item).casefold())
+    Artifact discovery is intentionally separate from content access: building
+    the index stats files but never opens them.  Content is read in bounded
+    windows only for an explicit preview or a background search.
+    """
+
+    def __init__(self, root: Path | None, items: tuple[EvidenceItem, ...]) -> None:
+        self.root = root
+        self.items = items
+        self._preview_cache: dict[tuple[Path, int, int], dict[int, str]] = {}
+        self._search_cache: dict[tuple[Path, int, int], str] = {}
+
+    @classmethod
+    def build(cls, run_dir: Path | None) -> "EvidenceIndex":
+        if run_dir is None or not run_dir.exists():
+            return cls(None, ())
+        root = run_dir.resolve()
+        items: list[EvidenceItem] = []
+        for path in root.rglob("*"):
+            if not path.is_file() or not _is_within_root(path, root):
+                continue
+            item = _evidence_item(root, path)
+            if item is not None:
+                items.append(item)
+        items.sort(key=lambda item: (KIND_ORDER[item.kind], item.relative_path.casefold()))
+        return cls(root, tuple(items))
+
+    def metadata_matches(self, query: str) -> tuple[EvidenceItem, ...]:
+        needle = query.strip().casefold()
+        if not needle:
+            return self.items
+        return tuple(
+            item
+            for item in self.items
+            if needle in f"{item.label} {item.relative_path}".casefold()
+        )
+
+    def search_batches(self, query: str, *, batch_size: int = 32) -> Iterator[tuple[EvidenceItem, ...]]:
+        """Yield progressively larger result sets for a background search."""
+
+        needle = query.strip().casefold()
+        if not needle:
+            yield self.items
+            return
+        results: list[EvidenceItem] = []
+        seen: set[tuple[Path, int, int]] = set()
+        for item in self.metadata_matches(query):
+            results.append(item)
+            seen.add(item.cache_key)
+        if results:
+            yield tuple(results)
+        checked = 0
+        for item in self.items:
+            if item.cache_key in seen or not _is_searchable(item):
+                continue
+            checked += 1
+            if needle in self.searchable_content(item).casefold():
+                results.append(item)
+            if checked % max(1, batch_size) == 0:
+                yield tuple(results)
+        yield tuple(results)
+
+    def searchable_content(self, item: EvidenceItem) -> str:
+        cached = self._search_cache.get(item.cache_key)
+        if cached is not None:
+            return cached
+        text = _read_bounded_text(item.path, maximum_bytes=MAX_PREVIEW_BYTES)
+        self._search_cache[item.cache_key] = text[:MAX_PREVIEW_CHARS]
+        return self._search_cache[item.cache_key]
+
+    def preview(self, item: EvidenceItem, *, query: str = "", line_start: int = 0) -> str:
+        """Return one bounded line window, caching it by the item fingerprint."""
+
+        key = item.cache_key
+        windows = self._preview_cache.setdefault(key, {})
+        text = windows.get(line_start)
+        if text is None:
+            text = _read_preview_window(item.path, line_start=line_start)
+            windows[line_start] = text
+        return _filter_preview(text, item, query=query)
+
+    def cached_preview(self, item: EvidenceItem, *, query: str = "", line_start: int = 0) -> str | None:
+        text = self._preview_cache.get(item.cache_key, {}).get(line_start)
+        return _filter_preview(text, item, query=query) if text is not None else None
+
+    def invalidate(self, artifact: str | Path | None) -> bool:
+        """Refresh just the artifact named by an operation event, if it is local."""
+
+        if self.root is None or not artifact:
+            return False
+        candidate = Path(artifact)
+        if not candidate.is_absolute():
+            candidate = self.root / candidate
+        try:
+            candidate = candidate.resolve()
+            relative_path = candidate.relative_to(self.root).as_posix()
+        except (OSError, ValueError):
+            return False
+        previous = next((item for item in self.items if item.path.resolve() == candidate), None)
+        updated = _evidence_item(self.root, candidate) if candidate.is_file() else None
+        if previous is None and updated is None:
+            return False
+        if previous is not None:
+            self._preview_cache.pop(previous.cache_key, None)
+            self._search_cache.pop(previous.cache_key, None)
+        items = [item for item in self.items if item.relative_path != relative_path]
+        if updated is not None:
+            items.append(updated)
+        items.sort(key=lambda item: (KIND_ORDER[item.kind], item.relative_path.casefold()))
+        self.items = tuple(items)
+        return True
+
+
+def evidence_items(run_dir: Path | None, *, query: str = "") -> tuple[EvidenceItem, ...]:
+    """Compatibility helper; callers with a live UI should retain the index."""
+
+    index = EvidenceIndex.build(run_dir)
+    if not query.strip():
+        return index.items
+    results: tuple[EvidenceItem, ...] = ()
+    for results in index.search_batches(query):
+        pass
+    return results
 
 
 def preview_evidence(item: EvidenceItem, *, query: str = "") -> str:
-    """Read a bounded UTF-8 preview, optionally retaining matching lines."""
+    """Compatibility helper for an explicitly selected evidence item."""
 
-    try:
-        text = item.path.read_text(encoding="utf-8", errors="replace")
-    except OSError as error:
-        return f"Unable to read {item.relative_path}: {error}"
-    text = text[:MAX_PREVIEW_CHARS]
-    needle = query.strip().casefold()
-    if needle:
-        matches = [line for line in text.splitlines() if needle in line.casefold()]
-        if matches:
-            text = "\n".join(matches[:80])
-        else:
-            text = "No matching content in this artifact."
-    try:
-        source_size = item.path.stat().st_size
-    except OSError:
-        source_size = 0
-    if source_size > len(text.encode("utf-8", errors="replace")):
-        text += "\n… preview truncated"
-    return text or "(empty artifact)"
+    return EvidenceIndex(None, ()).preview(item, query=query)
 
 
 def approval_summary(run_dir: Path | None, run: dict[str, Any] | None, stage: str) -> ApprovalSummary:
@@ -119,15 +218,21 @@ def approval_summary(run_dir: Path | None, run: dict[str, Any] | None, stage: st
     return ApprovalSummary("Approve review for draft preparation?", artifact_name, tuple(lines))
 
 
-def _evidence_item(root: Path, path: Path) -> EvidenceItem:
-    relative_path = path.resolve().relative_to(root).as_posix()
+def _evidence_item(root: Path, path: Path) -> EvidenceItem | None:
+    try:
+        resolved = path.resolve()
+        relative_path = resolved.relative_to(root).as_posix()
+        stat = resolved.stat()
+    except OSError:
+        return None
     kind, label = _kind_for(relative_path)
     return EvidenceItem(
-        path=path,
+        path=resolved,
         relative_path=relative_path,
         kind=kind,
         label=label,
-        searchable_text=_read_searchable(path),
+        size=stat.st_size,
+        mtime_ns=stat.st_mtime_ns,
     )
 
 
@@ -160,17 +265,37 @@ def _kind_for(relative_path: str) -> tuple[str, str]:
     return "file", "File"
 
 
-def _read_searchable(path: Path) -> str:
-    if path.suffix.casefold() not in TEXT_SUFFIXES:
-        return ""
+def _is_searchable(item: EvidenceItem) -> bool:
+    return item.path.suffix.casefold() in TEXT_SUFFIXES
+
+
+def _read_bounded_text(path: Path, *, maximum_bytes: int) -> str:
     try:
-        return path.read_text(encoding="utf-8", errors="replace")[:MAX_PREVIEW_CHARS]
-    except OSError:
-        return ""
+        with path.open("rb") as source:
+            return source.read(maximum_bytes).decode("utf-8", errors="replace")
+    except OSError as error:
+        return f"Unable to read {path.name}: {error}"
 
 
-def _searchable(item: EvidenceItem) -> str:
-    return f"{item.label} {item.relative_path}\n{item.searchable_text}"
+def _read_preview_window(path: Path, *, line_start: int) -> str:
+    # Byte-bounded reads avoid both whole-file allocations and widget payloads.
+    text = _read_bounded_text(path, maximum_bytes=MAX_PREVIEW_BYTES)
+    if text.startswith("Unable to read "):
+        return text
+    lines = text.splitlines()
+    start = max(0, line_start)
+    preview = "\n".join(lines[start : start + PREVIEW_LINE_WINDOW])
+    if len(text) >= MAX_PREVIEW_BYTES or len(lines) > start + PREVIEW_LINE_WINDOW:
+        preview += "\n… preview truncated"
+    return preview[:MAX_PREVIEW_CHARS] or "(empty artifact)"
+
+
+def _filter_preview(text: str, item: EvidenceItem, *, query: str) -> str:
+    needle = query.strip().casefold()
+    if not needle:
+        return text
+    matches = [line for line in text.splitlines() if needle in line.casefold()]
+    return "\n".join(matches[:80]) if matches else "No matching content in this artifact."
 
 
 def _section_item_count(text: str, section_name: str) -> int:
@@ -206,10 +331,11 @@ def _success_checks(run: dict[str, Any] | None) -> list[object]:
 
 def _changed_file_count(run_dir: Path | None) -> int:
     files: set[str] = set()
-    for item in evidence_items(run_dir):
+    index = EvidenceIndex.build(run_dir)
+    for item in index.items:
         if item.kind != "diff":
             continue
-        for line in item.searchable_text.splitlines():
+        for line in index.searchable_content(item).splitlines():
             match = re.match(r"\+\+\+ b/(.+)$", line)
             if match and match.group(1) != "/dev/null":
                 files.add(match.group(1))

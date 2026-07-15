@@ -3,13 +3,71 @@ from __future__ import annotations
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+from unittest.mock import patch
 import unittest
 
-from loopforge.cli.evidence import approval_summary, evidence_items, preview_evidence
+from loopforge.cli.evidence import EvidenceIndex, approval_summary, evidence_items, preview_evidence
 from loopforge.cli.tui import LoopForgeConsole
 
 
 class EvidenceViewerTests(unittest.TestCase):
+    def test_index_keeps_metadata_separate_from_content(self) -> None:
+        with TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            artifact = run_dir / "artifacts" / "large.log"
+            artifact.parent.mkdir()
+            artifact.write_text("first line\n" + ("x" * 100_000), encoding="utf-8")
+
+            with patch.object(Path, "read_text", side_effect=AssertionError("index must not read content")):
+                index = EvidenceIndex.build(run_dir)
+
+            item = index.items[0]
+            self.assertEqual(item.relative_path, "artifacts/large.log")
+            self.assertEqual(item.size, artifact.stat().st_size)
+            self.assertGreater(item.mtime_ns, 0)
+            self.assertLessEqual(len(index.preview(item)), 12_050)
+
+    def test_preview_cache_and_incremental_invalidation(self) -> None:
+        with TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            artifact = run_dir / "attempt.log"
+            artifact.write_text("before", encoding="utf-8")
+            index = EvidenceIndex.build(run_dir)
+            item = index.items[0]
+            self.assertEqual(index.preview(item), "before")
+
+            artifact.write_text("after changed", encoding="utf-8")
+            self.assertEqual(index.preview(item), "before")
+            self.assertTrue(index.invalidate("attempt.log"))
+            self.assertEqual(index.preview(index.items[0]), "after changed")
+
+    def test_preview_uses_independent_bounded_line_windows(self) -> None:
+        with TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            artifact = run_dir / "attempt.log"
+            artifact.write_text("\n".join(f"line {number}" for number in range(500)), encoding="utf-8")
+            index = EvidenceIndex.build(run_dir)
+            item = index.items[0]
+
+            first = index.preview(item)
+            later = index.preview(item, line_start=240)
+
+            self.assertIn("line 0", first)
+            self.assertIn("line 240", later)
+            self.assertNotIn("line 0\n", later)
+
+    def test_search_batches_read_content_only_when_requested(self) -> None:
+        with TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            (run_dir / "first.log").write_text("ordinary output", encoding="utf-8")
+            (run_dir / "second.log").write_text("contains needle", encoding="utf-8")
+            index = EvidenceIndex.build(run_dir)
+
+            batches = list(index.search_batches("needle", batch_size=1))
+
+            self.assertTrue(batches)
+            self.assertEqual([item.relative_path for item in batches[-1]], ["second.log"])
+
     def test_indexes_searches_and_previews_real_run_artifacts(self) -> None:
         with TemporaryDirectory() as temporary:
             run_dir = Path(temporary)
@@ -76,6 +134,9 @@ class EvidenceViewerTests(unittest.TestCase):
 
             console._statuses[run_dir.resolve()] = status
             console._load_evidence_snapshot(run_dir)
+            index = console._evidence[run_dir.resolve()]
+            console.state.evidence_results = tuple(index.search_batches("blocked", batch_size=1))[-1]
+            console.state.evidence_searching = False
             fragments = console._evidence_fragments()
             self.assertIn("stderr.txt", "".join(text for _, text in fragments))
             console._open_selected_evidence()
