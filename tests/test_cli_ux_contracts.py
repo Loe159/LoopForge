@@ -120,8 +120,13 @@ class CliUxPhaseZeroTests(unittest.TestCase):
             with self.subTest(case=case["id"]):
                 result, guidance = status_and_guidance(case, workflow)
                 output = io.StringIO()
-                renderer = TerminalRenderer(output, mode="rich")
-                renderer.panel("LoopForge status", format_status_lines(result, guidance))
+                with mock.patch.dict(
+                    os.environ,
+                    {"TERM": "xterm-256color"},
+                    clear=True,
+                ):
+                    renderer = TerminalRenderer(output, mode="rich")
+                    renderer.panel("LoopForge status", format_status_lines(result, guidance))
                 rich_output = output.getvalue()
                 self.assertIn("\x1b[", rich_output)
                 visible_output = ANSI_ESCAPE.sub("", rich_output)

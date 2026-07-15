@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import loopforge
 from loopforge.adapters import local_implementation_adapter
 from loopforge.contracts import policy_path
 from loopforge.checks import diff_policy, isolated_process
@@ -136,7 +137,7 @@ class ProjectRegistryTests(unittest.TestCase):
 
 class PackagedRuntimeLayoutTests(unittest.TestCase):
     def test_runtime_scripts_and_contracts_are_product_owned(self) -> None:
-        package_root = Path(__file__).resolve().parents[1] / "src" / "loopforge"
+        package_root = Path(loopforge.__file__).resolve().parent
 
         self.assertEqual(Path(diff_policy.__file__).resolve().parent, package_root / "checks")
         self.assertEqual(
