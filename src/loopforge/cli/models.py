@@ -21,6 +21,10 @@ class HomeSnapshot:
     state: str
     projects: tuple[Mapping[str, Any], ...] = ()
     blockers: tuple[str, ...] = ()
+    # Recent runs are supplied by the compact global index.  Keeping them in
+    # the revisioned snapshot prevents Home render callbacks from traversing
+    # project directories.
+    runs: tuple[Mapping[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)

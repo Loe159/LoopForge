@@ -23,11 +23,17 @@ Screen {
 #screen-body {
     margin-top: 1;
     color: $text;
+    height: 1fr;
+    overflow-y: auto;
 }
 
-#action-summary {
+#screen-notice {
     margin-top: 1;
     color: $warning;
+}
+
+#screen-help {
+    margin-top: 1;
 }
 
 .error-title {
@@ -45,6 +51,24 @@ Screen {
 }
 
 #error-message {
+    margin: 1 0;
+}
+
+#confirmation-dialog, #entry-dialog {
+    width: 70%;
+    max-width: 90;
+    height: auto;
+    padding: 1 2;
+    border: round $accent;
+    background: $panel;
+}
+
+.dialog-title {
+    color: $accent;
+    text-style: bold;
+}
+
+#confirmation-evidence, #entry-value {
     margin: 1 0;
 }
 

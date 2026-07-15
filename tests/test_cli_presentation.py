@@ -123,6 +123,7 @@ class CliPresentationTests(unittest.TestCase):
             status_loader=lambda _: status,
             runs_loader=lambda _: runs,
             projects_loader=lambda: projects,
+            global_runs_loader=lambda: SimpleNamespace(runs=[{"run_id": "recent", "task": "Recent work"}]),
             branch_loader=lambda _: "main",
         )
         published: list[UiSnapshot] = []
@@ -132,6 +133,7 @@ class CliPresentationTests(unittest.TestCase):
         again = store.refresh()
 
         self.assertEqual(first.revision, again.revision)
+        self.assertEqual(first.home.runs[0]["run_id"], "recent")
         self.assertEqual(len(published), 1)
         with self.assertRaises(TypeError):
             first.home.projects[0]["name"] = "mutated"  # type: ignore[index]
@@ -152,6 +154,7 @@ class CliPresentationTests(unittest.TestCase):
             status_loader=lambda _: status,
             runs_loader=lambda _: SimpleNamespace(runs=[], blockers=[]),
             projects_loader=lambda: SimpleNamespace(projects=[]),
+            global_runs_loader=lambda: SimpleNamespace(runs=[]),
             branch_loader=lambda _: "main",
         )
         store.refresh()

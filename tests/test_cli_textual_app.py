@@ -55,3 +55,30 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
         async with app.run_test() as pilot:
             await pilot.press("ctrl+c")
             self.assertFalse(app.is_running)
+
+    async def test_pilot_navigates_vertical_screens_and_cancels_a_modal(self) -> None:
+        from loopforge.cli.actions import ActionDescriptor
+        from loopforge.cli.textual_app import LoopForgeApp
+
+        app = LoopForgeApp(SimpleNamespace(project_dir=Path.cwd()), load_on_mount=False)
+        action = ActionDescriptor(
+            "approve-plan",
+            "Approve plan",
+            "Recorded plan evidence will be approved.",
+            "medium",
+            True,
+            True,
+            "/approve-plan",
+            "approve-plan",
+        )
+        async with app.run_test() as pilot:
+            app.action_show_settings()
+            self.assertEqual(app._screen, "settings")
+            await pilot.press("escape")
+            self.assertEqual(app._screen, "run")
+            app.action_show_evidence()
+            self.assertEqual(app._screen, "evidence")
+            app.request_action(action)
+            await pilot.pause(0.1)
+            await pilot.press("escape")
+            self.assertIsNone(app._operation)

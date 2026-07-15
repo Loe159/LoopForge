@@ -24,7 +24,12 @@ from loopforge.cli.models import (
 )
 from loopforge.cli.operations import OperationController, OperationEvent
 from loopforge.cli.presentation import ShellSnapshot, shell_snapshot_from_status
-from loopforge.engine import StatusResult, list_registered_projects, list_runs_from_status
+from loopforge.engine import (
+    StatusResult,
+    list_registered_projects,
+    list_runs_all_projects,
+    list_runs_from_status,
+)
 from loopforge.engine.git_state import DEFAULT_GIT_STATE_SERVICE
 
 
@@ -56,6 +61,7 @@ class StateStore:
         status_loader: Callable[[Path], StatusResult] | None = None,
         runs_loader: Callable[[StatusResult], Any] | None = None,
         projects_loader: Callable[[], Any] | None = None,
+        global_runs_loader: Callable[[], Any] | None = None,
         branch_loader: Callable[[Path], str | None] | None = None,
     ) -> None:
         from loopforge.engine import current_status
@@ -63,6 +69,7 @@ class StateStore:
         self._status_loader = status_loader or current_status
         self._runs_loader = runs_loader or list_runs_from_status
         self._projects_loader = projects_loader or list_registered_projects
+        self._global_runs_loader = global_runs_loader or list_runs_all_projects
         self._branch_loader = branch_loader or (
             lambda path: DEFAULT_GIT_STATE_SERVICE.get(path).branch
         )
@@ -75,6 +82,7 @@ class StateStore:
         self._status: StatusResult | None = None
         self._runs: tuple[MappingProxyType[str, Any], ...] = ()
         self._project_rows: tuple[MappingProxyType[str, Any], ...] = ()
+        self._global_runs: tuple[MappingProxyType[str, Any], ...] = ()
         self._run_blockers: tuple[str, ...] = ()
         self._branch = "no Git branch"
         self._evidence = EvidenceSnapshot("empty")
@@ -149,7 +157,15 @@ class StateStore:
         status = self._status_loader(identity.project)
         runs_result = self._runs_loader(status)
         projects_result = self._projects_loader()
-        return self.publish_loaded(identity, status, runs_result, projects_result, reason=reason)
+        global_runs_result = self._global_runs_loader()
+        return self.publish_loaded(
+            identity,
+            status,
+            runs_result,
+            projects_result,
+            global_runs_result=global_runs_result,
+            reason=reason,
+        )
 
     def publish_loaded(
         self,
@@ -158,6 +174,7 @@ class StateStore:
         runs_result: Any,
         projects_result: Any,
         *,
+        global_runs_result: Any | None = None,
         reason: str = "load",
     ) -> UiSnapshot:
         """Publish a completed load only if it still targets current navigation."""
@@ -186,6 +203,10 @@ class StateStore:
         self._runs = tuple(_frozen_row(row) for row in getattr(runs_result, "runs", ()))
         self._run_blockers = tuple(str(value) for value in getattr(runs_result, "blockers", ()))
         self._project_rows = tuple(rows)
+        if global_runs_result is not None:
+            self._global_runs = tuple(
+                _frozen_row(row) for row in getattr(global_runs_result, "runs", ())
+            )
         record = next((row for row in rows if _row_path(row) == identity.project), None)
         self._branch = str(
             (record or {}).get("branch")
@@ -269,7 +290,7 @@ class StateStore:
             reasons=reasons,
             selected_project=self._selected_project,
             selected_run_id=self._selected_run_id,
-            home=HomeSnapshot(home_state, self._project_rows),
+            home=HomeSnapshot(home_state, self._project_rows, (), self._global_runs),
             project=ProjectSnapshot(
                 project_state,
                 self._selected_project,
