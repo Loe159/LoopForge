@@ -23,7 +23,6 @@ except ImportError:  # pragma: no cover - exercised only in minimal installs.
 from loopforge.engine import (
     DEFAULT_ADAPTER,
     DEFAULT_PROFILE,
-    GuidedAction,
     SUPPORTED_ADAPTERS,
     archive_current_run,
     compact_current_context,
@@ -44,7 +43,13 @@ from loopforge.engine import (
     verify_run,
     learn_run,
     profile_permission_lines,
+    approve_plan,
+    approve_review,
+    execute_readonly_stage,
+    next_readonly_stage,
+    prepare_draft_publication,
 )
+from loopforge.cli.actions import ActionDescriptor, action_descriptors, primary_action
 from loopforge.cli.ui import (
     TerminalRenderer,
     compact_text,
@@ -321,9 +326,11 @@ class InteractiveShell:
     def write_panel(self, title: str, lines: list[str]) -> None:
         self.renderer.panel(title, lines)
 
-    def next_action(self) -> GuidedAction | None:
-        guidance = current_guidance(self.project_dir)
-        return guidance.recommended_actions[0] if guidance.recommended_actions else None
+    def action_descriptors(self) -> tuple[ActionDescriptor, ...]:
+        return action_descriptors(current_guidance(self.project_dir))
+
+    def next_action(self) -> ActionDescriptor | None:
+        return primary_action(current_guidance(self.project_dir))
 
     def write_home(self) -> None:
         status = current_status(self.project_dir)
@@ -353,6 +360,7 @@ class InteractiveShell:
 
     def guidance_lines(self) -> list[str]:
         guidance = current_guidance(self.project_dir)
+        action = self.next_action()
         lines = [
             f"now: {guidance.summary}",
             f"state: {guidance.state}",
@@ -364,75 +372,153 @@ class InteractiveShell:
         if guidance.diagnostics:
             lines.append("diagnostics:")
             lines.extend(f"- {diagnostic}" for diagnostic in guidance.diagnostics)
-        if guidance.recommended_actions:
-            first = guidance.recommended_actions[0]
+        if action is not None:
             lines.extend(
                 [
                     "recommended next action:",
-                    f"[{first.id}] {first.label}",
-                    f"command: {first.command}",
-                    f"why: {first.why}",
+                    f"[{action.id}] {action.label}",
+                    f"command: {action.command_fallback}",
+                    f"why: {action.description}",
                 ]
             )
         return lines
 
     def write_guidance(self, *, concise: bool = False) -> None:
         guidance = current_guidance(self.project_dir)
+        action = self.next_action()
         if concise:
             lines = [f"now: {guidance.summary}"]
-            if guidance.recommended_actions:
-                first = guidance.recommended_actions[0]
-                lines.append(f"next: [{first.id}] {first.command}")
-                lines.append(f"why: {first.why}")
+            if action is not None:
+                lines.append(f"next: [{action.id}] {action.command_fallback}")
+                lines.append(f"why: {action.description}")
             self.write_panel("LoopForge guidance", lines)
             return
         self.write_panel("LoopForge guidance", self.guidance_lines())
         if guidance.recommended_actions:
-            self.write_actions(guidance.recommended_actions)
+            self.write_actions(self.action_descriptors())
 
-    def write_actions(self, actions: list[GuidedAction]) -> None:
+    def write_actions(self, actions: tuple[ActionDescriptor, ...]) -> None:
         rows = [
             [
                 action.id,
                 action.risk,
                 "yes" if action.requires_confirmation else "no",
-                action.command,
-                action.why,
+                action.command_fallback,
+                action.description,
             ]
             for action in actions
         ]
         self.write_table("Guided actions", ["ID", "Risk", "Confirm", "Command", "Why"], rows)
 
-    def guidance_action(self, action_id: str) -> GuidedAction | None:
-        for action in current_guidance(self.project_dir).recommended_actions:
+    def guidance_action(self, action_id: str) -> ActionDescriptor | None:
+        for action in self.action_descriptors():
             if action.id == action_id:
                 return action
         return None
 
-    def dispatch_guided_command(self, command: str) -> DispatchResult:
-        if command == "loopforge init":
+    def execute_guided_action(self, action: ActionDescriptor) -> DispatchResult:
+        """Execute one engine-derived action through its shell adapter."""
+
+        key = action.executor_key
+        if key == "initialize":
             return self.cmd_init("")
-        if command.startswith("loopforge run "):
+        if key == "collect-task":
             self.write("This action needs a real task. Use /run <task>.", error=True)
             return DispatchResult(2)
-        if command == "loopforge continue":
-            return self.cmd_continue("--check")
-        if command.startswith("loopforge continue --adapter "):
-            adapter = command.rsplit(" ", 1)[-1]
-            return self.cmd_continue(f"--adapter {adapter}")
-        if command == "loopforge verify":
-            return self.cmd_verify("")
-        if command == "loopforge learn --approve":
-            return self.cmd_learn("--approve")
-        if command.startswith("loopforge shell --command "):
-            raw = command.removeprefix("loopforge shell --command ").strip()
-            if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in {'"', "'"}:
-                raw = raw[1:-1]
-            return self.dispatch(raw)
-        if command == "loopforge status":
+        if key == "run-readonly-stage":
+            return self.execute_readonly_guided_stage()
+        if key == "approve-plan":
+            return self.execute_approval("plan")
+        if key == "approve-review":
+            return self.execute_approval("review")
+        if key == "prepare-draft":
+            return self.execute_draft_preparation()
+        if key == "continue":
+            return self.cmd_continue(f"--adapter {self.selected_adapter} --confirm")
+        if key == "verify":
+            return self.cmd_verify("--confirm")
+        if key == "adapter":
+            self.write("Choose an adapter with /adapter <name>.", error=True)
+            return DispatchResult(2)
+        if key == "status":
             return self.cmd_status("")
-        self.write(f"Cannot execute guided command yet: {command}", error=True)
+        self.write(f"Cannot execute guided action yet: {action.command_fallback}", error=True)
         return DispatchResult(2)
+
+    def execute_readonly_guided_stage(self) -> DispatchResult:
+        status = current_status(self.project_dir)
+        if status.run is None:
+            self.write("No current run is ready for a read-only stage.", error=True)
+            return DispatchResult(1)
+        stage = next_readonly_stage(status.run)
+        if stage is None:
+            self.write("No read-only stage is currently eligible.", error=True)
+            return DispatchResult(1)
+        with self.renderer.loading(f"Running read-only {stage} with {self.selected_adapter}..."):
+            result = execute_readonly_stage(
+                self.project_dir,
+                stage=stage,
+                adapter=self.selected_adapter,
+                adapter_args=self.selected_adapter_args,
+            )
+        if result.ok:
+            render_success(
+                self.renderer,
+                f"{stage.title()} ready",
+                [("status", result.message), ("artifact", result.artifact_path or "none")],
+                next_command="/status",
+            )
+        else:
+            render_blocked(
+                self.renderer,
+                f"{stage.title()} blocked",
+                [("status", result.message)],
+                blockers=result.blockers,
+                next_command="/status",
+            )
+        return DispatchResult(0 if result.ok else 1)
+
+    def execute_approval(self, stage: str) -> DispatchResult:
+        result = (
+            approve_plan(self.project_dir, source="interactive")
+            if stage == "plan"
+            else approve_review(self.project_dir, source="interactive")
+        )
+        if result.ok:
+            render_success(
+                self.renderer,
+                f"{stage.title()} approved",
+                [("status", result.message), ("artifact", result.artifact_path or "none")],
+                next_command="/status",
+            )
+        else:
+            render_blocked(
+                self.renderer,
+                f"{stage.title()} approval blocked",
+                [("status", result.message)],
+                blockers=result.blockers,
+                next_command="/status",
+            )
+        return DispatchResult(0 if result.ok else 1)
+
+    def execute_draft_preparation(self) -> DispatchResult:
+        result = prepare_draft_publication(self.project_dir)
+        if result.ok:
+            render_success(
+                self.renderer,
+                "Draft publication prepared",
+                [("status", result.message), ("artifact", result.artifact_path or "none")],
+                next_command="/status",
+            )
+        else:
+            render_blocked(
+                self.renderer,
+                "Draft publication blocked",
+                [("status", result.message)],
+                blockers=result.blockers,
+                next_command="/status",
+            )
+        return DispatchResult(0 if result.ok else 1)
 
     def status_lines(self, *, details: bool = False) -> list[str]:
         result = current_status(self.project_dir)
@@ -1146,8 +1232,8 @@ class InteractiveShell:
 
     def cmd_actions(self, raw: str = "") -> DispatchResult:
         del raw
-        guidance = current_guidance(self.project_dir)
-        if not guidance.recommended_actions:
+        actions = self.action_descriptors()
+        if not actions:
             self.write("No guided actions are available.")
             return DispatchResult(0)
         rows = [
@@ -1156,35 +1242,33 @@ class InteractiveShell:
                 action.label,
                 "confirm" if action.requires_confirmation else "safe",
             ]
-            for action in guidance.recommended_actions
+            for action in actions
         ]
         self.write_table("Actions", ["ID", "Action", "Confirmation"], rows)
         return DispatchResult(0)
 
     def cmd_next(self, raw: str = "") -> DispatchResult:
         del raw
-        guidance = current_guidance(self.project_dir)
-        if not guidance.recommended_actions:
+        action = self.next_action()
+        if action is None:
             self.write("Next\nnone")
             return DispatchResult(0)
-        action = guidance.recommended_actions[0]
         self.write("Next")
         self.write(f"/do {action.id}")
         return DispatchResult(0)
 
     def cmd_why(self, raw: str = "") -> DispatchResult:
         action_id = raw.strip()
-        guidance = current_guidance(self.project_dir)
         action = (
             self.guidance_action(action_id)
             if action_id
-            else guidance.recommended_actions[0] if guidance.recommended_actions else None
+            else self.next_action()
         )
         if action is None:
             self.write("No matching guided action is available.", error=True)
             return DispatchResult(1)
         self.write("Why")
-        self.write(action.why)
+        self.write(action.description)
         return DispatchResult(0)
 
     def cmd_do(self, raw: str) -> DispatchResult:
@@ -1197,20 +1281,20 @@ class InteractiveShell:
             self.write(f"unknown guided action: {action_id}", error=True)
             return DispatchResult(1)
         self.write("Do this")
-        self.write(action.command)
-        self.write(f"Why: {action.why}")
+        self.write(action.command_fallback)
+        self.write(f"Why: {action.description}")
         if action.requires_confirmation:
             if not self.allow_confirmation:
                 self.write(
-                    f"action '{action.id}' requires confirmation; run {action.command} explicitly.",
+                    f"action '{action.id}' requires confirmation; run {action.command_fallback} explicitly.",
                     error=True,
                 )
                 return DispatchResult(1)
-            answer = input(f"Run '{action.command}'? Type yes to continue: ")
+            answer = input(f"Run '{action.command_fallback}'? Type yes to continue: ")
             if answer.strip().lower() != "yes":
                 self.write("cancelled")
                 return DispatchResult(1)
-        return self.dispatch_guided_command(action.command)
+        return self.execute_guided_action(action)
 
     def cmd_config(self, raw: str) -> DispatchResult:
         tokens = self.split_args(raw)
@@ -1367,16 +1451,16 @@ class InteractiveShell:
                 ["Attempt", "Adapter", "Status", "Summary"],
                 rows,
             )
-        guidance = current_guidance(self.project_dir)
-        if guidance.recommended_actions:
+        actions = self.action_descriptors()
+        if actions:
             action_rows = [
                 [
                     "blocked" if action.requires_confirmation else "do now",
                     action.id,
                     action.label,
-                    action.command,
+                    action.command_fallback,
                 ]
-                for action in guidance.recommended_actions
+                for action in actions
             ]
             self.write_table(
                 "Open actions",
@@ -1644,7 +1728,7 @@ class InteractiveShell:
                     else "ready_for_run",
                 ),
             ],
-            next_command=action.command if action is not None else status.next_step,
+            next_command=action.command_fallback if action is not None else status.next_step,
         )
         return DispatchResult(0)
 

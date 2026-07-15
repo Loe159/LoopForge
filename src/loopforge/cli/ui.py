@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any, Iterable, TextIO
 
 from loopforge.engine import GuidedAction, profile_permission_lines
+from loopforge.cli.actions import action_descriptors
+from loopforge.cli.presentation import shell_snapshot, workflow_progress
 
 
 STATUS_STYLES = {
@@ -73,7 +75,7 @@ class TerminalRenderer:
             self.console = Console(
                 file=self.output,
                 force_terminal=True,
-                color_system="standard",
+                color_system="standard" if mode == "rich" else None,
                 no_color=no_color,
                 highlight=False,
             )
@@ -150,6 +152,15 @@ class TerminalRenderer:
         if self.theme == "mono":
             return None
         palette = {
+            "brand": "bold cyan",
+            "primary": None,
+            "secondary": "dim",
+            "ready": "cyan",
+            "running": "bright_cyan",
+            "success": "green",
+            "danger": "bold red",
+            "selected": "reverse bold",
+            "code": "cyan",
             "ok": "green",
             "attention": "yellow",
             "blocked": "red",
@@ -276,90 +287,10 @@ def blockers_lines(blockers: list[str]) -> list[str]:
     return ["blockers:", "- none"]
 
 
-def workflow_progress(run: dict[str, Any]) -> tuple[str, str, list[str]]:
-    contract = run.get("pack_contract", {})
-    workflow = contract.get("workflow", []) if isinstance(contract, dict) else []
-    statuses = run.get("stage_statuses", {})
-    if not isinstance(workflow, list) or not workflow or not isinstance(statuses, dict):
-        return str(run.get("current_stage") or "unknown"), "unknown", []
-
-    def complete(stage_id: str, status: object) -> bool:
-        if stage_id == "task":
-            return status == "approved"
-        if stage_id == "plan":
-            return status in {"approved", "complete"}
-        if stage_id == "review":
-            return status == "approved"
-        if stage_id == "publication":
-            return status == "draft_prepared"
-        return status == "complete"
-
-    def active_actor(stage_id: str, status: object, configured: str) -> str:
-        if stage_id == "task" and status != "approved":
-            validation = run.get("task_validation", {})
-            if isinstance(validation, dict) and validation.get("status") == "needs_input":
-                return "user"
-            return "human-approver"
-        if stage_id == "plan" and status == "awaiting_approval":
-            return "human-approver"
-        if stage_id == "review" and status == "complete":
-            return "human-approver"
-        return configured
-
-    current_index = len(workflow) - 1
-    for index, stage in enumerate(workflow):
-        if isinstance(stage, dict) and not complete(
-            str(stage.get("id") or ""), statuses.get(stage.get("id"))
-        ):
-            current_index = index
-            break
-    current = workflow[current_index] if isinstance(workflow[current_index], dict) else {}
-    actor = current.get("actor", {}) if isinstance(current, dict) else {}
-    configured_actor = (
-        str(actor.get("id") or actor.get("type") or "unknown")
-        if isinstance(actor, dict)
-        else "unknown"
-    )
-    current_stage_id = str(current.get("id") or "")
-    actor_name = active_actor(
-        current_stage_id,
-        statuses.get(current_stage_id),
-        configured_actor,
-    )
-    summary = (
-        f"{current_index + 1}/{len(workflow)} "
-        f"{current.get('title') or current.get('id') or 'unknown'}"
-    )
-    lines: list[str] = []
-    for index, stage in enumerate(workflow):
-        if not isinstance(stage, dict):
-            continue
-        stage_id = str(stage.get("id") or "unknown")
-        status = statuses.get(stage_id, "pending")
-        marker = (
-            "done"
-            if complete(stage_id, status)
-            else "current"
-            if index == current_index
-            else "pending"
-        )
-        stage_actor = stage.get("actor", {})
-        configured_stage_actor = (
-            str(stage_actor.get("id") or stage_actor.get("type") or "unknown")
-            if isinstance(stage_actor, dict)
-            else "unknown"
-        )
-        stage_actor_name = active_actor(stage_id, status, configured_stage_actor)
-        lines.append(
-            f"- {index + 1}. {stage.get('title') or stage_id}: {marker} "
-            f"[{status}] via {stage_actor_name}"
-        )
-    return summary, actor_name, lines
-
-
 def format_status_lines(result: Any, guidance: Any, *, details: bool = False) -> list[str]:
-    action = guidance.recommended_actions[0] if guidance.recommended_actions else None
-    command = action.command if action is not None else result.next_step
+    snapshot = shell_snapshot(result, guidance)
+    action = snapshot.actions[0] if snapshot.actions else None
+    command = action.command_fallback if action is not None else result.next_step
     lines: list[str] = []
 
     if not result.initialized:
@@ -596,19 +527,20 @@ def render_status(renderer: TerminalRenderer, result: Any, guidance: Any, *, det
 
 
 def render_guidance(renderer: TerminalRenderer, guidance: Any, *, include_also: bool = True) -> None:
-    action = guidance.recommended_actions[0] if guidance.recommended_actions else None
+    actions = action_descriptors(guidance)
+    action = actions[0] if actions else None
     lines = ["You are here", guidance.summary]
     reasons = guidance.blocked_reasons or guidance.diagnostics or guidance.evidence
     if reasons:
         lines.extend(["", "Why", compact_text(reasons[0], limit=120)])
     elif action is not None:
-        lines.extend(["", "Why", compact_text(action.why, limit=120)])
+        lines.extend(["", "Why", compact_text(action.description, limit=120)])
     if action is not None:
-        lines.extend(["", "Do this", renderer.command(action.command)])
-    if include_also and len(guidance.recommended_actions) > 1:
+        lines.extend(["", "Do this", renderer.command(action.command_fallback)])
+    if include_also and len(actions) > 1:
         lines.extend(["", "Also useful"])
-        for extra in guidance.recommended_actions[1:4]:
-            lines.append(f"- {extra.command}")
+        for extra in actions[1:4]:
+            lines.append(f"- {extra.command_fallback}")
     renderer.panel("Guide", lines)
 
 
