@@ -21,7 +21,7 @@ from loopforge import __version__
 from loopforge.cli.errors import DOCS_URL, CliError, CliRuntimeError, CliUsageError
 from loopforge.cli.github import GitHubIssueClient
 from loopforge.cli.intake import RunIntakeService
-from loopforge.cli.models import CliOptions, GitHubIssueRef, IssueReadResult, RunIntake
+from loopforge.cli.models import CliOptions, GitHubIssueRef, IssueReadResult, ReportIssueResult, RunIntake
 from loopforge.cli.parser import (
     CliParserBuilder,
     LoopForgeArgumentParser,
@@ -178,6 +178,33 @@ def gh_issue_view(ref: GitHubIssueRef) -> IssueReadResult:
 
 def gh_issue_list(project_dir: Path) -> IssueReadResult:
     return _github_client().list_open(project_dir)
+
+
+def build_project_report(
+    project_dir: Path,
+    *,
+    kind: str,
+    title: str,
+    description: str,
+    expected: str = "",
+    actual: str = "",
+    include_context: bool = False,
+    screen: str = "cli",
+) -> ReportIssueResult:
+    return _github_client().build_project_report(
+        project_dir,
+        kind=kind,
+        title=title,
+        description=description,
+        expected=expected,
+        actual=actual,
+        include_context=include_context,
+        screen=screen,
+    )
+
+
+def create_project_report(preview: ReportIssueResult) -> ReportIssueResult:
+    return _github_client().create_project_report(preview)
 
 
 def issue_task_summary(issue: dict[str, Any]) -> str:

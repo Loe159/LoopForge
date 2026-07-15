@@ -156,6 +156,31 @@ class CliTuiTests(unittest.TestCase):
         self.assertIn("Statusline", text)
         self.assertIn("saved for this user", text)
 
+    def test_legacy_console_dispatches_slash_commands_without_writing_to_terminal(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project = Path(temp_dir) / "project"
+            project.mkdir()
+            output = io.StringIO()
+            console = LoopForgeConsole(InteractiveShell(project, output=output, error=io.StringIO()))
+
+            result, text = console._dispatch_slash_command("/status")
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("Current loop", text)
+        self.assertEqual(output.getvalue(), "")
+
+    def test_dialog_disables_global_letter_shortcuts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project = Path(temp_dir) / "project"
+            project.mkdir()
+            console = LoopForgeConsole(InteractiveShell(project, output=io.StringIO()))
+            bindings = console._key_bindings()
+            evidence_binding = next(binding for binding in bindings.bindings if binding.keys == ("e",))
+
+            self.assertTrue(evidence_binding.filter())
+            console._dialog_container = object()
+            self.assertFalse(evidence_binding.filter())
+
     def test_console_compacts_header_and_footer_at_supported_widths(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             project = Path(temp_dir) / "a-project-name-that-is-long-enough-to-need-clipping"

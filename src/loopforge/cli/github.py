@@ -5,7 +5,20 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from loopforge.cli.models import GitHubIssueRef, IssueReadResult
+from loopforge.cli.models import GitHubIssueRef, IssueReadResult, ReportIssueResult
+
+
+# This is deliberately not inferred from the repository being operated on.
+# Reports are product feedback for LoopForge itself, not issues for a user's project.
+LOOPFORGE_GITHUB_REPOSITORY = "Loe159/LoopForge"
+
+_SECRET_PATTERNS = (
+    r"-----BEGIN (?:[A-Z0-9]+ )?PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z0-9]+ )?PRIVATE KEY-----",
+    r"(?:github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{36,})",
+    r"(?:AKIA|ASIA)[A-Z0-9]{16}",
+    r"AIza[0-9A-Za-z_-]{35}",
+    r"(?i)\b(?:api[_ -]?key|authorization|bearer|client[_ -]?secret|password|token)\b\s*[:=]\s*[^\s`]+",
+)
 
 
 class GitHubIssueClient:
@@ -153,6 +166,161 @@ class GitHubIssueClient:
         except self.api.json.JSONDecodeError:
             return IssueReadResult(False, reason="GitHub returned unreadable issue data.")
         return IssueReadResult(True, issue={"issues": issues})
+
+    def build_project_report(
+        self,
+        project_dir: Path,
+        *,
+        kind: str,
+        title: str,
+        description: str,
+        expected: str = "",
+        actual: str = "",
+        include_context: bool = False,
+        screen: str = "cli",
+    ) -> ReportIssueResult:
+        """Build a deterministic, sanitized report matching the issue template."""
+
+        redactions = 0
+
+        def redact(value: str) -> str:
+            nonlocal redactions
+            cleaned = value
+            try:
+                resolved = str(project_dir.resolve())
+            except OSError:
+                resolved = str(project_dir)
+            for sensitive_value in (resolved, str(project_dir), project_dir.name):
+                if sensitive_value:
+                    cleaned, count = self.api.re.subn(
+                        self.api.re.escape(sensitive_value),
+                        "[redacted project]",
+                        cleaned,
+                        flags=self.api.re.IGNORECASE,
+                    )
+                    redactions += count
+            for pattern in _SECRET_PATTERNS:
+                cleaned, count = self.api.re.subn(pattern, "[redacted sensitive value]", cleaned)
+                redactions += count
+            return cleaned.strip()
+
+        safe_kind = {"bug": "Bug", "feature": "Feature", "optimization": "Optimization"}.get(
+            kind,
+            "Report",
+        )
+        safe_title = redact(title)
+        safe_description = redact(description)
+        safe_expected = redact(expected) if expected else "Not provided."
+        safe_actual = redact(actual) if actual else safe_description
+        body_lines = [
+            "## Report kind",
+            safe_kind,
+            "",
+            "## Version",
+            f"LoopForge {self.api.__version__}",
+            "",
+            "## Command",
+            "```text",
+            "loopforge report",
+            "```",
+            "",
+            "## Stdout",
+            "```text",
+            "Not collected. Adapter output is never attached to product reports.",
+            "```",
+            "",
+            "## Stderr",
+            "```text",
+            "Not collected. Adapter output is never attached to product reports.",
+            "```",
+            "",
+            "## Expected behavior",
+            safe_expected,
+            "",
+            "## Actual behavior",
+            safe_actual,
+        ]
+        if include_context:
+            status = self.api.current_status(project_dir)
+            run = status.run if isinstance(status.run, dict) else {}
+            # Keep this deliberately small: state is useful, project/task/output data is not.
+            body_lines.extend(
+                [
+                    "",
+                    "## LoopForge context (sanitized)",
+                    f"- screen: {screen}",
+                    f"- initialized: {'yes' if status.initialized else 'no'}",
+                    f"- workflow state: {run.get('status') or 'no active run'}",
+                    f"- workflow stage: {run.get('current_stage') or 'not available'}",
+                    "- omitted: project name and path, task text, run identifiers, adapter messages, artifacts, and environment data.",
+                ]
+            )
+        return ReportIssueResult(
+            ok=True,
+            repository=LOOPFORGE_GITHUB_REPOSITORY,
+            title=f"[{safe_kind}] {safe_title}",
+            body="\n".join(body_lines) + "\n",
+            redactions=redactions,
+        )
+
+    def create_project_report(self, preview: ReportIssueResult) -> ReportIssueResult:
+        """Create an issue only after the caller explicitly requests submission."""
+
+        if self.api.shutil.which("gh") is None:
+            return ReportIssueResult(
+                ok=False,
+                repository=LOOPFORGE_GITHUB_REPOSITORY,
+                title=preview.title,
+                body=preview.body,
+                redactions=preview.redactions,
+                reason="GitHub CLI (`gh`) is not available.",
+            )
+        try:
+            result = self.api.subprocess.run(
+                [
+                    "gh",
+                    "issue",
+                    "create",
+                    "--repo",
+                    LOOPFORGE_GITHUB_REPOSITORY,
+                    "--title",
+                    preview.title,
+                    "--body",
+                    preview.body,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except (OSError, self.api.subprocess.SubprocessError) as error:
+            return ReportIssueResult(
+                ok=False,
+                repository=LOOPFORGE_GITHUB_REPOSITORY,
+                title=preview.title,
+                body=preview.body,
+                redactions=preview.redactions,
+                reason=f"GitHub issue creation failed: {error}",
+            )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip()
+            return ReportIssueResult(
+                ok=False,
+                repository=LOOPFORGE_GITHUB_REPOSITORY,
+                title=preview.title,
+                body=preview.body,
+                redactions=preview.redactions,
+                reason=detail or "GitHub issue creation failed.",
+            )
+        return ReportIssueResult(
+            ok=True,
+            repository=LOOPFORGE_GITHUB_REPOSITORY,
+            title=preview.title,
+            body=preview.body,
+            submitted=True,
+            url=result.stdout.strip(),
+            redactions=preview.redactions,
+        )
 
     @staticmethod
     def task_summary(issue: dict[str, Any]) -> str:

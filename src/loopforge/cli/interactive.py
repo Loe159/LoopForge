@@ -114,6 +114,7 @@ SUPPORTED_COMMANDS = {
     "quit": "Exit the interactive shell.",
     "raw": "Print raw stdout/stderr for a recorded attempt.",
     "recap": "Print a one-line recap of the current run.",
+    "report": "Preview or submit a sanitized report to the LoopForge project.",
     "resume": "Switch the current run by run id.",
     "review": "Summarize local review evidence from diff, risk, and blockers.",
     "run": "Create a new run. Plain text input is also treated as /run.",
@@ -165,9 +166,10 @@ COMMAND_GROUPS = {
     "Projects": ("init", "cd", "dashboard", "pack", "config", "adapter"),
     "Runs": ("run", "new", "fork", "resume", "runs", "archive"),
     "Stages": ("status", "next", "guide", "actions", "do", "plan", "continue", "verify", "review", "learn"),
+    "Help": ("report",),
 }
 
-ALWAYS_DISCOVERABLE = {"help", "commands", "clear", "exit"}
+ALWAYS_DISCOVERABLE = {"help", "commands", "clear", "exit", "report"}
 
 
 def contextual_commands(project_dir: Path | None = None) -> dict[str, str]:
@@ -719,6 +721,57 @@ class InteractiveShell:
         self.write("Runs: create or resume work with /run, /new, or /resume.")
         self.write("Stages: inspect the current gate with /status, then use /next or /actions.")
         self.write("Use /commands for actions useful now; /commands all is the expert catalog.")
+        return DispatchResult(0)
+
+    def cmd_report(self, raw: str = "") -> DispatchResult:
+        parser = argparse.ArgumentParser(prog="/report", add_help=False)
+        parser.add_argument("--kind", choices=("bug", "feature", "optimization"), default="bug")
+        parser.add_argument("--title", required=True)
+        parser.add_argument("--description", required=True)
+        parser.add_argument("--expected", default="")
+        parser.add_argument("--actual", default="")
+        parser.add_argument("--include-context", action="store_true")
+        parser.add_argument("--submit", action="store_true")
+        tokens = self.split_args(raw)
+        if tokens is None:
+            return DispatchResult(2)
+        try:
+            args = parser.parse_args(tokens)
+        except SystemExit:
+            self.write(
+                "usage: /report --title <title> --description <text> "
+                "[--kind bug|feature|optimization] [--include-context] [--submit]",
+                error=True,
+            )
+            return DispatchResult(2)
+        from loopforge.cli import build_project_report, create_project_report
+
+        preview = build_project_report(
+            self.project_dir,
+            kind=args.kind,
+            title=args.title,
+            description=args.description,
+            expected=args.expected,
+            actual=args.actual,
+            include_context=args.include_context,
+            screen="shell",
+        )
+        result = create_project_report(preview) if args.submit else preview
+        if not result.ok:
+            self.write(f"report was not submitted: {result.reason}", error=True)
+            return DispatchResult(1)
+        if result.submitted:
+            render_success(
+                self.renderer,
+                "LoopForge report submitted",
+                [("repository", result.repository), ("issue", result.url), ("redactions", result.redactions)],
+            )
+            return DispatchResult(0)
+        self.write_panel(
+            "LoopForge report preview",
+            [f"repository: {result.repository}", f"redactions: {result.redactions}", "", result.body],
+        )
+        self.write("Review the preview, then rerun with --submit to create the issue.")
         return DispatchResult(0)
 
     def cmd_commands(self, raw: str = "") -> DispatchResult:

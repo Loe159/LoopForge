@@ -81,6 +81,43 @@ class CliParserBuilder:
         )
         add_format_args(init_parser)
 
+        report_parser = subcommands.add_parser(
+            "report",
+            help="Preview or submit a sanitized LoopForge product report on GitHub.",
+            epilog=(
+                "Reports always target the LoopForge repository, never the current project's remote. "
+                "The default is a local preview; use --submit only after reviewing it.\n\n"
+                "Examples:\n"
+                "  loopforge report --kind bug --title \"Status fails\" --description \"Status exits with an error\"\n"
+                "  loopforge report --kind optimization --title \"Faster list\" --description \"Large histories are slow\" --include-context --screen run\n"
+                "  loopforge report --kind feature --title \"Add export\" --description \"Need a CSV export\" --submit"
+            ),
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
+        topics[("report",)] = report_parser
+        report_parser.add_argument("--kind", choices=("bug", "feature", "optimization"), default="bug")
+        report_parser.add_argument("--title", required=True, help="Short report title.")
+        report_parser.add_argument("--description", required=True, help="What happened or what is requested.")
+        report_parser.add_argument("--expected", default="", help="Expected behavior or requested outcome.")
+        report_parser.add_argument("--actual", default="", help="Actual behavior or current limitation.")
+        report_parser.add_argument(
+            "--include-context",
+            action="store_true",
+            help="Attach only sanitized screen and workflow-state context.",
+        )
+        report_parser.add_argument(
+            "--screen",
+            choices=("cli", "home", "project", "run", "evidence", "settings", "shell"),
+            default="cli",
+            help="Current LoopForge screen when --include-context is used.",
+        )
+        report_parser.add_argument(
+            "--submit",
+            action="store_true",
+            help="Create the reviewed issue with GitHub CLI (`gh`).",
+        )
+        add_format_args(report_parser)
+
         run_parser = subcommands.add_parser(
             "run",
             help="Create or resume the LoopForge cockpit for a task.",

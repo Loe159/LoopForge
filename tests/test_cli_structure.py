@@ -9,7 +9,7 @@ from unittest import mock
 from loopforge import cli
 from loopforge.cli.app import LoopForgeCli
 from loopforge.cli.errors import CliError, CliRuntimeError, CliUsageError
-from loopforge.cli.models import CliOptions, GitHubIssueRef, IssueReadResult, RunIntake
+from loopforge.cli.models import CliOptions, GitHubIssueRef, IssueReadResult, ReportIssueResult, RunIntake
 from loopforge.cli.parser import CliParserBuilder, LoopForgeArgumentParser
 from loopforge.cli.workflow import (
     ContinueCommandHandler,
@@ -25,6 +25,7 @@ class CliStructureTests(unittest.TestCase):
         self.assertIs(cli.GitHubIssueRef, GitHubIssueRef)
         self.assertIs(cli.RunIntake, RunIntake)
         self.assertIs(cli.IssueReadResult, IssueReadResult)
+        self.assertIs(cli.ReportIssueResult, ReportIssueResult)
         self.assertIs(cli.CliError, CliError)
         self.assertIs(cli.CliUsageError, CliUsageError)
         self.assertIs(cli.CliRuntimeError, CliRuntimeError)
@@ -98,6 +99,7 @@ class CliStructureTests(unittest.TestCase):
             {
                 (),
                 ("init",),
+                ("report",),
                 ("run",),
                 ("status",),
                 ("guide",),
@@ -154,6 +156,62 @@ class CliStructureTests(unittest.TestCase):
         self.assertEqual(args.timeout, 900)
         self.assertEqual(args.rubric, "Clear")
         self.assertEqual(args.format, "json")
+
+    def test_report_parser_and_sanitized_preview_do_not_use_project_remote(self) -> None:
+        parser = CliParserBuilder().build()
+        args = parser.parse_args(
+            [
+                "report",
+                "--kind",
+                "optimization",
+                "--title",
+                "Speed up customer-project",
+                "--description",
+                "customer-project token=super-secret is slow",
+                "--include-context",
+                "--screen",
+                "run",
+            ]
+        )
+        self.assertEqual(args.kind, "optimization")
+        self.assertTrue(args.include_context)
+
+        status = mock.Mock(initialized=True, run={"status": "verification_failed", "current_stage": "verify"})
+        with mock.patch("loopforge.cli.current_status", return_value=status):
+            preview = cli.build_project_report(
+                Path("customer-project"),
+                kind=args.kind,
+                title=args.title,
+                description=args.description,
+                include_context=args.include_context,
+                screen=args.screen,
+            )
+
+        self.assertTrue(preview.ok)
+        self.assertEqual(preview.repository, "Loe159/LoopForge")
+        self.assertIn("screen: run", preview.body)
+        self.assertNotIn("customer-project", preview.title + preview.body)
+        self.assertNotIn("super-secret", preview.body)
+
+    def test_report_submission_uses_the_loopforge_repository(self) -> None:
+        preview = ReportIssueResult(
+            ok=True,
+            repository="Loe159/LoopForge",
+            title="[Bug] Status fails",
+            body="report body\n",
+        )
+        completed = mock.Mock(returncode=0, stdout="https://github.com/Loe159/LoopForge/issues/99\n", stderr="")
+        with (
+            mock.patch("loopforge.cli.shutil.which", return_value="gh"),
+            mock.patch("loopforge.cli.subprocess.run", return_value=completed) as run,
+        ):
+            result = cli.create_project_report(preview)
+
+        self.assertTrue(result.ok)
+        self.assertTrue(result.submitted)
+        command = run.call_args.args[0]
+        self.assertEqual(command[0:3], ["gh", "issue", "create"])
+        self.assertEqual(command[command.index("--repo") + 1], "Loe159/LoopForge")
 
     def test_parser_errors_keep_the_public_usage_error(self) -> None:
         parser = CliParserBuilder().build()

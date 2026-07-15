@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Callable, Iterable
@@ -27,6 +28,7 @@ from loopforge.cli.textual_app.screens import (
     TextEntryScreen,
 )
 from loopforge.cli.textual_app.workers import load_project_snapshot
+from loopforge.cli.ui import TerminalRenderer
 
 if TYPE_CHECKING:
     from loopforge.cli.interactive import InteractiveShell
@@ -76,7 +78,8 @@ class LoopForgeApp(App[None]):
         Binding("a", "archive", "Archive", show=False),
         Binding("e", "show_evidence", "Evidence", show=False),
         Binding("s", "show_settings", "Settings", show=False),
-        Binding("slash", "filter", "Filter", show=False),
+        Binding("slash", "command", "Command", show=True),
+        Binding("f", "filter", "Filter", show=False),
         Binding("c", "copy_evidence", "Copy", show=False),
         Binding("x", "export_evidence", "Export", show=False),
         Binding("escape", "go_back", "Back", show=True),
@@ -281,6 +284,52 @@ class LoopForgeApp(App[None]):
             return
         self._run_shell_operation("Create run", lambda: self.shell.cmd_run(task.strip()))
 
+    def action_command(self) -> None:
+        """Open the existing slash-command surface from the full-screen UI."""
+
+        self.push_screen(
+            TextEntryScreen(
+                "Run LoopForge command",
+                "Enter a slash command, for example /status or /report --help.",
+                value="/",
+                submit_label="Run",
+            ),
+            self._run_slash_command,
+        )
+
+    def _run_slash_command(self, command: str | None) -> None:
+        if command is None or not command.strip():
+            return
+        line = command.strip()
+        if not line.startswith("/"):
+            line = f"/{line}"
+        self._run_shell_operation("Run command", lambda: self._dispatch_slash_command(line))
+
+    def _dispatch_slash_command(self, line: str) -> SimpleNamespace:
+        """Route through the compatibility shell without writing over Textual's screen."""
+
+        captured = io.StringIO()
+        original_output = self.shell.output
+        original_error = self.shell.error
+        original_renderer = self.shell.renderer
+        self.shell.output = captured
+        self.shell.error = captured
+        self.shell.renderer = TerminalRenderer(captured, mode="plain", theme=self.shell.theme)
+        try:
+            result = self.shell.dispatch(line)
+        finally:
+            self.shell.output = original_output
+            self.shell.error = original_error
+            self.shell.renderer = original_renderer
+        output = captured.getvalue().strip()
+        if len(output) > 1200:
+            output = output[:1197] + "..."
+        return SimpleNamespace(
+            exit_code=result.exit_code,
+            should_exit=result.should_exit,
+            message=output or ("Command completed." if result.exit_code == 0 else "Command was blocked."),
+        )
+
     def action_filter(self) -> None:
         value = self._snapshot.evidence.query if self._screen == "evidence" else self._filter
         self.push_screen(TextEntryScreen("Filter", "Filter the current list.", value=value), self._apply_filter)
@@ -359,6 +408,9 @@ class LoopForgeApp(App[None]):
         if self._operation.finished and not self._operation_completion_handled:
             self._operation_completion_handled = True
             self._notice = self._snapshot.operation.message
+            if bool(getattr(self._operation.result, "should_exit", False)):
+                self.exit()
+                return
             self.load_selected_project()
 
     def action_cancel_or_exit(self) -> None:
@@ -537,4 +589,12 @@ def _evidence_line(item: object) -> str:
 def _operation_result(value: object, cancelled: bool) -> SimpleNamespace:
     exit_code = getattr(value, "exit_code", 0)
     ok = not cancelled and exit_code == 0
-    return SimpleNamespace(ok=ok, message="Operation cancelled." if cancelled else ("Action completed." if ok else "Action was blocked."))
+    return SimpleNamespace(
+        ok=ok,
+        should_exit=bool(getattr(value, "should_exit", False)),
+        message=(
+            "Operation cancelled."
+            if cancelled
+            else str(getattr(value, "message", "Action completed." if ok else "Action was blocked."))
+        ),
+    )

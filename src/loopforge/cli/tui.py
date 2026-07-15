@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from collections import defaultdict
+import io
 from math import ceil
 from queue import Empty, Queue
 import os
@@ -31,6 +32,7 @@ from loopforge.cli.presentation import (
 from loopforge.cli.operations import ForegroundOperation, OperationEvent
 from loopforge.cli.state_store import StateStore
 from loopforge.cli.evidence import ApprovalSummary, EvidenceIndex, EvidenceItem, approval_summary
+from loopforge.cli.ui import TerminalRenderer
 from loopforge.engine import (
     continue_run,
     current_status,
@@ -315,55 +317,64 @@ class LoopForgeConsole:
         )
 
     def _key_bindings(self) -> Any:
+        from prompt_toolkit.filters import Condition
         from prompt_toolkit.key_binding import KeyBindings
 
         bindings = KeyBindings()
+        navigation_active = Condition(lambda: self._dialog_container is None)
 
-        @bindings.add("up")
-        @bindings.add("k")
+        @bindings.add("up", filter=navigation_active)
+        @bindings.add("k", filter=navigation_active)
         def _up(event: Any) -> None:
             self._move(-1)
 
-        @bindings.add("down")
-        @bindings.add("j")
+        @bindings.add("down", filter=navigation_active)
+        @bindings.add("j", filter=navigation_active)
         def _down(event: Any) -> None:
             self._move(1)
 
-        @bindings.add("enter")
+        @bindings.add("enter", filter=navigation_active)
         def _enter(event: Any) -> None:
             self._open_selected()
 
         @bindings.add("escape")
         def _escape(event: Any) -> None:
+            if self._dialog_container is not None:
+                self._close_dialog()
+                return
             self._back()
 
-        @bindings.add("tab")
+        @bindings.add("tab", filter=navigation_active)
         def _tab(event: Any) -> None:
             self._cycle_screen()
 
-        @bindings.add("c-p")
+        @bindings.add("c-p", filter=navigation_active)
         def _projects(event: Any) -> None:
             self.state.screen = "home"
             self.state.notice = "Project selector"
             self._refresh()
 
-        @bindings.add("c-k")
+        @bindings.add("c-k", filter=navigation_active)
         def _palette(event: Any) -> None:
             self._show_action_palette()
 
-        @bindings.add("?")
+        @bindings.add("?", filter=navigation_active)
         def _help(event: Any) -> None:
             self._show_help()
 
-        @bindings.add("/")
+        @bindings.add("/", filter=navigation_active)
+        def _command(event: Any) -> None:
+            self._show_command_dialog()
+
+        @bindings.add("f", filter=navigation_active)
         def _filter(event: Any) -> None:
             self._show_filter()
 
-        @bindings.add("n")
+        @bindings.add("n", filter=navigation_active)
         def _new_run(event: Any) -> None:
             self._show_new_run_dialog()
 
-        @bindings.add("e")
+        @bindings.add("e", filter=navigation_active)
         def _evidence(event: Any) -> None:
             self._load_evidence_snapshot(self._project_path())
             self.state.screen = "evidence"
@@ -371,15 +382,15 @@ class LoopForgeConsole:
             self.state.evidence_preview = False
             self._refresh()
 
-        @bindings.add("o")
+        @bindings.add("o", filter=navigation_active)
         def _open_evidence(event: Any) -> None:
             self._open_selected_evidence()
 
-        @bindings.add("c")
+        @bindings.add("c", filter=navigation_active)
         def _copy_evidence(event: Any) -> None:
             self._copy_selected_evidence()
 
-        @bindings.add("x")
+        @bindings.add("x", filter=navigation_active)
         def _export_evidence(event: Any) -> None:
             self._export_selected_evidence()
 
@@ -387,7 +398,7 @@ class LoopForgeConsole:
         def _interrupt(event: Any) -> None:
             self._handle_interrupt(event.app)
 
-        @bindings.add("l")
+        @bindings.add("l", filter=navigation_active)
         def _toggle_live_output(event: Any) -> None:
             if self._operation is not None:
                 self._show_live_output()
@@ -1108,7 +1119,7 @@ class LoopForgeConsole:
     def _show_help(self) -> None:
         self._show_dialog(
             "Keyboard shortcuts",
-            ["↑/↓ or j/k select", "Enter opens or runs the primary action", "Esc goes back", "Ctrl+P projects", "Ctrl+K actions", "/ filters", "Ctrl+C cancels a dialog, then exits"],
+            ["↑/↓ or j/k select", "Enter opens or runs the primary action", "Esc goes back", "Ctrl+P projects", "Ctrl+K actions", "/ runs a command", "f filters", "Ctrl+C cancels a dialog, then exits"],
             [("Close", self._close_dialog)],
         )
 
@@ -1137,6 +1148,61 @@ class LoopForgeConsole:
             buttons=[Button("Create", handler=create), Button("Cancel", handler=self._close_dialog)],
         )
         self._attach_dialog()
+
+    def _show_command_dialog(self) -> None:
+        """Run a compatibility slash command without adding a second command registry."""
+
+        from prompt_toolkit.layout.containers import HSplit
+        from prompt_toolkit.widgets import Button, Dialog, Label, TextArea
+
+        field = TextArea(text="/", multiline=False)
+
+        def execute() -> None:
+            line = field.text.strip()
+            if not line:
+                return
+            if not line.startswith("/"):
+                line = f"/{line}"
+            self._close_dialog()
+            result, output = self._dispatch_slash_command(line)
+            self._load_revision(self._project_path())
+            if result.should_exit:
+                assert self._application is not None
+                self._application.exit()
+                return
+            if output:
+                lines = output.splitlines()
+                if len(lines) > 40:
+                    lines = [*lines[:39], "... output truncated"]
+                self._show_dialog("Command result", lines, [("Close", self._close_dialog)])
+                return
+            self.state.notice = "Command completed." if result.exit_code == 0 else "Command was blocked."
+            self._refresh()
+
+        self._dialog_container = Dialog(
+            title="Run LoopForge command",
+            body=HSplit([Label(text="Enter a slash command, for example /status or /report --help."), field]),
+            buttons=[Button("Run", handler=execute), Button("Cancel", handler=self._close_dialog)],
+        )
+        self._attach_dialog()
+
+    def _dispatch_slash_command(self, line: str) -> tuple[Any, str]:
+        """Reuse InteractiveShell.dispatch while keeping command output inside the console."""
+
+        captured = io.StringIO()
+        original_output = self.shell.output
+        original_error = self.shell.error
+        original_renderer = self.shell.renderer
+        self.shell.output = captured
+        self.shell.error = captured
+        self.shell.renderer = TerminalRenderer(captured, mode="plain", theme=self.shell.theme)
+        try:
+            result = self.shell.dispatch(line)
+        finally:
+            self.shell.output = original_output
+            self.shell.error = original_error
+            self.shell.renderer = original_renderer
+        return result, captured.getvalue().strip()
 
     def _show_filter(self) -> None:
         from prompt_toolkit.layout.containers import HSplit

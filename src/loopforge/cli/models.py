@@ -119,3 +119,17 @@ class IssueReadResult:
     ok: bool
     issue: dict[str, Any] | None = None
     reason: str = ""
+
+
+@dataclass(frozen=True)
+class ReportIssueResult:
+    """A sanitized LoopForge project-issue preview or submission result."""
+
+    ok: bool
+    repository: str
+    title: str
+    body: str
+    submitted: bool = False
+    url: str = ""
+    redactions: int = 0
+    reason: str = ""

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -82,3 +83,23 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
             await pilot.pause(0.1)
             await pilot.press("escape")
             self.assertIsNone(app._operation)
+
+    async def test_pilot_opens_slash_command_entry_and_uses_shell_dispatch(self) -> None:
+        from loopforge.cli.interactive import InteractiveShell
+        from loopforge.cli.textual_app import LoopForgeApp
+        from loopforge.cli.textual_app.screens import TextEntryScreen
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project = Path(temp_dir) / "project"
+            project.mkdir()
+            shell = InteractiveShell(project, output=io.StringIO(), error=io.StringIO())
+            app = LoopForgeApp(shell, load_on_mount=False)
+            async with app.run_test() as pilot:
+                await pilot.press("/")
+                await pilot.pause()
+                self.assertIsInstance(app.screen, TextEntryScreen)
+
+                result = app._dispatch_slash_command("/status")
+                self.assertEqual(result.exit_code, 0)
+                self.assertIn("Current loop", result.message)
+                self.assertEqual(shell.output.getvalue(), "")

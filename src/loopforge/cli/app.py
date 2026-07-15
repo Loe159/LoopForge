@@ -80,6 +80,66 @@ class DiscoveryCommandHandler:
         )
 
 
+class ReportCommandHandler:
+    """Preview or explicitly submit product feedback to the LoopForge repository."""
+
+    commands = frozenset({"report"})
+
+    def handle(self, args: Any, context: CliContext) -> int | None:
+        if args.command not in self.commands:
+            return None
+        api = context.api
+        fmt = api.normalize_format(
+            api.output_format(args, context.options),
+            allowed=("text", "json"),
+            command="loopforge report",
+        )
+        preview = api.build_project_report(
+            context.project_dir,
+            kind=args.kind,
+            title=args.title,
+            description=args.description,
+            expected=args.expected,
+            actual=args.actual,
+            include_context=args.include_context,
+            screen=args.screen,
+        )
+        result = api.create_project_report(preview) if args.submit else preview
+        payload = {
+            "ok": result.ok,
+            "submitted": result.submitted,
+            "repository": result.repository,
+            "url": result.url or None,
+            "title": result.title,
+            "body": result.body,
+            "redactions": result.redactions,
+            "context_included": args.include_context,
+            "reason": result.reason or None,
+        }
+        if fmt == "json":
+            api.print_json_payload(payload)
+        elif not context.options.quiet:
+            if result.ok and result.submitted:
+                api.render_success(
+                    context.renderer,
+                    "LoopForge report submitted",
+                    [("repository", result.repository), ("issue", result.url), ("redactions", result.redactions)],
+                )
+            elif result.ok:
+                context.renderer.panel(
+                    "LoopForge report preview",
+                    [f"repository: {result.repository}", f"redactions: {result.redactions}", "", result.body],
+                )
+                print("Review the preview, then rerun with --submit to create the issue.", file=context.stdout)
+            else:
+                api.render_blocked(
+                    context.error_renderer(),
+                    "LoopForge report was not submitted",
+                    [("repository", result.repository)],
+                    blockers=[result.reason],
+                )
+        return 0 if result.ok else 1
+
 class ProjectCommandHandler:
     """Handle project setup and read-only inspection commands."""
 
@@ -537,6 +597,7 @@ class LoopForgeCli:
             handlers
             or (
                 DiscoveryCommandHandler(),
+                ReportCommandHandler(),
                 ProjectCommandHandler(),
                 RunCommandHandler(),
                 ContinueCommandHandler(),

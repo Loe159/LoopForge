@@ -1,10 +1,14 @@
 ---
-name: CLI UX bug
-about: Report confusing, unstable, or unscriptable LoopForge CLI behavior
-title: "[CLI UX] "
-labels: cli, ux
+name: LoopForge report
+about: Report a LoopForge bug, requested feature, or optimization opportunity
+title: "[Report] "
+labels: ""
 assignees: ""
 ---
+
+## Report kind
+
+Bug, feature, or optimization.
 
 ## Version
 
@@ -31,3 +35,8 @@ loopforge ...
 ## Expected behavior
 
 ## Actual behavior
+
+## LoopForge context (sanitized, optional)
+
+Do not include project names or paths, task text, adapter messages, artifacts,
+environment data, credentials, or tokens.
