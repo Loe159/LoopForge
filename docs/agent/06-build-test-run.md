@@ -23,9 +23,10 @@ Run commands from the repository root.
 - `LOOPFORGE_HOME` redirects run/workspace data; use a temporary value in tests.
 - `NO_COLOR`, `LOOPFORGE_NO_COLOR`, `TERM=dumb`, `FORCE_COLOR`,
   `LOOPFORGE_DEBUG`, and `DEBUG=loopforge*` affect CLI rendering/debugging.
-- TUI/UX changes need focused coverage in `tests/test_cli.py` plus facade and
-  dispatch coverage in `tests/test_cli_structure.py`; there is no snapshot or
-  terminal-size test harness established yet.
+- TUI/UX changes need focused coverage in `tests/test_cli.py`,
+  `tests/test_cli_tui.py`, and facade/dispatch coverage in
+  `tests/test_cli_structure.py`. The TUI contracts cover 60-column clipping,
+  ASCII glyphs, and bounded rendering of large run lists.
 
 ## Not established by repository evidence
 

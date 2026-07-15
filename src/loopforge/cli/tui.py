@@ -10,8 +10,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import os
 import shutil
 import shlex
+import sys
 from typing import TYPE_CHECKING, Any
 
 from loopforge.cli.presentation import (
@@ -56,7 +58,19 @@ class ConsoleState:
 
 def _clip(value: object, width: int = 68) -> str:
     text = " ".join(str(value or "").split())
-    return text if len(text) <= width else text[: width - 1].rstrip() + "…"
+    if len(text) <= width:
+        return text
+    marker = "..." if ascii_ui_enabled() else "…"
+    return text[: max(0, width - len(marker))].rstrip() + marker
+
+
+def ascii_ui_enabled() -> bool:
+    """Use ASCII-safe UI glyphs when explicitly requested or required."""
+
+    if os.environ.get("LOOPFORGE_ASCII") is not None:
+        return True
+    encoding = getattr(sys.stdout, "encoding", None)
+    return bool(encoding and encoding.lower() in {"ascii", "us-ascii"})
 
 
 class LoopForgeConsole:
@@ -71,6 +85,40 @@ class LoopForgeConsole:
         self._last_interrupt = False
         self._operation: ForegroundOperation | None = None
         self._operation_events: list[OperationEvent] = []
+
+    def _terminal_width(self) -> int:
+        return max(60, shutil.get_terminal_size(fallback=(80, 24)).columns)
+
+    def _visible_item_limit(self) -> int:
+        height = shutil.get_terminal_size(fallback=(80, 24)).lines
+        return max(6, min(40, height - 8))
+
+    def _visible_items(self, items: list[Any]) -> list[tuple[int, Any]]:
+        """Return a small selection window instead of rendering an unbounded list."""
+
+        if not items:
+            return []
+        self.state.selected_index = min(self.state.selected_index, len(items) - 1)
+        limit = self._visible_item_limit()
+        start = max(0, min(self.state.selected_index - limit // 2, len(items) - limit))
+        return list(enumerate(items[start : start + limit], start=start))
+
+    def _marker(self, value: str) -> str:
+        if not ascii_ui_enabled():
+            return value
+        return {
+            "◆": "*",
+            "●": "o",
+            "◉": "@",
+            "○": "o",
+            "×": "x",
+            "✓": "+",
+            "–": "-",
+            "›": ">",
+        }.get(value, value)
+
+    def _line(self, value: object) -> str:
+        return _clip(value, self._terminal_width())
 
     def run(self) -> int:
         """Create and run the prompt-toolkit application only for TTY sessions."""
@@ -87,9 +135,9 @@ class LoopForgeConsole:
         root = HSplit(
             [
                 Window(FormattedTextControl(self._header_fragments), height=1),
-                Window(height=1, char="─"),
+                Window(height=1, char="-" if ascii_ui_enabled() else "─"),
                 self._body_window,
-                Window(height=1, char="─"),
+                Window(height=1, char="-" if ascii_ui_enabled() else "─"),
                 Window(FormattedTextControl(self._footer_fragments), height=1),
             ]
         )
@@ -229,7 +277,8 @@ class LoopForgeConsole:
         if self.shell.statusline == "off":
             return [("class:brand", " LoopForge")]
         suffix = f"  {branch}" if self.shell.statusline == "compact" else f"  {branch}  {run}"
-        return [("class:brand", f" LoopForge · {title}"), ("", suffix)]
+        prefix = f" LoopForge {'-' if ascii_ui_enabled() else '·'} {title}"
+        return [("class:brand", self._line(prefix + suffix))]
 
     def _footer_fragments(self) -> list[tuple[str, str]]:
         footer = {
@@ -244,7 +293,7 @@ class LoopForgeConsole:
         elif self._operation is not None and self._operation.finished:
             footer = "Enter close receipt  e evidence  l live output"
         notice = f"  {self.state.notice}" if self.state.notice else ""
-        return [("class:secondary", footer + notice)]
+        return [("class:secondary", self._line(footer + notice))]
 
     def _body_fragments(self) -> list[tuple[str, str]]:
         self._last_interrupt = False
@@ -262,25 +311,30 @@ class LoopForgeConsole:
     def _home_fragments(self) -> list[tuple[str, str]]:
         records = self._projects()
         attention = sum(1 for record in records if record.get("attention") in {"needs_human", "blocked"})
-        parts: list[tuple[str, str]] = [("", f"{len(records)} projects · {attention} need attention\n\n")]
+        separator = " - " if ascii_ui_enabled() else " · "
+        parts: list[tuple[str, str]] = [("", self._line(f"{len(records)} projects{separator}{attention} need attention") + "\n\n")]
         if not records:
-            return parts + [("class:attention", "◆ No registered project\n"), ("", "Open the current Git repository to register it.")]
+            return parts + [("class:attention", f"{self._marker('◆')} No registered project\n"), ("", "Open the current Git repository to register it.")]
         parts.append(("class:secondary", "Projects\n"))
-        for index, record in enumerate(records):
+        for index, record in self._visible_items(records):
             family = str(record.get("attention") or "ready")
             label, marker, role = family_presentation(family)
-            prefix = "› " if index == self.state.selected_index else "  "
+            prefix = f"{self._marker('›')} " if index == self.state.selected_index else "  "
             style = "class:selected" if index == self.state.selected_index else f"class:{role}"
-            name = _clip(record.get("name") or Path(str(record.get("path") or "")).name, 26)
-            details = f"{record.get('run_count', 0)} runs · {label}"
-            parts.append((style, f"{prefix}{marker} {name:<28} {details}\n"))
+            width = self._terminal_width()
+            name = _clip(record.get("name") or Path(str(record.get("path") or "")).name, max(16, width - 32))
+            details = f"{record.get('run_count', 0)} runs{separator}{label}"
+            line = f"{prefix}{self._marker(marker)} {name}"
+            if width >= 80:
+                line += f"  {details}"
+            parts.append((style, self._line(line) + "\n"))
         selected = records[min(self.state.selected_index, len(records) - 1)]
         parts.extend(
             [
                 ("\n", ""),
                 ("class:secondary", "Selected\n"),
-                ("", f"{selected.get('path')}\n"),
-                ("", f"{selected.get('branch') or 'no Git branch'} · last activity {selected.get('last_activity') or 'unknown'}"),
+                ("", self._line(selected.get("path")) + "\n"),
+                ("", self._line(f"{selected.get('branch') or 'no Git branch'}{separator}last activity {selected.get('last_activity') or 'unknown'}")),
             ]
         )
         return parts
@@ -289,39 +343,43 @@ class LoopForgeConsole:
         project = self._project_path()
         result = list_runs(project)
         snapshot = self._snapshot(project)
-        parts: list[tuple[str, str]] = [("class:brand", f"{snapshot.project.name}\n")]
-        parts.append(("class:secondary", f"{project} · {snapshot.project.profile or 'default'} · {snapshot.project.pack or 'no pack'}\n\n"))
+        separator = " - " if ascii_ui_enabled() else " · "
+        parts: list[tuple[str, str]] = [("class:brand", self._line(snapshot.project.name) + "\n")]
+        parts.append(("class:secondary", self._line(f"{project}{separator}{snapshot.project.profile or 'default'}{separator}{snapshot.project.pack or 'no pack'}") + "\n\n"))
         if result.blockers:
-            return parts + [("class:attention", "◆ Project setup required\n"), ("", result.blockers[0])]
+            return parts + [("class:attention", f"{self._marker('◆')} Project setup required\n"), ("", self._line(result.blockers[0]))]
         parts.append(("class:secondary", "Runs\n"))
         runs = self._filtered_runs(result.runs)
         if not runs:
             return parts + [("", "No runs. Press n, then choose Create run in the action palette.")]
-        for index, run in enumerate(runs):
+        for index, run in self._visible_items(runs):
             family = self._run_family(run)
             label, marker, role = family_presentation(family)
-            prefix = "› " if index == self.state.selected_index else "  "
+            prefix = f"{self._marker('›')} " if index == self.state.selected_index else "  "
             style = "class:selected" if index == self.state.selected_index else f"class:{role}"
-            task = _clip(run.get("task") or "Untitled run", 48)
-            parts.append((style, f"{prefix}{marker} {task:<50} {label}\n"))
+            width = self._terminal_width()
+            task = _clip(run.get("task") or "Untitled run", max(18, width - 24))
+            line = f"{prefix}{self._marker(marker)} {task}"
+            if width >= 80:
+                line += f"  {label}"
+            parts.append((style, self._line(line) + "\n"))
         return parts
 
     def _run_fragments(self) -> list[tuple[str, str]]:
         snapshot = self._snapshot(self._project_path())
         if snapshot.run is None:
-            return [("class:attention", "◆ No selected run\n"), ("", "Create a run from the action palette.")]
+            return [("class:attention", f"{self._marker('◆')} No selected run\n"), ("", "Create a run from the action palette.")]
         label, marker, role = family_presentation(snapshot.family)
         parts: list[tuple[str, str]] = [
-            ("class:brand", f"{snapshot.run.task or 'Untitled run'}  "),
-            (f"class:{role}", f"{marker} {label}\n"),
-            ("class:secondary", f"{snapshot.run.short_id} · {snapshot.run.current_stage} · {snapshot.run.actor}\n\n"),
+            ("class:brand", self._line(f"{snapshot.run.task or 'Untitled run'}  {self._marker(marker)} {label}") + "\n"),
+            ("class:secondary", self._line(f"{snapshot.run.short_id} {'-' if ascii_ui_enabled() else '·'} {snapshot.run.current_stage} {'-' if ascii_ui_enabled() else '·'} {snapshot.run.actor}") + "\n\n"),
         ]
         for stage in snapshot.stages:
             style = f"class:{FAMILY_PRESENTATION[stage.family][2]}"
-            parts.append((style, f"{stage.marker} {stage.title}"))
-            parts.append(("class:secondary", f"  {stage.actor} · {stage.label}\n"))
+            parts.append((style, self._line(f"{self._marker(stage.marker)} {stage.title}")))
+            parts.append(("class:secondary", self._line(f"  {stage.actor} {'-' if ascii_ui_enabled() else '·'} {stage.label}") + "\n"))
         if snapshot.blockers:
-            parts.extend([( "\n", ""), ("class:danger", "Blocked\n"), ("", _clip(snapshot.blockers[0]))])
+            parts.extend([( "\n", ""), ("class:danger", "Blocked\n"), ("", self._line(snapshot.blockers[0]))])
             if snapshot.run.next_action is not None:
                 action = snapshot.run.next_action
                 parts.extend(
@@ -349,20 +407,21 @@ class LoopForgeConsole:
     def _evidence_fragments(self) -> list[tuple[str, str]]:
         items = self._evidence_items()
         if not items:
-            return [("class:attention", "◆ No evidence yet\n"), ("", "This stage has not started.")]
+            return [("class:attention", f"{self._marker('◆')} No evidence yet\n"), ("", "This stage has not started.")]
         selected = self._selected_evidence_item(items)
         if selected is not None and self.state.evidence_preview:
             return [
-                ("class:secondary", f"Evidence preview · {selected.label}\n"),
+                ("class:secondary", self._line(f"Evidence preview {'-' if ascii_ui_enabled() else '·'} {selected.label}") + "\n"),
                 ("class:secondary", selected.relative_path + "\n\n"),
                 ("", preview_evidence(selected, query=self.state.evidence_query)),
             ]
-        query = f" · search: {self.state.evidence_query}" if self.state.evidence_query else ""
-        parts: list[tuple[str, str]] = [("class:secondary", f"Evidence · {len(items)} items{query}\n")]
-        for index, item in enumerate(items[:40]):
-            prefix = "› " if index == self.state.selected_index else "  "
+        separator = " - " if ascii_ui_enabled() else " · "
+        query = f"{separator}search: {self.state.evidence_query}" if self.state.evidence_query else ""
+        parts: list[tuple[str, str]] = [("class:secondary", self._line(f"Evidence{separator}{len(items)} items{query}") + "\n")]
+        for index, item in self._visible_items(list(items)):
+            prefix = f"{self._marker('›')} " if index == self.state.selected_index else "  "
             style = "class:selected" if index == self.state.selected_index else ""
-            parts.append((style, f"{prefix}[{item.label}] {item.relative_path}\n"))
+            parts.append((style, self._line(f"{prefix}[{item.label}] {item.relative_path}") + "\n"))
         return parts
 
     def _settings_fragments(self) -> list[tuple[str, str]]:
@@ -698,23 +757,23 @@ class LoopForgeConsole:
         elapsed = f"{operation.elapsed_seconds():.1f}s"
         latest = self._operation_events[-1] if self._operation_events else None
         if not operation.finished:
-            spinner = "◐◓◑◒"[int(operation.elapsed_seconds() * 8) % 4]
+            spinner = ("|/-\\" if ascii_ui_enabled() else "◐◓◑◒")[int(operation.elapsed_seconds() * 8) % 4]
             message = latest.message if latest is not None else "Preparing operation…"
             progress = ""
             if latest is not None and latest.current is not None and latest.total is not None:
                 progress = f" {latest.current}/{latest.total}"
             return [
                 ("\n", ""),
-                ("class:running", f"{spinner} {operation.label} · {elapsed}{progress}\n"),
-                ("class:secondary", _clip(message, 110)),
+                ("class:running", self._line(f"{spinner} {operation.label} {'-' if ascii_ui_enabled() else '·'} {elapsed}{progress}") + "\n"),
+                ("class:secondary", self._line(message)),
             ]
         latest_message = latest.message if latest is not None else operation.label
         ok = operation.error is None and bool(getattr(operation.result, "ok", False))
         role = "success" if ok else "danger"
-        marker = "✓" if ok else "×"
+        marker = self._marker("✓" if ok else "×")
         return [
             ("\n", ""),
-            (f"class:{role}", f"{marker} {latest_message} · {elapsed}\n"),
+            (f"class:{role}", self._line(f"{marker} {latest_message} {'-' if ascii_ui_enabled() else '·'} {elapsed}") + "\n"),
             ("class:secondary", "Enter closes this receipt · l shows activity"),
         ]
 

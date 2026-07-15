@@ -23,4 +23,8 @@ class CliContext:
     stderr: TextIO
 
     def error_renderer(self) -> TerminalRenderer:
-        return self.api.TerminalRenderer(self.stderr, no_color=self.options.no_color)
+        return self.api.TerminalRenderer(
+            self.stderr,
+            mode="plain" if self.options.plain else "auto",
+            no_color=self.options.no_color or self.options.plain,
+        )

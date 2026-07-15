@@ -80,6 +80,8 @@ from loopforge.cli.ui import (
 
 GLOBAL_FLAGS = {
     "--no-color",
+    "--plain",
+    "--interactive-ui",
     "--no-input",
     "--quiet",
     "--debug",
@@ -423,11 +425,13 @@ def print_json_payload(payload: object) -> None:
 def preparse_global_options(argv: Sequence[str]) -> tuple[CliOptions, list[str]]:
     values = {
         "no_color": False,
+        "plain": False,
         "no_input": False,
         "quiet": False,
         "debug": debug_enabled_from_env(),
         "version": False,
         "json": False,
+        "interactive_ui": False,
     }
     cleaned: list[str] = []
     passthrough = False
@@ -441,6 +445,12 @@ def preparse_global_options(argv: Sequence[str]) -> tuple[CliOptions, list[str]]
             continue
         if item == "--no-color":
             values["no_color"] = True
+            continue
+        if item == "--plain":
+            values["plain"] = True
+            continue
+        if item == "--interactive-ui":
+            values["interactive_ui"] = True
             continue
         if item == "--no-input":
             values["no_input"] = True

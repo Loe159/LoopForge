@@ -75,6 +75,8 @@ class DiscoveryCommandHandler:
             context.project_dir,
             command=args.shell_command,
             script=args.script,
+            renderer_mode="plain" if options.plain else "auto",
+            interactive_ui=options.interactive_ui,
         )
 
 
@@ -518,7 +520,11 @@ class LoopForgeCli:
             api=self.api,
             options=options,
             parser=parser,
-            renderer=self.api.TerminalRenderer(sys.stdout, no_color=options.no_color),
+            renderer=self.api.TerminalRenderer(
+                sys.stdout,
+                mode="plain" if options.plain else "auto",
+                no_color=options.no_color or options.plain,
+            ),
             project_dir=Path.cwd(),
             stdin=sys.stdin,
             stdout=sys.stdout,
@@ -580,7 +586,11 @@ class LoopForgeCli:
                 and not options.no_input
             ):
                 interactive = importlib.import_module("loopforge.cli.interactive")
-                return interactive.run_interactive(context.project_dir)
+                return interactive.run_interactive(
+                    context.project_dir,
+                    renderer_mode="plain" if options.plain else "auto",
+                    interactive_ui=options.interactive_ui,
+                )
             if options.no_input:
                 raise api.CliUsageError(
                     "LF_INPUT_REQUIRED",

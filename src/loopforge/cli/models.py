@@ -9,11 +9,13 @@ from typing import Any
 @dataclass(frozen=True)
 class CliOptions:
     no_color: bool = False
+    plain: bool = False
     no_input: bool = False
     quiet: bool = False
     debug: bool = False
     version: bool = False
     json: bool = False
+    interactive_ui: bool = False
 
 
 @dataclass(frozen=True)

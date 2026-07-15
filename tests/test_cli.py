@@ -15,7 +15,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from loopforge.cli import IssueReadResult, main
+from loopforge.cli import IssueReadResult, main, preparse_global_options
 from loopforge.engine import (
     apply_initial_task_approval,
     apply_plan_approval,
@@ -1280,6 +1280,30 @@ class CliTests(unittest.TestCase):
                 renderer = TerminalRenderer(output, mode="auto")
                 renderer.panel("LoopForge status", ["state: initialized"])
             self.assertNotIn("\x1b[", output.getvalue())
+
+    def test_plain_global_option_forces_plain_output_even_when_color_is_forced(self) -> None:
+        output = io.StringIO()
+        with (
+            mock.patch.dict(os.environ, {"FORCE_COLOR": "1"}, clear=False),
+            contextlib.redirect_stdout(output),
+        ):
+            self.assertEqual(main(["--plain", "status"]), 0)
+
+        self.assertNotIn("\x1b[", output.getvalue())
+
+    def test_plain_and_interactive_ui_are_global_options(self) -> None:
+        options, argv = preparse_global_options(["--plain", "--interactive-ui", "status"])
+
+        self.assertTrue(options.plain)
+        self.assertTrue(options.interactive_ui)
+        self.assertEqual(argv, ["status"])
+
+    def test_plain_preserves_json_machine_output(self) -> None:
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(main(["--plain", "status", "--format", "json"]), 0)
+
+        self.assertIsInstance(json.loads(output.getvalue()), dict)
 
     def test_version_commands_report_runtime_details(self) -> None:
         for args in (["--version"], ["-V"], ["version"]):

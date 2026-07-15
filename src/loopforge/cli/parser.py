@@ -52,7 +52,7 @@ class CliParserBuilder:
                 "read-only research, read-only plan, plan approval, implementation, "
                 "deterministic verification, read-only review, review approval, and local "
                 "draft publication artifact.\n\n"
-                "Global flags: --no-color --no-input --quiet --debug --json --version -V\n"
+                "Global flags: --no-color --plain --interactive-ui --no-input --quiet --debug --json --version -V\n"
                 "Examples:\n"
                 "  loopforge init\n"
                 "  loopforge run --task \"Add status output\" --success-check \"tests pass\"\n"

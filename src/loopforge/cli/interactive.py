@@ -255,6 +255,24 @@ def tui_dependency_state() -> dict[str, bool]:
     }
 
 
+def interactive_ui_enabled(*, requested: bool = False) -> bool:
+    """Return whether the experimental full-screen interface is enabled.
+
+    The prompt shell remains the compatibility default for this release.  This
+    keeps terminal multiplexers, assistive tooling, and established workflows
+    on the mature interaction path while the full-screen UI is evaluated.
+    """
+
+    if requested:
+        return True
+    return os.environ.get("LOOPFORGE_INTERACTIVE_UI", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def available_commands() -> dict[str, str]:
     """Return the complete explicit compatibility catalog.
 
@@ -297,6 +315,7 @@ class InteractiveShell:
         output: TextIO | None = None,
         error: TextIO | None = None,
         allow_confirmation: bool = True,
+        renderer_mode: str = "auto",
     ) -> None:
         self.project_dir = project_dir.resolve()
         self.output = output or sys.stdout
@@ -306,7 +325,7 @@ class InteractiveShell:
         preferences = user_preferences()
         self.statusline = preferences["statusline"]
         self.theme = preferences["theme"]
-        self.renderer_mode = "auto"
+        self.renderer_mode = renderer_mode
         self.renderer = TerminalRenderer(self.output, mode=self.renderer_mode, theme=self.theme)
         self.extra_context_dirs: list[Path] = []
         self.mentioned_paths: list[Path] = []
@@ -1977,7 +1996,7 @@ class InteractiveShell:
             parts.append(status.next_step)
         return " | ".join(parts)
 
-    def run_prompt(self) -> int:
+    def run_prompt(self, *, interactive_ui: bool = False) -> int:
         deps = tui_dependency_state()
         missing = [name for name, available in deps.items() if not available]
         if missing:
@@ -1992,12 +2011,40 @@ class InteractiveShell:
             )
             return 1
 
-        # Full-screen navigation is intentionally limited to an interactive TTY.
-        # ``run_interactive`` keeps --command and --script on ``dispatch`` so
-        # existing automations never need a terminal application.
-        from loopforge.cli.tui import LoopForgeConsole
+        # The full-screen interface is opt-in for this release.  ``--command``
+        # and ``--script`` always remain on the compatibility dispatcher.
+        if interactive_ui and self.renderer_mode != "plain":
+            from loopforge.cli.tui import LoopForgeConsole
 
-        return LoopForgeConsole(self).run()
+            return LoopForgeConsole(self).run()
+
+        from prompt_toolkit import PromptSession
+        from prompt_toolkit.enums import EditingMode
+        from prompt_toolkit.history import FileHistory
+
+        history_dir = loopforge_home()
+        history_dir.mkdir(parents=True, exist_ok=True)
+        editing_mode = EditingMode.VI if self.editing_mode == "vim" else EditingMode.EMACS
+        session = PromptSession(
+            completer=SlashCommandCompleter(contextual_commands(self.project_dir)),
+            history=FileHistory(str(history_dir / "interactive-history.txt")),
+            bottom_toolbar=lambda: self.toolbar(),
+            editing_mode=editing_mode,
+        )
+        self.write_home()
+        exit_code = 0
+        while self.running:
+            try:
+                line = session.prompt(self.prompt_text())
+            except (EOFError, KeyboardInterrupt):
+                self.write("bye")
+                break
+            result = self.dispatch(line)
+            if result.exit_code:
+                exit_code = result.exit_code
+            if result.should_exit:
+                break
+        return exit_code
 
 
 def run_interactive(
@@ -2007,12 +2054,15 @@ def run_interactive(
     script: Path | None = None,
     output: TextIO | None = None,
     error: TextIO | None = None,
+    renderer_mode: str = "auto",
+    interactive_ui: bool = False,
 ) -> int:
     shell = InteractiveShell(
         project_dir,
         output=output,
         error=error,
         allow_confirmation=command is None and script is None,
+        renderer_mode=renderer_mode,
     )
     if command is not None:
         return shell.dispatch(command).exit_code
@@ -2028,4 +2078,4 @@ def run_interactive(
             if result.should_exit:
                 break
         return exit_code
-    return shell.run_prompt()
+    return shell.run_prompt(interactive_ui=interactive_ui_enabled(requested=interactive_ui))

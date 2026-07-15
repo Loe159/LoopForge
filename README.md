@@ -86,6 +86,11 @@ selected pack before starting a run.
 default adapter in `.loopforge/config.json` and uses it when `/continue` is run
 without `--adapter`.
 
+The full-screen navigation is available for this release behind
+`loopforge --interactive-ui shell` (or `LOOPFORGE_INTERACTIVE_UI=1`). Use
+`--plain` to force accessible, redirected-output-safe text with no Rich
+rendering; `LOOPFORGE_ASCII=1` uses ASCII-safe glyphs in the full-screen view.
+
 For scripts and tests, use:
 
 ```text
@@ -102,7 +107,7 @@ LoopForge keeps human output readable while exposing stable formats for scripts:
 - Use `--format json` or `--json` when a command is consumed by automation.
 - Use `--format csv` on list commands such as `loopforge runs` and
   `loopforge pack list`.
-- Use `--no-input --no-color --quiet` in CI when prompts, ANSI color, and
+- Use `--no-input --plain --quiet` in CI when prompts, ANSI color, and
   secondary guidance are undesirable.
 - Results go to stdout. Errors, warnings, progress, and adapter stderr summaries
   go to stderr.
