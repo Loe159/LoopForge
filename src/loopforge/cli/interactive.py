@@ -50,6 +50,7 @@ from loopforge.engine import (
     update_user_preferences,
     user_preferences,
 )
+from loopforge.engine.git_state import DEFAULT_GIT_STATE_SERVICE
 from loopforge.cli.actions import ActionDescriptor, action_descriptors, primary_action
 from loopforge.cli.ui import (
     TerminalRenderer,
@@ -332,6 +333,7 @@ class InteractiveShell:
             self.selected_adapter_args = [str(value) for value in raw_args]
         else:
             self.selected_adapter_args = []
+        self._git_state = DEFAULT_GIT_STATE_SERVICE.get(self.project_dir)
 
     def write(self, message: str = "", *, error: bool = False) -> None:
         stream = self.error if error else self.output
@@ -407,6 +409,7 @@ class InteractiveShell:
         self.selected_adapter_args = [
             str(value) for value in raw_args
         ] if isinstance(raw_args, list) else []
+        self._git_state = DEFAULT_GIT_STATE_SERVICE.get(self.project_dir)
 
     def write_table(self, title: str, columns: list[str], rows: list[list[str]]) -> None:
         self.renderer.table(title, columns, rows)
@@ -1869,18 +1872,15 @@ class InteractiveShell:
             )
             output = result.stdout.strip() or result.stderr.strip()
             self.write(output)
+            if result.returncode == 0:
+                DEFAULT_GIT_STATE_SERVICE.invalidate(self.project_dir)
+                self._git_state = DEFAULT_GIT_STATE_SERVICE.get(self.project_dir)
             return DispatchResult(0 if result.returncode == 0 else 1)
-        result = subprocess.run(
-            ["git", "branch", "--show-current"],
-            cwd=self.project_dir,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
+        self._git_state = DEFAULT_GIT_STATE_SERVICE.refresh(self.project_dir)
+        if not self._git_state.available:
             self.write("git branch is unavailable in this directory.", error=True)
             return DispatchResult(1)
-        self.write(f"branch: {result.stdout.strip() or 'detached'}")
+        self.write(f"branch: {self._git_state.branch or 'detached'}")
         return DispatchResult(0)
 
     def cmd_archive(self, raw: str = "") -> DispatchResult:
@@ -1974,15 +1974,8 @@ class InteractiveShell:
             parts.append(str(status.run.get("status")))
             parts.append(str(status.run.get("pack")))
         parts.append(f"adapter:{self.selected_adapter}")
-        branch = subprocess.run(
-            ["git", "branch", "--show-current"],
-            cwd=self.project_dir,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if branch.returncode == 0 and branch.stdout.strip():
-            parts.append(f"git:{branch.stdout.strip()}")
+        if self._git_state.branch:
+            parts.append(f"git:{self._git_state.branch}")
         if self.statusline == "full":
             parts.append(f"blockers:{len(status.blockers)}")
             parts.append(status.next_step)

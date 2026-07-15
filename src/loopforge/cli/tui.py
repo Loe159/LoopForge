@@ -37,6 +37,7 @@ from loopforge.engine import (
     resume_run,
     verify_run,
 )
+from loopforge.engine.git_state import DEFAULT_GIT_STATE_SERVICE
 
 if TYPE_CHECKING:
     from loopforge.cli.interactive import InteractiveShell
@@ -550,16 +551,6 @@ class LoopForgeConsole:
     def _project_path(self) -> Path:
         return (self.state.selected_project or self.shell.project_dir).resolve()
 
-    @staticmethod
-    def _read_branch_label(project: Path) -> str:
-        try:
-            import subprocess
-
-            result = subprocess.run(["git", "branch", "--show-current"], cwd=project, capture_output=True, text=True, check=False, timeout=3)
-            return result.stdout.strip() or "no Git branch"
-        except OSError:
-            return "no Git branch"
-
     def _branch_label(self, project: Path) -> str:
         return self._branches.get(project.resolve(), "no Git branch")
 
@@ -585,7 +576,7 @@ class LoopForgeConsole:
                     "initialized": status.initialized,
                     "run_count": len(runs_result.runs),
                     "attention": snapshot.family,
-                    "branch": self._read_branch_label(project),
+                    "branch": DEFAULT_GIT_STATE_SERVICE.get(project).branch,
                     "last_activity": "current session",
                 },
             )
@@ -596,7 +587,7 @@ class LoopForgeConsole:
         self._run_blockers = {project: list(runs_result.blockers)}
         self._evidence = {}
         self._project_records = records
-        self._branches = {project: str(next((record.get("branch") for record in records if Path(str(record.get("path") or "")).resolve() == project), "") or self._read_branch_label(project))}
+        self._branches = {project: str(next((record.get("branch") for record in records if Path(str(record.get("path") or "")).resolve() == project), "") or DEFAULT_GIT_STATE_SERVICE.get(project).branch or "no Git branch")}
 
     def _load_evidence_snapshot(self, project: Path) -> None:
         """Load evidence once when its screen is entered, never from rendering."""

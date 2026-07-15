@@ -22,6 +22,7 @@ from loopforge.engine.metrics import MetricsService
 from loopforge.engine.storage import DEFAULT_JSON_STORE
 from loopforge.engine import projects as project_registry
 from loopforge.engine import indexes as run_indexes
+from loopforge.engine.git_state import DEFAULT_GIT_STATE_SERVICE
 from loopforge.engine.validation import (
     cached_legacy_validation_state,
     refresh_legacy_validation_cache,
@@ -5749,18 +5750,8 @@ def approve_review(
 
 
 def current_git_branch(project_dir: Path) -> str:
-    result = subprocess.run(
-        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-        cwd=project_dir,
-        capture_output=True,
-        text=True,
-        timeout=10,
-        check=False,
-    )
-    if result.returncode != 0:
-        return "HEAD"
-    branch = result.stdout.strip()
-    return branch or "HEAD"
+    state = DEFAULT_GIT_STATE_SERVICE.get(project_dir, allow_fallback=True)
+    return state.branch or "HEAD"
 
 
 def draft_publication_body(run: dict[str, Any], verification: dict[str, Any]) -> str:

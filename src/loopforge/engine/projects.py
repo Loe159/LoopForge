@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import subprocess
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -11,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from loopforge.engine.storage import DEFAULT_JSON_STORE
+from loopforge.engine.git_state import DEFAULT_GIT_STATE_SERVICE
 
 PROJECTS_DIRECTORY = "projects"
 REGISTRY_FILE = "registry.json"
@@ -71,16 +71,9 @@ def save_registry(home: Path, registry: dict[str, Any]) -> None:
 
 
 def git_branch(project_dir: Path) -> str | None:
-    result = subprocess.run(
-        ["git", "branch", "--show-current"],
-        cwd=project_dir,
-        capture_output=True,
-        text=True,
-        timeout=5,
-        check=False,
-    )
-    branch = result.stdout.strip() if result.returncode == 0 else ""
-    return branch or None
+    """Compatibility wrapper for the cached Git read model."""
+
+    return DEFAULT_GIT_STATE_SERVICE.get(project_dir).branch
 
 
 def git_head_summary(project_dir: Path) -> tuple[str | None, str | None]:
@@ -90,28 +83,8 @@ def git_head_summary(project_dir: Path) -> tuple[str | None, str | None]:
     richer cached Git service is introduced in the following performance phase.
     """
 
-    dot_git = project_dir / ".git"
-    git_dir = dot_git
-    try:
-        if dot_git.is_file():
-            value = dot_git.read_text(encoding="utf-8").strip()
-            if not value.startswith("gitdir:"):
-                return None, None
-            git_dir = Path(value.split(":", 1)[1].strip())
-            if not git_dir.is_absolute():
-                git_dir = (project_dir / git_dir).resolve()
-        head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
-    except OSError:
-        return None, None
-    if not head.startswith("ref: "):
-        return None, head or None
-    reference = head[5:].strip()
-    try:
-        target = (git_dir / reference).read_text(encoding="utf-8").strip()
-    except OSError:
-        target = ""
-    branch = reference.removeprefix("refs/heads/") if reference.startswith("refs/heads/") else None
-    return branch, f"{reference}:{target or 'unresolved'}"
+    state = DEFAULT_GIT_STATE_SERVICE.get(project_dir)
+    return state.branch, state.head_signature
 
 
 def register_project(

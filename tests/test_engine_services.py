@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -30,6 +31,7 @@ from loopforge.engine.validation import (
 from loopforge.engine.metrics import MetricsService
 from loopforge.engine.packs import PackRegistry
 from loopforge.engine.storage import JsonStore
+from loopforge.engine.git_state import GitStateService
 
 
 class JsonStoreTests(unittest.TestCase):
@@ -50,6 +52,122 @@ class JsonStoreTests(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 JsonStore().read_object(path)
+
+
+class GitStateServiceTests(unittest.TestCase):
+    def _repository(self, root: Path, *, branch: str = "main", head: str = "a" * 40) -> Path:
+        project = root / "project"
+        git_dir = project / ".git"
+        (git_dir / "refs" / "heads").mkdir(parents=True)
+        (git_dir / "HEAD").write_text(f"ref: refs/heads/{branch}\n", encoding="utf-8")
+        (git_dir / "refs" / "heads" / branch).write_text(f"{head}\n", encoding="utf-8")
+        return project
+
+    def test_normal_branch_read_uses_head_files_without_a_subprocess(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project = self._repository(Path(temp_dir))
+            service = GitStateService()
+
+            with mock.patch("loopforge.engine.git_state.subprocess.run") as run:
+                state = service.get(project)
+
+            self.assertEqual(state.state, "ready")
+            self.assertEqual(state.branch, "main")
+            self.assertEqual(state.head, "a" * 40)
+            run.assert_not_called()
+
+    def test_worktree_gitdir_file_resolves_branch_and_head(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            project = root / "worktree"
+            git_dir = root / "metadata" / "worktree"
+            (git_dir / "refs" / "heads").mkdir(parents=True)
+            project.mkdir()
+            (project / ".git").write_text("gitdir: ../metadata/worktree\n", encoding="utf-8")
+            (git_dir / "HEAD").write_text("ref: refs/heads/feature\n", encoding="utf-8")
+            (git_dir / "refs" / "heads" / "feature").write_text("b" * 40, encoding="utf-8")
+
+            state = GitStateService().get(project)
+
+            self.assertEqual(state.state, "ready")
+            self.assertEqual(state.branch, "feature")
+            self.assertEqual(state.head, "b" * 40)
+
+    def test_detached_head_and_non_git_directory_are_explicit(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            project = self._repository(root)
+            (project / ".git" / "HEAD").write_text("c" * 40, encoding="utf-8")
+            service = GitStateService()
+
+            detached = service.get(project)
+            missing = service.get(root / "not-a-repository")
+
+            self.assertEqual(detached.state, "detached")
+            self.assertIsNone(detached.branch)
+            self.assertEqual(detached.head, "c" * 40)
+            self.assertEqual(missing.state, "not_repository")
+
+    def test_branch_change_invalidates_cached_head_signature(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project = self._repository(Path(temp_dir), branch="main")
+            git_dir = project / ".git"
+            (git_dir / "refs" / "heads" / "release").write_text("d" * 40, encoding="utf-8")
+            service = GitStateService()
+            first = service.get(project)
+            (git_dir / "HEAD").write_text("ref: refs/heads/release\n", encoding="utf-8")
+
+            changed = service.get(project)
+
+            self.assertEqual(first.branch, "main")
+            self.assertEqual(changed.branch, "release")
+            self.assertNotEqual(first.signature, changed.signature)
+
+    def test_timeout_returns_stale_cached_state_instead_of_raising(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project = self._repository(Path(temp_dir))
+            service = GitStateService(fallback_timeout=0.001)
+            cached = service.get(project)
+            (project / ".git" / "HEAD").unlink()
+
+            with mock.patch(
+                "loopforge.engine.git_state.subprocess.run",
+                side_effect=subprocess.TimeoutExpired(["git"], 0.001),
+            ):
+                stale = service.refresh(project)
+
+            self.assertEqual(cached.state, "ready")
+            self.assertEqual(stale.state, "stale")
+            self.assertEqual(stale.branch, "main")
+
+    def test_unreadable_head_uses_the_bounded_fallback_in_a_worker(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project = Path(temp_dir) / "project"
+            (project / ".git").mkdir(parents=True)
+            service = GitStateService()
+
+            with mock.patch(
+                "loopforge.engine.git_state.subprocess.run",
+                side_effect=[
+                    subprocess.CompletedProcess([], 0, stdout="main\n"),
+                    subprocess.CompletedProcess([], 0, stdout="e" * 40 + "\n"),
+                ],
+            ) as run:
+                state = service.refresh_background(project).result(timeout=1)
+
+            self.assertEqual(state.state, "ready")
+            self.assertEqual(state.branch, "main")
+            self.assertEqual(state.head, "e" * 40)
+            self.assertEqual(run.call_count, 2)
+
+    def test_deleted_project_is_not_a_repository(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project = self._repository(Path(temp_dir))
+            project.rename(project.with_name("removed"))
+
+            state = GitStateService().get(project)
+
+            self.assertEqual(state.state, "not_repository")
 
 
 class ProjectRegistryTests(unittest.TestCase):
