@@ -46,11 +46,14 @@ from loopforge.engine import (
     execute_readonly_stage,
     initialize_project,
     learn_run,
+    list_registered_projects,
     list_runs,
+    list_runs_all_projects,
     load_pack_checks,
     loopforge_home,
     next_readonly_stage,
     normalize_profile,
+    open_project,
     prepare_draft_publication,
     platform_cache_home,
     profile_permission_lines,
@@ -87,6 +90,8 @@ GLOBAL_FLAGS = {
 TABLE_DEFAULT_COLUMNS = {
     "pack-list": ["current", "name", "skills", "agents", "stages", "kind"],
     "runs": ["current", "run_id", "status", "task", "pack", "updated_at"],
+    "global-runs": ["project", "current", "run_id", "attention", "status", "task", "updated_at"],
+    "projects": ["attention", "name", "branch", "run_count", "last_activity", "path"],
     "metrics-runs": ["run_id", "duration_seconds", "attempt_count", "patch_size_bytes", "verification", "final_disposition"],
 }
 
@@ -903,6 +908,8 @@ def completion_script(shell: str) -> str:
             "learn",
             "shell",
             "interactive",
+            "projects",
+            "open",
             "runs",
             "version",
             "help",
@@ -1193,6 +1200,48 @@ def run_rows_from_result(result: object) -> list[dict[str, object]]:
                 "verification": run.get("verification", ""),
                 "created_at": run.get("created_at") or "",
                 "updated_at": run.get("updated_at") or "",
+            }
+        )
+    return rows
+
+
+def global_run_rows_from_result(result: object) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for run in getattr(result, "runs", []):
+        if not isinstance(run, dict):
+            continue
+        rows.append(
+            {
+                "project": run.get("project") or "",
+                "project_id": run.get("project_id") or "",
+                "project_path": run.get("project_path") or "",
+                "current": "*" if run.get("current") else "",
+                "run_id": run.get("run_id") or "",
+                "attention": run.get("attention") or "ready",
+                "status": run.get("status") or "unknown",
+                "task": run.get("task") or "",
+                "pack": run.get("pack") or "",
+                "updated_at": run.get("updated_at") or "",
+            }
+        )
+    return rows
+
+
+def project_rows(result: object) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for project in getattr(result, "projects", []):
+        if not isinstance(project, dict):
+            continue
+        rows.append(
+            {
+                "attention": project.get("attention") or "ready",
+                "name": project.get("name") or "",
+                "project_id": project.get("project_id") or "",
+                "branch": project.get("branch") or "",
+                "profile": project.get("profile") or "",
+                "run_count": project.get("run_count") or 0,
+                "last_activity": project.get("last_activity") or "",
+                "path": project.get("path") or "",
             }
         )
     return rows

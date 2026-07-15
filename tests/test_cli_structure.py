@@ -113,6 +113,8 @@ class CliStructureTests(unittest.TestCase):
                 ("learn",),
                 ("shell",),
                 ("interactive",),
+                ("projects",),
+                ("open",),
                 ("runs",),
                 ("version",),
                 ("help",),

@@ -8,6 +8,15 @@ from pathlib import Path
 from loopforge.adapters import local_implementation_adapter
 from loopforge.contracts import policy_path
 from loopforge.checks import diff_policy, isolated_process
+from loopforge.engine import (
+    create_run,
+    initialize_project,
+    list_registered_projects,
+    list_runs_all_projects,
+    open_project,
+    read_json,
+    write_json_atomic,
+)
 from loopforge.engine.metrics import MetricsService
 from loopforge.engine.packs import PackRegistry
 from loopforge.engine.storage import JsonStore
@@ -31,6 +40,98 @@ class JsonStoreTests(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 JsonStore().read_object(path)
+
+
+class ProjectRegistryTests(unittest.TestCase):
+    def test_same_named_projects_get_distinct_id_scoped_storage_and_global_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            home = root / "home"
+            home_root = home / "LoopForge"
+            first = root / "one" / "LoopForge"
+            second = root / "two" / "LoopForge"
+            first.mkdir(parents=True)
+            second.mkdir(parents=True)
+
+            first_result = initialize_project(first, home=home)
+            second_result = initialize_project(second, home=home)
+
+            self.assertNotEqual(first_result.config["project_id"], second_result.config["project_id"])
+            self.assertNotEqual(first_result.config["run_root"], second_result.config["run_root"])
+            self.assertEqual(
+                first_result.config["run_root"],
+                str(home_root / "projects" / first_result.config["project_id"] / "runs"),
+            )
+            projects = list_registered_projects(home)
+            self.assertEqual([project["name"] for project in projects.projects], ["LoopForge", "LoopForge"])
+            self.assertEqual({project["path"] for project in projects.projects}, {str(first), str(second)})
+
+    def test_legacy_run_root_is_copied_before_config_moves_to_id_scoped_storage(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            home = root / "home"
+            home_root = home / "LoopForge"
+            project = root / "project"
+            project.mkdir()
+            initial = initialize_project(project, home=home)
+            legacy_root = home_root / "runs" / project.name
+            legacy_run = legacy_root / "legacy-run"
+            legacy_run.mkdir(parents=True)
+            write_json_atomic(legacy_run / "run.json", {"run_id": "legacy-run", "task": "Keep me"})
+            config = read_json(initial.config_path)
+            config["run_root"] = str(legacy_root)
+            config["current_run_id"] = "legacy-run"
+            write_json_atomic(initial.config_path, config)
+
+            migrated = initialize_project(project, home=home)
+
+            self.assertEqual(migrated.migrated_run_root, legacy_root)
+            new_root = Path(migrated.config["run_root"])
+            self.assertTrue((legacy_run / "run.json").exists())
+            self.assertTrue((new_root / "legacy-run" / "run.json").exists())
+
+    def test_duplicate_identity_requires_explicit_clone_resolution(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            home = root / "home"
+            original = root / "original"
+            clone = root / "clone"
+            original.mkdir()
+            clone.mkdir()
+            initial = initialize_project(original, home=home)
+            clone_config = read_json(initial.config_path)
+            clone_config_path = clone / ".loopforge" / "config.json"
+            clone_config_path.parent.mkdir()
+            write_json_atomic(clone_config_path, clone_config)
+
+            blocked = open_project(str(clone), current_project_dir=clone, home=home)
+            self.assertFalse(blocked.ok)
+            self.assertIn("already registered", blocked.blockers[0])
+
+            resolved = open_project(
+                str(clone),
+                current_project_dir=clone,
+                home=home,
+                identity_resolution="clone",
+            )
+            self.assertTrue(resolved.ok)
+            assert resolved.init is not None
+            self.assertNotEqual(resolved.init.config["project_id"], initial.config["project_id"])
+
+    def test_global_runs_include_project_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            home = root / "home"
+            project = root / "project"
+            project.mkdir()
+            init = initialize_project(project, home=home)
+            create_run(project, "List every project run", success_checks=["tests pass"])
+
+            result = list_runs_all_projects(home)
+
+            self.assertEqual(len(result.runs), 1)
+            self.assertEqual(result.runs[0]["project_id"], init.config["project_id"])
+            self.assertEqual(result.runs[0]["project"], project.name)
 
 
 class PackagedRuntimeLayoutTests(unittest.TestCase):

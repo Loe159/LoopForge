@@ -81,7 +81,7 @@ class DiscoveryCommandHandler:
 class ProjectCommandHandler:
     """Handle project setup and read-only inspection commands."""
 
-    commands = frozenset({"init", "pack", "runs", "status", "guide", "dashboard"})
+    commands = frozenset({"init", "pack", "projects", "open", "runs", "status", "guide", "dashboard"})
 
     def handle(self, args: Any, context: CliContext) -> int | None:
         if args.command not in self.commands:
@@ -98,6 +98,16 @@ class ProjectCommandHandler:
             command="loopforge init",
         )
         result = api.initialize_project(context.project_dir, profile=args.profile)
+        if result.registration is not None and not result.registration.ok:
+            blockers = [
+                f"project id {result.registration.project_id} is already registered at {result.registration.conflict_path}",
+                "Use `loopforge open <path> --moved` after moving a repository, or `--clone` for a copy.",
+            ]
+            if fmt == "json":
+                api.print_json_payload({"ok": False, "config": result.config, "blockers": blockers})
+            else:
+                api.render_blocked(context.error_renderer(), "Project identity needs confirmation", [], blockers=blockers)
+            return 1
         if result.created:
             action = "initialized"
         elif result.repaired:
@@ -124,12 +134,15 @@ class ProjectCommandHandler:
             else "Project already ready"
         )
         rows: list[tuple[str, object]] = [
+            ("id", result.config["project_id"]),
             ("project", result.config["project_name"]),
             ("profile", result.config["profile"]),
             ("runs", result.config["run_root"]),
         ]
         if result.repaired:
             rows.append(("config", result.config_path))
+        if result.migrated_run_root is not None:
+            rows.append(("migrated runs", result.migrated_run_root))
         api.render_success(
             context.renderer,
             title,
@@ -207,6 +220,19 @@ class ProjectCommandHandler:
     def _handle_runs(self, args: Any, context: CliContext) -> int:
         api = context.api
         options = context.options
+        if args.all_projects:
+            result = api.list_runs_all_projects()
+            rows = api.global_run_rows_from_result(result)
+            if options.quiet and api.output_format(args, options) == "text":
+                return 0
+            if api.output_format(args, options) == "text":
+                if not rows:
+                    print("No runs in registered projects.", file=context.stdout)
+                else:
+                    api.print_table_rows(rows, args, key="global-runs", title="LoopForge runs")
+            else:
+                api.print_table_rows(rows, args, key="global-runs", title="LoopForge runs")
+            return 0 if not result.blockers else 1
         result = api.list_runs(context.project_dir)
         if result.blockers:
             raise api.CliRuntimeError(
@@ -223,6 +249,54 @@ class ProjectCommandHandler:
         else:
             api.print_table_rows(rows, args, key="runs", title="LoopForge runs")
         return 0
+
+    def _handle_projects(self, args: Any, context: CliContext) -> int:
+        api = context.api
+        result = api.list_registered_projects()
+        rows = api.project_rows(result)
+        if context.options.quiet and api.output_format(args, context.options) == "text":
+            return 0
+        if not rows and api.output_format(args, context.options) == "text":
+            print("No registered projects. Run `loopforge open .` to register this project.", file=context.stdout)
+            return 0
+        api.print_table_rows(rows, args, key="projects", title="LoopForge projects")
+        return 0 if not result.blockers else 1
+
+    def _handle_open(self, args: Any, context: CliContext) -> int:
+        api = context.api
+        resolution = "moved" if args.moved else "clone" if args.clone else None
+        result = api.open_project(
+            args.project,
+            current_project_dir=context.project_dir,
+            identity_resolution=resolution,
+        )
+        fmt = api.normalize_format(api.output_format(args, context.options), allowed=("text", "json"), command="loopforge open")
+        if fmt == "json":
+            api.print_json_payload(
+                {
+                    "ok": result.ok,
+                    "message": result.message,
+                    "project_dir": str(result.project_dir) if result.project_dir else None,
+                    "config": result.init.config if result.init else None,
+                    "blockers": result.blockers,
+                }
+            )
+            return 0 if result.ok else 1
+        if result.ok and result.init is not None:
+            if not context.options.quiet:
+                api.render_success(
+                    context.renderer,
+                    "Project opened",
+                    [
+                        ("project", result.init.config["project_name"]),
+                        ("id", result.init.config["project_id"]),
+                        ("path", result.project_dir),
+                    ],
+                    next_command="loopforge runs",
+                )
+            return 0
+        api.render_blocked(context.error_renderer(), "Project could not be opened", [], blockers=result.blockers)
+        return 1
 
     def _handle_status(self, args: Any, context: CliContext) -> int:
         api = context.api

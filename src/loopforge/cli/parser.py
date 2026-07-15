@@ -365,8 +365,39 @@ class CliParserBuilder:
             formatter_class=argparse.RawDescriptionHelpFormatter,
         )
         topics[("runs",)] = runs_parser
+        runs_parser.add_argument(
+            "--all-projects",
+            action="store_true",
+            help="List runs across registered projects.",
+        )
         add_format_args(runs_parser, csv_format=True)
         add_table_args(runs_parser)
+
+        projects_parser = subcommands.add_parser(
+            "projects",
+            help="List globally registered LoopForge projects.",
+            epilog="Examples:\n  loopforge projects\n  loopforge projects --format json",
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
+        topics[("projects",)] = projects_parser
+        add_format_args(projects_parser, csv_format=True)
+        add_table_args(projects_parser)
+
+        open_parser = subcommands.add_parser(
+            "open",
+            help="Open or register a project by path, id, or unique name.",
+            epilog=(
+                "Examples:\n  loopforge open ../api\n  loopforge open project-abc\n"
+                "  loopforge open ../moved-repo --moved\n  loopforge open ../clone --clone"
+            ),
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
+        topics[("open",)] = open_parser
+        open_parser.add_argument("project", nargs="?", help="Project path, registered id, or unique name.")
+        identity = open_parser.add_mutually_exclusive_group()
+        identity.add_argument("--moved", action="store_true", help="Confirm that this path is the moved registered project.")
+        identity.add_argument("--clone", action="store_true", help="Give this copied repository a new project identity.")
+        add_format_args(open_parser)
 
         version_parser = subcommands.add_parser(
             "version",
