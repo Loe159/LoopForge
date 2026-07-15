@@ -189,6 +189,20 @@ class CliParserBuilder:
         )
         add_format_args(dashboard_parser)
 
+        doctor_parser = subcommands.add_parser(
+            "doctor",
+            help="Inspect and safely rebuild derived LoopForge indexes.",
+            epilog="Examples:\n  loopforge doctor\n  loopforge doctor --rebuild-indexes",
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
+        topics[("doctor",)] = doctor_parser
+        doctor_parser.add_argument(
+            "--rebuild-indexes",
+            action="store_true",
+            help="Rebuild derived run and project summary indexes from run.json.",
+        )
+        add_format_args(doctor_parser)
+
         pack_parser = subcommands.add_parser(
             "pack",
             help="List or detect LoopForge project packs.",

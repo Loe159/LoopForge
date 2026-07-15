@@ -14,10 +14,12 @@ from loopforge.engine import (
     create_run,
     current_status,
     initialize_project,
+    list_runs,
     list_registered_projects,
     list_runs_all_projects,
     open_project,
     read_json,
+    rebuild_indexes,
     write_json_atomic,
 )
 from loopforge.engine.validation import (
@@ -140,6 +142,42 @@ class ProjectRegistryTests(unittest.TestCase):
             self.assertEqual(len(result.runs), 1)
             self.assertEqual(result.runs[0]["project_id"], init.config["project_id"])
             self.assertEqual(result.runs[0]["project"], project.name)
+
+    def test_warm_run_listing_reads_the_compact_index_not_run_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            project = root / "project"
+            project.mkdir()
+            initial = initialize_project(project, home=root / "home")
+            create_run(project, "Indexed run", success_checks=["tests pass"])
+
+            store = __import__("loopforge.engine", fromlist=["DEFAULT_JSON_STORE"]).DEFAULT_JSON_STORE
+            original = store.read_object
+            with mock.patch.object(store, "read_object", wraps=original) as read_object:
+                result = list_runs(project)
+
+            self.assertEqual(len(result.runs), 1)
+            read_paths = [str(call.args[0]) for call in read_object.call_args_list]
+            self.assertIn(str(Path(initial.config["run_root"]) / "index.json"), read_paths)
+            self.assertNotIn(str(Path(initial.config["run_root"]) / result.runs[0]["run_id"] / "run.json"), read_paths)
+
+    def test_corrupt_run_index_is_safely_rebuilt_from_authoritative_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            project = root / "project"
+            project.mkdir()
+            initial = initialize_project(project, home=root / "home")
+            created = create_run(project, "Recover index", success_checks=["tests pass"])
+            index_path = Path(initial.config["run_root"]) / "index.json"
+            index_path.write_text("not json", encoding="utf-8")
+
+            result = list_runs(project)
+
+            self.assertEqual([run["run_id"] for run in result.runs], [created.run["run_id"]])
+            self.assertEqual(read_json(index_path)["index_version"], 1)
+            repaired = rebuild_indexes(project)
+            self.assertTrue(repaired.ok)
+            self.assertTrue(created.run_json_path.exists())
 
 
 class PackagedRuntimeLayoutTests(unittest.TestCase):

@@ -83,6 +83,37 @@ def git_branch(project_dir: Path) -> str | None:
     return branch or None
 
 
+def git_head_summary(project_dir: Path) -> tuple[str | None, str | None]:
+    """Return a cheap branch/head signature without starting Git.
+
+    This intentionally covers the normal repository and worktree layouts; the
+    richer cached Git service is introduced in the following performance phase.
+    """
+
+    dot_git = project_dir / ".git"
+    git_dir = dot_git
+    try:
+        if dot_git.is_file():
+            value = dot_git.read_text(encoding="utf-8").strip()
+            if not value.startswith("gitdir:"):
+                return None, None
+            git_dir = Path(value.split(":", 1)[1].strip())
+            if not git_dir.is_absolute():
+                git_dir = (project_dir / git_dir).resolve()
+        head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None, None
+    if not head.startswith("ref: "):
+        return None, head or None
+    reference = head[5:].strip()
+    try:
+        target = (git_dir / reference).read_text(encoding="utf-8").strip()
+    except OSError:
+        target = ""
+    branch = reference.removeprefix("refs/heads/") if reference.startswith("refs/heads/") else None
+    return branch, f"{reference}:{target or 'unresolved'}"
+
+
 def register_project(
     project_dir: Path,
     config: dict[str, Any],
@@ -113,6 +144,17 @@ def register_project(
         "run_root": str(config.get("run_root") or ""),
         "last_opened_at": now,
         "updated_at": now,
+        "summary_revision": 1,
+        "summary_source_timestamp": now,
+        "index_state": "ready",
+        "initialized": True,
+        "run_count": 0,
+        "attention": "ready",
+        "last_activity": "",
+        "current_run_id": config.get("current_run_id"),
+        "branch": None,
+        "last_known_branch": None,
+        "git_head_signature": None,
     }
     if isinstance(existing, dict):
         record = {**existing, **record}
@@ -146,3 +188,18 @@ def registered_projects(home: Path) -> list[dict[str, Any]]:
     records = registry["projects"]
     assert isinstance(records, dict)
     return [dict(value) for value in records.values() if isinstance(value, dict)]
+
+
+def update_project_summary(home: Path, project_id: str, summary: dict[str, Any]) -> dict[str, Any] | None:
+    """Update derived project fields without touching project-local metadata."""
+
+    registry = load_registry(home)
+    records = registry["projects"]
+    assert isinstance(records, dict)
+    record = records.get(project_id)
+    if not isinstance(record, dict):
+        return None
+    updated = {**record, **summary}
+    records[project_id] = updated
+    save_registry(home, registry)
+    return updated

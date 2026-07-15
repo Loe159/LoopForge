@@ -21,6 +21,7 @@ from loopforge.engine.packs import PackRegistry
 from loopforge.engine.metrics import MetricsService
 from loopforge.engine.storage import DEFAULT_JSON_STORE
 from loopforge.engine import projects as project_registry
+from loopforge.engine import indexes as run_indexes
 from loopforge.engine.validation import (
     cached_legacy_validation_state,
     refresh_legacy_validation_cache,
@@ -568,6 +569,16 @@ class ProjectListResult:
 
 
 @dataclass(frozen=True)
+class IndexRepairResult:
+    project_dir: Path
+    run_root: Path | None
+    ok: bool
+    message: str
+    diagnostics: dict[str, Any]
+    blockers: list[str]
+
+
+@dataclass(frozen=True)
 class GlobalRunListResult:
     home: Path
     runs: list[dict[str, Any]]
@@ -775,6 +786,175 @@ def read_json(path: Path) -> dict[str, Any]:
 
 def write_json_atomic(path: Path, data: dict[str, Any]) -> None:
     DEFAULT_JSON_STORE.write_object(path, data)
+
+
+def _project_summary_from_index(
+    project_dir: Path,
+    config: dict[str, Any],
+    index: dict[str, Any],
+    *,
+    index_state: str = "ready",
+) -> dict[str, Any]:
+    runs = index.get("runs", [])
+    if not isinstance(runs, list):
+        runs = []
+    current_id = str(config.get("current_run_id") or "")
+    current = next(
+        (entry for entry in runs if str(entry.get("run_id") or "") == current_id),
+        None,
+    )
+    last_activity = max(
+        (str(entry.get("updated_at") or entry.get("created_at") or "") for entry in runs),
+        default="",
+    )
+    now = utc_now()
+    branch, head_signature = project_registry.git_head_summary(project_dir)
+    return {
+        "initialized": True,
+        "name": str(config.get("project_name") or project_dir.name),
+        "path": str(project_dir.resolve()),
+        "profile": str(config.get("profile") or ""),
+        "run_root": str(config.get("run_root") or ""),
+        "current_run_id": current_id or None,
+        "run_count": len(runs),
+        "attention": str((current or {}).get("attention") or "ready"),
+        "last_activity": last_activity,
+        "branch": branch,
+        "last_known_branch": branch,
+        "git_head_signature": head_signature,
+        "summary_revision": 1,
+        "summary_source_timestamp": now,
+        "index_state": index_state,
+        "updated_at": now,
+    }
+
+
+def _home_from_run_root(run_root: Path) -> Path:
+    """Return the LoopForge data root for a configured project run root."""
+
+    # <home>/projects/<project-id>/runs
+    try:
+        return run_root.parents[2]
+    except IndexError:
+        return loopforge_home()
+
+
+def _sync_project_indexes(project_dir: Path, config: dict[str, Any], *, rebuild: bool = False) -> dict[str, Any]:
+    """Synchronize derived run and registry indexes from authoritative data."""
+
+    run_root = Path(str(config["run_root"])).expanduser()
+    current_id = str(config.get("current_run_id") or "") or None
+    timestamp = utc_now()
+    index = (
+        run_indexes.rebuild_run_index(
+            DEFAULT_JSON_STORE, run_root, current_run_id=current_id, timestamp=timestamp
+        )
+        if rebuild
+        else run_indexes.read_run_index(DEFAULT_JSON_STORE, run_root)
+    )
+    if index is None:
+        index = run_indexes.rebuild_run_index(
+            DEFAULT_JSON_STORE, run_root, current_run_id=current_id, timestamp=timestamp
+        )
+    summary = _project_summary_from_index(project_dir, config, index)
+    existing = project_registry.update_project_summary(
+        _home_from_run_root(run_root), str(config.get("project_id") or ""), summary
+    )
+    if existing is None:
+        # A registry may be unavailable or absent during migration. The local
+        # run index remains valid and registration will create the companion
+        # record on the next open/init.
+        summary["index_state"] = "registry_unavailable"
+    return index
+
+
+def persist_run_json(project_dir: Path, run_json_path: Path, run: dict[str, Any]) -> None:
+    """Persist authoritative run state, then its recoverable derived indexes."""
+
+    config = normalize_config(project_dir, read_json(project_config_path(project_dir)))[0]
+    run_root = Path(str(config["run_root"])).expanduser()
+    timestamp = utc_now()
+    try:
+        run_indexes.mark_dirty(DEFAULT_JSON_STORE, run_root, timestamp=timestamp)
+    except OSError:
+        # The authoritative project-local mutation must stay usable when the
+        # optional global data root is locked down.
+        write_json_atomic(run_json_path, run)
+        return
+    write_json_atomic(run_json_path, run)
+    try:
+        index = run_indexes.update_run_index(
+            DEFAULT_JSON_STORE,
+            run_root,
+            run_path=run_json_path.parent,
+            run=run,
+            current_run_id=str(config.get("current_run_id") or "") or None,
+            timestamp=timestamp,
+        )
+        project_registry.update_project_summary(
+            _home_from_run_root(run_root),
+            str(config.get("project_id") or ""),
+            _project_summary_from_index(project_dir, config, index),
+        )
+    except OSError:
+        return
+    run_indexes.clear_dirty(run_root)
+
+
+def persist_project_config(project_dir: Path, config_path: Path, config: dict[str, Any]) -> None:
+    """Persist config and refresh its compact project summary."""
+
+    run_root = Path(str(config.get("run_root") or "")).expanduser()
+    indexed = False
+    if str(run_root):
+        try:
+            run_indexes.mark_dirty(DEFAULT_JSON_STORE, run_root, timestamp=utc_now())
+            indexed = True
+        except OSError:
+            pass
+    write_json_atomic(config_path, config)
+    if indexed:
+        try:
+            _sync_project_indexes(project_dir, config)
+        except OSError:
+            return
+        run_indexes.clear_dirty(run_root)
+
+
+def index_diagnostics(project_dir: Path) -> dict[str, Any]:
+    project_dir = project_dir.resolve()
+    config_path = project_config_path(project_dir)
+    if not config_path.exists():
+        return {"initialized": False, "run_index": "unavailable", "reason": "project is not initialized"}
+    config = normalize_config(project_dir, read_json(config_path))[0]
+    run_root = Path(str(config["run_root"])).expanduser()
+    index = run_indexes.read_run_index(DEFAULT_JSON_STORE, run_root)
+    return {
+        "initialized": True,
+        "run_root": str(run_root),
+        "run_index": "ready" if index is not None else "rebuild_required",
+        "dirty": run_indexes.dirty_marker_path(run_root).exists(),
+        "run_count": len(index.get("runs", [])) if index is not None else None,
+        "index_version": index.get("index_version") if index is not None else None,
+    }
+
+
+def rebuild_indexes(project_dir: Path) -> IndexRepairResult:
+    project_dir = project_dir.resolve()
+    config_path = project_config_path(project_dir)
+    if not config_path.exists():
+        return IndexRepairResult(project_dir, None, False, "LoopForge index rebuild failed.", index_diagnostics(project_dir), ["Initialize LoopForge first."])
+    config = normalize_config(project_dir, read_json(config_path))[0]
+    run_root = Path(str(config["run_root"])).expanduser()
+    run_indexes.mark_dirty(DEFAULT_JSON_STORE, run_root, timestamp=utc_now())
+    try:
+        index = _sync_project_indexes(project_dir, config, rebuild=True)
+    except (OSError, ValueError) as error:
+        return IndexRepairResult(project_dir, run_root, False, "LoopForge index rebuild failed.", index_diagnostics(project_dir), [str(error)])
+    run_indexes.clear_dirty(run_root)
+    diagnostics = index_diagnostics(project_dir)
+    diagnostics["run_count"] = len(index.get("runs", []))
+    return IndexRepairResult(project_dir, run_root, True, "LoopForge indexes rebuilt safely.", diagnostics, [])
 
 
 def initial_workflow_state() -> dict[str, Any]:
@@ -1689,6 +1869,11 @@ def initialize_project(
         if repaired:
             write_json_atomic(config_path, config)
         registration = project_registry.register_project(project_dir, config, home_root)
+        if migrated_run_root is not None:
+            try:
+                _sync_project_indexes(project_dir, config, rebuild=True)
+            except OSError:
+                pass
         return InitResult(
             project_dir=project_dir,
             config_path=config_path,
@@ -1812,7 +1997,7 @@ def update_project_config(project_dir: Path, updates: dict[str, Any]) -> ConfigU
         config[key] = value
     config["updated_at"] = utc_now()
     normalized, _ = normalize_config(status.project_dir, config)
-    write_json_atomic(status.config_path, normalized)
+    persist_project_config(status.project_dir, status.config_path, normalized)
     return ConfigUpdateResult(
         project_dir=status.project_dir,
         config_path=status.config_path,
@@ -1866,7 +2051,7 @@ def archive_current_run(project_dir: Path) -> ConfigUpdateResult:
     updated_run = dict(status.run)
     updated_run["archived"] = True
     updated_run["archived_at"] = utc_now()
-    write_json_atomic(status.run_json_path or (status.run_dir / "run.json"), updated_run)
+    persist_run_json(status.project_dir, status.run_json_path or (status.run_dir / "run.json"), updated_run)
     return ConfigUpdateResult(
         project_dir=status.project_dir,
         config_path=status.config_path,
@@ -2642,7 +2827,7 @@ def learn_run(
     }
     updated_run["updated_at"] = created
     if status.run_json_path is not None:
-        write_json_atomic(status.run_json_path, updated_run)
+        persist_run_json(status.project_dir, status.run_json_path, updated_run)
 
     blockers = [rule_error] if rule_error else []
     blockers.extend(profile_blockers)
@@ -3324,53 +3509,58 @@ def list_runs_from_status(status: StatusResult) -> RunListResult:
         )
 
     run_root = Path(str(status.config["run_root"])).expanduser()
-    current_run_id = status.config.get("current_run_id")
-    runs: list[dict[str, Any]] = []
-    if run_root.exists():
-        for run_path in sorted(run_root.iterdir(), reverse=True):
-            if run_path.is_dir():
-                runs.append(
-                    run_summary_from_path(
-                        run_path,
-                        current_run_id=str(current_run_id) if current_run_id else None,
-                    )
-                )
+    current_run_id = str(status.config.get("current_run_id") or "") or None
+    index = run_indexes.read_run_index(DEFAULT_JSON_STORE, run_root)
+    if index is None:
+        index = run_indexes.rebuild_run_index(
+            DEFAULT_JSON_STORE,
+            run_root,
+            current_run_id=current_run_id,
+            timestamp=utc_now(),
+        )
+    runs = [dict(entry) for entry in index.get("runs", []) if isinstance(entry, dict)]
     return RunListResult(
         project_dir=status.project_dir,
         run_root=run_root,
         initialized=True,
         config=status.config,
-        current_run_id=str(current_run_id) if current_run_id else None,
+        current_run_id=current_run_id,
         runs=runs,
         blockers=[],
     )
 
 
 def list_runs(project_dir: Path) -> RunListResult:
-    """Compatibility wrapper for callers that only have a project path."""
+    """List compact runs without loading the current authoritative run."""
 
-    return list_runs_from_status(current_status(project_dir))
+    project_dir = project_dir.resolve()
+    config_path = project_config_path(project_dir)
+    if not config_path.exists():
+        return RunListResult(project_dir, None, False, None, None, [], ["Initialize LoopForge with `loopforge init`."])
+    config = normalize_config(project_dir, read_json(config_path))[0]
+    synthetic = StatusResult(
+        project_dir=project_dir,
+        config_path=config_path,
+        initialized=True,
+        config=config,
+        run_dir=None,
+        run_json_path=None,
+        run=None,
+        native_artifacts=None,
+        legacy_artifacts=None,
+        loop_contract=None,
+        verification=None,
+        memory=None,
+        next_step="",
+        blockers=[],
+    )
+    return list_runs_from_status(synthetic)
 
 
 def run_attention(run: dict[str, Any]) -> str:
     """Classify persisted run state without treating history as a live process."""
 
-    if run.get("archived"):
-        return "archived"
-    blockers = run.get("blockers")
-    if isinstance(blockers, list) and blockers:
-        return "blocked"
-    statuses = run.get("stage_statuses")
-    if isinstance(statuses, dict) and any(
-        value in {"awaiting_approval", "pending_approval"} for value in statuses.values()
-    ):
-        return "needs_human"
-    status = str(run.get("status") or "")
-    if status in {ADAPTER_BLOCKED, VERIFICATION_FAILED, "blocked", "failed"}:
-        return "blocked"
-    if status in {VERIFIED, "complete", "completed"}:
-        return "complete"
-    return "ready"
+    return run_indexes.run_attention(run)
 
 
 def attention_order(value: object) -> int:
@@ -3429,7 +3619,17 @@ def list_registered_projects(home: Path | None = None) -> ProjectListResult:
     projects: list[dict[str, Any]] = []
     blockers: list[str] = []
     for record in project_registry.registered_projects(home_root):
-        summary, summary_blockers = project_registry_summary(record)
+        if record.get("summary_revision") == 1:
+            summary, summary_blockers = dict(record), []
+        else:
+            # One compatibility scan upgrades registries created before the
+            # compact summary existed. Normal Home reads never enter projects.
+            summary, summary_blockers = project_registry_summary(record)
+            if summary.get("project_id"):
+                try:
+                    project_registry.update_project_summary(home_root, str(summary["project_id"]), summary)
+                except OSError:
+                    summary_blockers.append("project summary registry is unavailable")
         projects.append(summary)
         blockers.extend(summary_blockers)
     projects.sort(key=lambda value: (attention_order(value.get("attention")), str(value.get("last_activity") or "")), reverse=False)
@@ -3450,21 +3650,14 @@ def list_runs_all_projects(home: Path | None = None) -> GlobalRunListResult:
         result = list_runs(project_dir)
         blockers.extend(result.blockers)
         for run in result.runs:
-            path = Path(str(run.get("path") or "")) / "run.json"
-            raw_run: dict[str, Any] = {}
-            if path.exists():
-                try:
-                    raw_run = read_json(path)
-                except ValueError:
-                    pass
             rows.append(
                 {
                     **run,
                     "project_id": project.get("project_id") or "",
                     "project": project.get("name") or project_dir.name,
                     "project_path": str(project_dir),
-                    "attention": run_attention(raw_run),
-                    "archived": bool(raw_run.get("archived")),
+                    "attention": str(run.get("attention") or "ready"),
+                    "archived": bool(run.get("archived")),
                 }
             )
     rows.sort(key=lambda value: str(value.get("updated_at") or value.get("created_at") or ""), reverse=True)
@@ -4372,7 +4565,7 @@ def resume_run(project_dir: Path, run_id: str) -> ResumeRunResult:
     config = dict(status.config)
     config["current_run_id"] = str(run.get("run_id") or run_id.strip())
     config["updated_at"] = utc_now()
-    write_json_atomic(status.config_path, config)
+    persist_project_config(status.project_dir, status.config_path, config)
     return ResumeRunResult(
         project_dir=status.project_dir,
         run_dir=run_dir,
@@ -4725,7 +4918,7 @@ def create_run(
             source="none",
         )
 
-    write_json_atomic(run_dir / "run.json", run_data)
+    persist_run_json(project_dir, run_dir / "run.json", run_data)
     (run_dir / "task.md").write_text(f"# Task\n\n{task.strip()}\n", encoding="utf-8")
     (run_dir / "loop.md").write_text(
         render_loop_contract(
@@ -4793,7 +4986,7 @@ def create_run(
     updated_config = dict(config)
     updated_config["current_run_id"] = run_id
     updated_config["updated_at"] = now
-    write_json_atomic(config_path, updated_config)
+    persist_project_config(project_dir, config_path, updated_config)
 
     return RunResult(
         project_dir=project_dir,
@@ -5403,6 +5596,7 @@ def readonly_worktree_changes(
 
 def update_run_for_stage_blocker(
     *,
+    project_dir: Path,
     run_json_path: Path,
     run: dict[str, Any],
     stage: str,
@@ -5412,7 +5606,7 @@ def update_run_for_stage_blocker(
     updated["stage_statuses"][stage] = "blocked"
     updated["blockers"] = blockers
     updated["updated_at"] = utc_now()
-    write_json_atomic(run_json_path, updated)
+    persist_run_json(project_dir, run_json_path, updated)
     return updated
 
 
@@ -5467,7 +5661,7 @@ def approve_plan(
 
     updated = apply_plan_approval(run, source=source)
     updated["updated_at"] = utc_now()
-    write_json_atomic(status.run_json_path or (status.run_dir / "run.json"), updated)
+    persist_run_json(status.project_dir, status.run_json_path or (status.run_dir / "run.json"), updated)
     return StageResult(
         project_dir=status.project_dir,
         run_dir=status.run_dir,
@@ -5541,7 +5735,7 @@ def approve_review(
 
     updated = apply_review_approval(run, source=source)
     updated["updated_at"] = utc_now()
-    write_json_atomic(status.run_json_path or (status.run_dir / "run.json"), updated)
+    persist_run_json(status.project_dir, status.run_json_path or (status.run_dir / "run.json"), updated)
     return StageResult(
         project_dir=status.project_dir,
         run_dir=status.run_dir,
@@ -5718,7 +5912,7 @@ def prepare_draft_publication(project_dir: Path) -> StageResult:
     )
     updated.setdefault("artifacts", {})["draft_publication"] = str(artifact_path)
     updated["updated_at"] = utc_now()
-    write_json_atomic(status.run_json_path or (status.run_dir / "run.json"), updated)
+    persist_run_json(status.project_dir, status.run_json_path or (status.run_dir / "run.json"), updated)
     return StageResult(
         project_dir=status.project_dir,
         run_dir=status.run_dir,
@@ -5766,6 +5960,7 @@ def execute_readonly_stage(
     blockers = readonly_stage_prerequisite_blockers(run, stage)
     if blockers:
         updated = update_run_for_stage_blocker(
+            project_dir=status.project_dir,
             run_json_path=run_json_path,
             run=run,
             stage=stage,
@@ -5784,6 +5979,7 @@ def execute_readonly_stage(
     if available_stage != stage:
         blockers = [f"{stage} is not the next available read-only stage."]
         updated = update_run_for_stage_blocker(
+            project_dir=status.project_dir,
             run_json_path=run_json_path,
             run=run,
             stage=stage,
@@ -5802,6 +5998,7 @@ def execute_readonly_stage(
     if not workspace_dir.exists() or not workspace_dir.is_dir():
         blockers = [f"run workspace is not available: {workspace_dir}"]
         updated = update_run_for_stage_blocker(
+            project_dir=status.project_dir,
             run_json_path=run_json_path,
             run=run,
             stage=stage,
@@ -5838,6 +6035,7 @@ def execute_readonly_stage(
     if cancel_event is not None and cancel_event.is_set():
         blockers = [f"read-only {stage} stage was interrupted before adapter execution."]
         updated = update_run_for_stage_blocker(
+            project_dir=status.project_dir,
             run_json_path=run_json_path,
             run=run,
             stage=stage,
@@ -5881,6 +6079,7 @@ def execute_readonly_stage(
     except (OSError, RuntimeError, ValueError) as error:
         blockers = [f"read-only {stage} adapter execution could not start: {error}"]
         updated = update_run_for_stage_blocker(
+            project_dir=status.project_dir,
             run_json_path=run_json_path,
             run=run,
             stage=stage,
@@ -5930,6 +6129,7 @@ def execute_readonly_stage(
         blockers.extend(validate_readonly_stage_artifact(stage, artifact_text))
     if blockers:
         updated = update_run_for_stage_blocker(
+            project_dir=status.project_dir,
             run_json_path=run_json_path,
             run=run,
             stage=stage,
@@ -5965,7 +6165,7 @@ def execute_readonly_stage(
         }
     updated["blockers"] = []
     updated["updated_at"] = utc_now()
-    write_json_atomic(run_json_path, updated)
+    persist_run_json(status.project_dir, run_json_path, updated)
     emit_operation_event(
         operation_callback,
         "completed",
@@ -6473,6 +6673,7 @@ def execute_attempt(
 
 def update_run_after_attempt(
     *,
+    project_dir: Path,
     run_json_path: Path,
     run: dict[str, Any],
     attempt: dict[str, Any],
@@ -6502,7 +6703,7 @@ def update_run_after_attempt(
         updated = normalize_run_workflow_state(updated)
         updated["stage_statuses"]["implementation"] = "blocked"
         updated["current_stage"] = "implementation_blocked"
-    write_json_atomic(run_json_path, updated)
+    persist_run_json(project_dir, run_json_path, updated)
     return updated
 
 
@@ -6896,7 +7097,7 @@ def verify_run(
         interrupted_run["blockers"] = [blocker]
         interrupted_run["current_stage"] = "verification_blocked"
         interrupted_run["stage_statuses"]["verification"] = "blocked"
-        write_json_atomic(run_json_path, interrupted_run)
+        persist_run_json(status.project_dir, run_json_path, interrupted_run)
         emit_operation_event(operation_callback, "cancelled", blocker, status="cancelled")
         return VerifyResult(
             project_dir=status.project_dir,
@@ -7166,7 +7367,7 @@ def verify_run(
             "eligible": False,
             "reasons": ["deterministic verification is blocked"],
         }
-    write_json_atomic(run_json_path, updated_run)
+    persist_run_json(status.project_dir, run_json_path, updated_run)
     emit_operation_event(
         operation_callback,
         "completed" if not blockers else "blocked",
@@ -7329,6 +7530,7 @@ def continue_run(
             cancel_event=cancel_event,
         )
         updated_run = update_run_after_attempt(
+            project_dir=status.project_dir,
             run_json_path=status.run_json_path or (status.run_dir / "run.json"),
             run=status.run,
             attempt=attempt,
@@ -7339,7 +7541,7 @@ def continue_run(
         updated_run["status"] = ADAPTER_BLOCKED
         updated_run["blockers"] = [blocker]
         if status.run_json_path is not None:
-            write_json_atomic(status.run_json_path, updated_run)
+            persist_run_json(status.project_dir, status.run_json_path, updated_run)
         return ContinueResult(
             project_dir=status.project_dir,
             run_dir=status.run_dir,

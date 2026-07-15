@@ -1466,7 +1466,7 @@ class CliTests(unittest.TestCase):
 
             updated = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
             self.assertEqual(updated["current_run_id"], first_run_id)
-            self.assertEqual(len(list((Path(config["run_root"])).iterdir())), 1)
+            self.assertEqual(len([path for path in Path(config["run_root"]).iterdir() if path.is_dir()]), 1)
             text = output.getvalue()
             self.assertIn("Active LoopForge run", text)
             self.assertIn("Current loop", text)
@@ -1497,7 +1497,7 @@ class CliTests(unittest.TestCase):
 
             updated = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
             self.assertEqual(updated["current_run_id"], first_run_id)
-            self.assertEqual(len(list((Path(config["run_root"])).iterdir())), 1)
+            self.assertEqual(len([path for path in Path(config["run_root"]).iterdir() if path.is_dir()]), 1)
             self.assertIn("Active run found", text_output.getvalue())
             self.assertIn(first_run_id, text_output.getvalue())
 
@@ -1511,7 +1511,7 @@ class CliTests(unittest.TestCase):
 
             updated = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
             self.assertEqual(updated["current_run_id"], first_run_id)
-            self.assertEqual(len(list((Path(config["run_root"])).iterdir())), 1)
+            self.assertEqual(len([path for path in Path(config["run_root"]).iterdir() if path.is_dir()]), 1)
             payload = json.loads(json_output.getvalue())
             self.assertEqual(payload["action"], "active_run")
             self.assertEqual(payload["status"]["config"]["current_run_id"], first_run_id)
@@ -2304,7 +2304,7 @@ class CliTests(unittest.TestCase):
 
             updated = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
             self.assertNotEqual(updated["current_run_id"], first_run_id)
-            self.assertEqual(len(list((Path(config["run_root"])).iterdir())), 2)
+            self.assertEqual(len([path for path in Path(config["run_root"]).iterdir() if path.is_dir()]), 2)
             text = output.getvalue()
             self.assertIn("Previous current run", text)
             self.assertIn(f"Replaced {first_run_id}", text)

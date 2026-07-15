@@ -102,6 +102,7 @@ class CliStructureTests(unittest.TestCase):
                 ("status",),
                 ("guide",),
                 ("dashboard",),
+                ("doctor",),
                 ("pack",),
                 ("pack", "list"),
                 ("pack", "detect"),

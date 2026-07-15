@@ -241,7 +241,7 @@ def run_benchmark(
         },
         "fixture": {
             "projects": len(list((fixture.root / "projects").iterdir())),
-            "runs": len(list(fixture.run_dir.parent.iterdir())),
+            "runs": len([path for path in fixture.run_dir.parent.iterdir() if path.is_dir()]),
             "evidence_paths": sum(
                 1 for path in (fixture.run_dir / "artifacts" / "benchmark-evidence").rglob("*") if path.is_file()
             ),
