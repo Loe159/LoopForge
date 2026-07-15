@@ -1,0 +1,22 @@
+{
+  "name": "generic-code",
+  "version": 2,
+  "description": "Default supervised development workflow for a source repository.",
+  "priority": 0,
+  "detection": {},
+  "skills": [
+    "task-definition",
+    "repository-research",
+    "implementation-planning",
+    "bounded-implementation",
+    "patch-review"
+  ],
+  "skill_file": "SKILL.md",
+  "skills_dir": "skills",
+  "agents_file": "agents.json",
+  "permissions_file": "permissions.json",
+  "workflow_file": "workflow.json",
+  "checks_file": "checks.json",
+  "protected_paths_file": "protected-paths.json",
+  "memory_rules_file": "memory-rules.md"
+}

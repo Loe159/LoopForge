@@ -1,109 +1,81 @@
 # Danger zones
 
-## Public CLI contracts
+## Public CLI compatibility
 
-Paths: `pyproject.toml`, `src/loopforge/cli.py`, `cli_app.py`,
-`cli_parser.py`, `cli_models.py`, `cli_errors.py`.
+**Paths:** `pyproject.toml`, `src/loopforge/cli/__init__.py`, `cli/app.py`,
+`cli/parser.py`, `cli/models.py`, `cli/errors.py`.
 
-`pyproject.toml` still points to `loopforge.cli:main`. The application
-resolves helpers through the injected facade to preserve historical imports and
-monkeypatches. Renaming or directly importing those helpers in handlers can
-break compatibility even if manual commands still work.
+`pyproject.toml` exposes `loopforge.cli:main`; the application deliberately
+resolves dependencies through the injected facade. Changing re-exports, global
+flag handling, parser topics/options, exit codes, or stdout/stderr discipline
+can break scripts and monkeypatch-based tests. Run the full suite and
+`tests/test_cli_structure.py`.
 
-Preserve command names/options/topics, the `interactive` alias, global-flag
-placement before `--`, exit codes, single JSON payloads, CSV/table behavior,
-and stdout/stderr separation. Run the full suite and
-`tests/test_cli_structure.py` after changes.
+## Persisted workflow and artifacts
 
-## Engine state machine and persistent artifacts
+**Path:** `src/loopforge/engine/__init__.py`.
 
-Path: `src/loopforge/engine.py`.
+The engine couples approvals, workspace data, memory, adapters, verification,
+metrics, and local draft preparation. Keep `current_stage`, `stage_statuses`,
+`human_gates`, and `publish_eligibility` normalized together. In particular,
+verification must leave review pending and publication ineligible. Use atomic
+JSON writes and test state plus artifacts with isolated `LOOPFORGE_HOME`.
 
-The engine couples approval transitions, profile gates, run/workspace state,
-memory, metrics, adapters, patch/risk/checks, review, and local draft
-publication. A transition bug can bypass task/plan/review gates or make
-verification look like publication authority.
+## Process isolation and deterministic contracts
 
-The coupled persisted contract is `current_stage`, `stage_statuses`,
-`human_gates`, and `publish_eligibility`. Preserve it through
-`normalize_run_workflow_state` and the `apply_*_approval` helpers. In
-particular, a passing `verify_run` must leave review pending and publication
-ineligible until `approve_review` succeeds.
+**Paths:** `src/loopforge/checks/`, `adapters/`, `contracts/`, and matching
+`.agent/checks/`/`.agent/adapters/` launchers.
 
-Read-only research/plan enforcement is detection-based: the engine snapshots
-the workspace, blocks the stage when changes are observed, but does not restore
-those changes automatically. Do not treat a blocked result as rollback; inspect
-and recover the run workspace explicitly before continuing.
-
-Use `write_json_atomic`, normalize historical records, isolate
-`LOOPFORGE_HOME`, and test the changed transition plus the full suite and
-`git diff --check`.
-
-## Imported bootstrap contracts
-
-Paths: `.agent/checks/`, `.agent/adapters/`, `.agent/policies/`,
-`.agent/schemas/`, `.agent/templates/`, `.agent/prompts/`.
-
-`engine.py` invokes these scripts/contracts for patch generation, diff/risk,
-process isolation, adapter result validation, and legacy artifacts. Change
-producer, policy/schema, and consumer together. Do not weaken shell
-prohibitions, environment isolation, timeouts/capture, secret checks, or
-network/publication result fields without an explicit product decision.
-
-Uncertain inherited bindings: the disposable-worktree policy/check references
-`prepare_disposable_worktree.py` and related preparation data that are absent;
-`build_stage_context.py` references an absent `validate_prompts`. Verify
-before using those inherited scripts directly.
+These modules enforce process environment, patch/risk policy, output limits,
+and adapter-result validation. Change producers, policies/schemas, consumers,
+and compatibility launchers together. Do not weaken shell prohibition,
+timeouts, capture limits, secret checks, or network/publication fields without
+an explicit product decision.
 
 ## Packs and templates
 
-Paths: `.loopforge/packs/`, `.loopforge/templates/`.
+**Paths:** `src/loopforge/packs/`, `src/loopforge/templates/`, and project
+`.loopforge/packs/`.
 
-Packs are loaded dynamically, and a project-local pack overrides a bundled
-homonym. Detection priority changes pack selection; checks and protected paths
-change verification/risk. Keep JSON valid, commands shell-free, and test pack
-list/detection plus relevant checks.
+Pack detection changes selected skills/checks/risk. A project-local homonym
+overrides a bundled pack. Template names, frontmatter, and headings are parsed
+by engine/check modules, so migrate producers, consumers, and tests together.
 
-Native and legacy templates have frontmatter/section names consumed by parsers,
-validators, and status. Migrate all producers, consumers, and tests together.
+Effective pack contracts also compose `extends`, skills directories, agents,
+permission sets, and workflow stages (`engine/packs.py` and
+`packs/generic-code/`). A UI that displays a stage, actor, or permission must
+use the hydrated effective contract; a second hard-coded catalog can become
+incorrect when a child or project-local pack overrides data.
 
-## Mutable project-local state
+## Project identity and external run roots
 
-Paths: `.loopforge/config.json`, `.loopforge/memory.md`.
+**Path:** `src/loopforge/engine/__init__.py` (`project_name`,
+`default_run_root`, `default_workspace_root`, `new_config`, `list_runs`,
+`resume_run`).
 
-The tracked config contains mutable run id, timestamps, and a machine-specific
-absolute run root. Avoid publishing accidental local-state churn. Durable
-memory can be changed by `learn --approve`; never add secrets, credentials,
-private provider text, or untrusted issue bodies.
+External data is currently keyed by project directory basename. Changing this
+layout can orphan existing runs, collide same-named repositories, or make
+`current_run_id` point at a different root. Any project registry/id migration
+must be non-destructive, preserve legacy discovery, cover moved/cloned
+projects, and test two repositories with the same basename.
 
-## Process, network, and publication boundaries
+## Interactive rendering and duplicated command paths
 
-Paths: `engine.py`, `cli.py`, `interactive.py`,
-`.agent/adapters/`.
+**Paths:** `src/loopforge/cli/ui.py`, `interactive.py`, `app.py`, `workflow.py`,
+and `tests/test_cli.py`.
 
-`continue` and pack checks execute local subprocesses. GitHub intake
-explicitly calls local `git`/`gh`; it must retain the `agent:approved`
-gate and untrusted-input treatment. Test with fixtures/mocks, not real
-publication.
+The shell combines a `prompt_toolkit` prompt with Rich output and has a second
+`cmd_*` dispatch surface. Top-level and slash commands do not always use the
+same orchestration (`run` is the clearest example). A full-screen TUI can
+flicker, corrupt scrollback, break redirected output, or diverge from CLI
+behavior if it adds another renderer/action implementation. Preserve headless
+`--command`/`--script`, JSON/CSV/plain behavior, TTY detection, confirmation
+rules, Ctrl-C semantics, and semantic no-color fallbacks.
 
-`prepare_draft_publication` writes only a local draft artifact after
-verification and review approval. Do not add hidden push, PR creation,
-deployment, telemetry, or network side effects.
+## External effects and generated files
 
-The cockpit is the only current CLI path to plan approval, review approval,
-and draft preparation (`cli.py`, `cli_workflow.py`). Preserve the condition
-that `--no-input` reports state rather than crossing these gates.
-
-## Machine output and optional terminal dependencies
-
-Paths: `ui.py`, `cli.py`, `cli_app.py`, `interactive.py`.
-
-Decorative output or progress on stdout breaks automation. Preserve no-input,
-no-color, quiet, JSON/CSV, and debug behavior. The Rich/prompt_toolkit fallback
-paths and dependency-complete paths both need focused tests when UI code
-changes.
-
-## Generated files
-
-`src/loopforge.egg-info/`, `__pycache__/`, tool caches, `dist/`, and
-`build/` are generated. Do not hand-edit or use them as the source of truth.
+Git, `gh`, agent executables, and local adapters are process boundaries.
+`prepare_draft_publication` must remain local-only. Avoid hidden network,
+push, PR creation, or destructive behavior. Do not edit
+`src/loopforge.egg-info/`, `__pycache__/`, `build/`, or `dist/`; they are
+generated. Validate with `python -m unittest` and `git diff --check`.

@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "stages": [
+    {
+      "id": "task",
+      "title": "Validate task",
+      "description": "Check the goal, objective success checks, constraints, and approval.",
+      "actor": {"type": "deterministic", "id": "task-validator"},
+      "artifact": "task.md",
+      "gate_after": "initial_task_approval"
+    },
+    {
+      "id": "research",
+      "title": "Research repository",
+      "description": "Map relevant files, flows, tests, reusable patterns, risks, and unknowns without editing.",
+      "actor": {"type": "agent", "id": "researcher"},
+      "artifact": "research.md"
+    },
+    {
+      "id": "plan",
+      "title": "Plan implementation",
+      "description": "Produce the smallest evidence-backed plan and verification steps.",
+      "actor": {"type": "agent", "id": "planner"},
+      "artifact": "plan.md",
+      "gate_after": "plan_approval"
+    },
+    {
+      "id": "implementation",
+      "title": "Implement plan",
+      "description": "Apply the approved plan in an isolated workspace and record progress.",
+      "actor": {"type": "agent", "id": "developer"},
+      "artifact": "progress.md"
+    },
+    {
+      "id": "verification",
+      "title": "Verify deterministically",
+      "description": "Generate the patch, enforce policies, classify risk, and run pack checks.",
+      "actor": {"type": "deterministic", "id": "patch-validator"},
+      "artifact": "verification.md"
+    },
+    {
+      "id": "review",
+      "title": "Review patch",
+      "description": "Review the verified patch against the task, research, and approved plan.",
+      "actor": {"type": "agent", "id": "reviewer"},
+      "artifact": "review.md",
+      "gate_after": "review_approval"
+    },
+    {
+      "id": "publication",
+      "title": "Prepare draft publication",
+      "description": "Prepare a local draft PR artifact without network publication.",
+      "actor": {"type": "deterministic", "id": "draft-pr-publisher"},
+      "artifact": "artifacts/publication/draft-pr.json"
+    }
+  ]
+}

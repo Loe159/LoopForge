@@ -1,0 +1,9 @@
+{
+  "checks": [
+    {
+      "name": "diff-whitespace",
+      "command": ["git", "diff", "--check"],
+      "timeout_seconds": 30
+    }
+  ]
+}

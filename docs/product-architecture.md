@@ -35,10 +35,17 @@ The engine owns:
 Packs make the engine useful for specific project types. They provide:
 
 - detection;
-- commands;
-- risk paths;
-- skill routing;
+- reusable skill definitions;
+- named agents and prompts;
+- permission sets;
+- an ordered, gated workflow;
+- deterministic commands and risk paths;
 - memory rules.
+
+`generic-code` owns the base development workflow. Domain packs inherit it and
+add language- or project-specific skills and checks. `PackRegistry` resolves
+inheritance, validates agent/permission/workflow references, and persists the
+effective contract into each run.
 
 ## 4. Bootstrap Core
 
@@ -48,16 +55,14 @@ being built. It is not the final public API.
 ## Data Flow
 
 ```text
-task
-  -> run.json
-  -> loop.md
-  -> selected pack
-  -> selected skills
-  -> adapter attempt
-  -> patch/checks
-  -> verification.md
-  -> memory proposal
-  -> next loop decision
+task validation + approval
+  -> selected effective pack
+  -> researcher / research.md
+  -> planner / plan.md + approval
+  -> developer / isolated workspace
+  -> deterministic patch and checks
+  -> reviewer / review.md + approval
+  -> local draft publication artifact
 ```
 
 ## Main Product Tension

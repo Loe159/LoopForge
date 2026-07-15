@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "high_path_patterns": [".github/**", ".agent/**", ".loopforge/**", "infra/**", "deploy/**"],
+  "medium_path_patterns": ["src/**", "lib/**", "app/**", "packages/**", "services/**", "tests/**"]
+}

@@ -7,20 +7,20 @@ what must be refactored.
 
 | Old path | New path | Why |
 | --- | --- | --- |
-| `.agent/checks/diff_policy.py` | `.agent/checks/diff_policy.py` | Deterministic patch policy |
-| `.agent/checks/generate_complete_patch.py` | `.agent/checks/generate_complete_patch.py` | Complete Git patch generation |
-| `.agent/checks/classify_patch_risk.py` | `.agent/checks/classify_patch_risk.py` | Initial risk routing |
-| `.agent/checks/validate_artifacts.py` | `.agent/checks/validate_artifacts.py` | Portable artifact validation |
+| `.agent/checks/diff_policy.py` | `src/loopforge/checks/diff_policy.py` | Deterministic patch policy; old path is a launcher |
+| `.agent/checks/generate_complete_patch.py` | `src/loopforge/checks/generate_complete_patch.py` | Complete Git patch generation; old path is a launcher |
+| `.agent/checks/classify_patch_risk.py` | `src/loopforge/checks/classify_patch_risk.py` | Risk routing; old path is a launcher |
+| `.agent/checks/validate_artifacts.py` | `src/loopforge/checks/validate_artifacts.py` | Portable artifact validation; old path is a launcher |
 | `.agent/checks/check_stage_readiness.py` | `.agent/checks/check_stage_readiness.py` | Stage prerequisite checks |
 | `.agent/checks/build_stage_context.py` | `.agent/checks/build_stage_context.py` | Read-only context bundle builder |
 | `.agent/checks/initialize_portable_run.py` | `.agent/checks/initialize_portable_run.py` | Legacy portable run initialization |
-| `.agent/checks/isolated_process.py` | `.agent/checks/isolated_process.py` | Bounded child process primitive |
+| `.agent/checks/isolated_process.py` | `src/loopforge/checks/isolated_process.py` | Bounded child process primitive; old path is a launcher |
 | `.agent/checks/record_run_metrics.py` | `.agent/checks/record_run_metrics.py` | Metrics record prototype |
-| `.agent/adapters/local_implementation_adapter.py` | `.agent/adapters/local_implementation_adapter.py` | First generic adapter wrapper |
+| `.agent/adapters/local_implementation_adapter.py` | `src/loopforge/adapters/local_implementation_adapter.py` | First generic adapter wrapper; old path is a launcher |
 | `.agent/adapters/*.sh` | `.agent/adapters/*.sh` | Agent CLI entrypoints |
-| `.agent/templates/` | `.agent/templates/` | Legacy portable artifacts |
+| `.agent/templates/` | `src/loopforge/templates/legacy/` | Legacy portable artifacts |
 | `.agent/prompts/` | `.agent/prompts/` | Read-only research/plan/review prompts |
-| `.agent/schemas/` | `.agent/schemas/` | Result schema prototypes |
+| `.agent/schemas/implementation-result.schema.json` | `src/loopforge/contracts/schemas/implementation-result.schema.json` | Result schema used by the local adapter |
 
 ## Generalized During Copy
 
@@ -33,10 +33,10 @@ what must be refactored.
 
 - Task approval is now part of run creation: GitHub issues require the
   `agent:approved` label, and manual tasks require local confirmation.
-- Read-only research and planning are now run-cockpit stages that write
-  `research.md` and `plan.md` from adapter output.
-- Plan approval gates implementation, and review approval is distinct from
-  deterministic verification.
+- Read-only research, planning, and review are now run-cockpit stages that
+  write `research.md`, `plan.md`, and `review.md` from adapter output.
+- Plan approval gates implementation; deterministic verification gates the
+  reviewer agent; review approval remains a separate human decision.
 - Draft PR publication is a local deterministic artifact preparation step. It
   does not push, open a network PR, or treat receipts and metrics as authority.
 
@@ -55,7 +55,7 @@ product milestone.
 
 ## Refactor Targets
 
-1. Move reusable Python code from `.agent/checks` into `loopforge.core`.
+1. Move remaining reusable Python code from `.agent/checks` into `loopforge.checks`.
 2. Keep thin compatibility wrappers under `.agent/checks`.
 3. Replace numeric `issue` with generic `task_id`.
 4. Replace hard-coded policy equality checks with versioned product contracts.
@@ -65,6 +65,6 @@ product milestone.
 
 ## Compatibility Rule
 
-Until the refactor is complete, do not delete `.agent/**`. Treat it as the
-bootstrap implementation layer that keeps prior work available while LoopForge
-gets a cleaner public API.
+Do not delete `.agent/**` wholesale. The migrated active scripts are thin
+compatibility wrappers; the remaining inherited material stays available until
+it has a product-owned replacement.

@@ -1,0 +1,14 @@
+{
+  "name": "intellij",
+  "version": 2,
+  "extends": "generic-code",
+  "description": "IntelliJ project conventions.",
+  "priority": 5,
+  "detection": {
+    "dirs_any": [".idea"]
+  },
+  "skills": ["intellij-project-review", "gradle-verification"],
+  "skill_file": "SKILL.md",
+  "skills_dir": "skills",
+  "checks_file": "checks.json"
+}

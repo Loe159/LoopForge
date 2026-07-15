@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "agents": [
+    {
+      "id": "researcher",
+      "name": "Repository researcher",
+      "role": "Map relevant files, flows, tests, reusable patterns, risks, and unknowns before planning.",
+      "mode": "read-only",
+      "stages": ["research"],
+      "permission_set": "read-only",
+      "prompt": "agents/researcher.md",
+      "output": "research.md"
+    },
+    {
+      "id": "planner",
+      "name": "Implementation planner",
+      "role": "Turn approved task context and research into a minimal, testable implementation plan.",
+      "mode": "read-only",
+      "stages": ["plan"],
+      "permission_set": "read-only",
+      "prompt": "agents/planner.md",
+      "output": "plan.md"
+    },
+    {
+      "id": "developer",
+      "name": "Developer",
+      "role": "Implement only the approved plan in the isolated workspace and record progress and blockers.",
+      "mode": "workspace-write",
+      "stages": ["implementation"],
+      "permission_set": "workspace-write",
+      "prompt": "agents/developer.md",
+      "output": "progress.md"
+    },
+    {
+      "id": "reviewer",
+      "name": "Patch reviewer",
+      "role": "Review the verified patch against the task, research, and plan without editing or approving it.",
+      "mode": "read-only",
+      "stages": ["review"],
+      "permission_set": "read-only",
+      "prompt": "agents/reviewer.md",
+      "output": "review.md"
+    }
+  ]
+}

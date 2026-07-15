@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "max_files": 12,
+  "max_changed_lines": 500,
+  "allow_binary_files": false,
+  "allow_symlinks": false,
+  "test_path_patterns": [
+    "src/test/**",
+    "tests/**",
+    "**/*test*",
+    "**/*spec*"
+  ],
+  "forbidden_added_test_patterns": [
+    "^\\s*@(org\\.junit\\.)?Ignore\\b",
+    "^\\s*@(org\\.junit\\.jupiter\\.api\\.)?Disabled\\b",
+    "^\\s*@kotlin\\.test\\.Ignore\\b"
+  ],
+  "forbidden_removed_test_patterns": [
+    "^\\s*@(org\\.junit\\.)?Test\\b",
+    "^\\s*@(org\\.junit\\.jupiter\\.api\\.)?Test\\b",
+    "^\\s*@kotlin\\.test\\.Test\\b"
+  ],
+  "secret_patterns": [
+    {
+      "id": "private_key_header",
+      "pattern": "-----BEGIN (?:[A-Z0-9]+ )?PRIVATE KEY-----"
+    },
+    {
+      "id": "github_token",
+      "pattern": "(?:github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{36,})"
+    },
+    {
+      "id": "aws_access_key_id",
+      "pattern": "(?:AKIA|ASIA)[A-Z0-9]{16}"
+    },
+    {
+      "id": "google_api_key",
+      "pattern": "AIza[0-9A-Za-z_-]{35}"
+    }
+  ],
+  "protected_patterns": [
+    ".github/**",
+    ".agent/**",
+    ".agents/**",
+    ".loopforge/**",
+    "agents/**",
+    ".gitignore",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "skills/**",
+    "docs/architecture/**",
+    "docs/policies/**",
+    "scripts/**",
+    "config/**",
+    "infra/**",
+    "deploy/**",
+    "Dockerfile",
+    "docker-compose.yml",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "poetry.lock",
+    "uv.lock",
+    "Cargo.lock",
+    "build.gradle.kts",
+    "settings.gradle.kts",
+    "gradle.properties",
+    "gradle/**",
+    "gradlew",
+    "gradlew.bat"
+  ]
+}
