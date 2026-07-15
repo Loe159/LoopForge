@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import shutil
 import shlex
 from typing import TYPE_CHECKING, Any
 
@@ -20,6 +21,7 @@ from loopforge.cli.presentation import (
     shell_snapshot,
 )
 from loopforge.cli.operations import ForegroundOperation, OperationEvent
+from loopforge.cli.evidence import ApprovalSummary, EvidenceItem, approval_summary, evidence_items, preview_evidence
 from loopforge.engine import (
     continue_run,
     current_guidance,
@@ -47,6 +49,8 @@ class ConsoleState:
     selected_project: Path | None = None
     selected_run_id: str | None = None
     filter_text: str = ""
+    evidence_query: str = ""
+    evidence_preview: bool = False
     notice: str = ""
 
 
@@ -177,7 +181,20 @@ class LoopForgeConsole:
         def _evidence(event: Any) -> None:
             self.state.screen = "evidence"
             self.state.selected_index = 0
+            self.state.evidence_preview = False
             self._refresh()
+
+        @bindings.add("o")
+        def _open_evidence(event: Any) -> None:
+            self._open_selected_evidence()
+
+        @bindings.add("c")
+        def _copy_evidence(event: Any) -> None:
+            self._copy_selected_evidence()
+
+        @bindings.add("x")
+        def _export_evidence(event: Any) -> None:
+            self._export_selected_evidence()
 
         @bindings.add("c-c")
         def _interrupt(event: Any) -> None:
@@ -219,7 +236,7 @@ class LoopForgeConsole:
             "home": "Enter open  ↑↓ select  Ctrl+P projects  Ctrl+K actions  ? help",
             "project": "Enter run  n new  / filter  Esc projects  Ctrl+K actions",
             "run": "Enter primary action  e evidence  Esc runs  Ctrl+K actions  ? help",
-            "evidence": "↑↓ select  Enter open  Esc run  Ctrl+K actions",
+            "evidence": "↑↓ select  Enter preview  o open  c copy  x export  / search  Esc run",
             "settings": "Tab screen  Esc back  Ctrl+K actions  ? help",
         }[self.state.screen]
         if self._operation is not None and not self._operation.finished:
@@ -305,6 +322,17 @@ class LoopForgeConsole:
             parts.append(("class:secondary", f"  {stage.actor} · {stage.label}\n"))
         if snapshot.blockers:
             parts.extend([( "\n", ""), ("class:danger", "Blocked\n"), ("", _clip(snapshot.blockers[0]))])
+            if snapshot.run.next_action is not None:
+                action = snapshot.run.next_action
+                parts.extend(
+                    [
+                        ("\n", ""),
+                        ("class:secondary", "Recovery\n"),
+                        ("class:ready", action.label + "\n"),
+                        ("", action.description + "\n"),
+                        ("class:secondary", "Press e to inspect the recorded check or log evidence."),
+                    ]
+                )
         elif snapshot.run.next_action is not None:
             action = snapshot.run.next_action
             parts.extend(
@@ -319,18 +347,22 @@ class LoopForgeConsole:
         return parts
 
     def _evidence_fragments(self) -> list[tuple[str, str]]:
-        status = current_status(self._project_path())
-        if status.run_dir is None:
+        items = self._evidence_items()
+        if not items:
             return [("class:attention", "◆ No evidence yet\n"), ("", "This stage has not started.")]
-        artifacts = status.run_dir / "artifacts"
-        paths = sorted(path for path in artifacts.rglob("*") if path.is_file()) if artifacts.exists() else []
-        parts: list[tuple[str, str]] = [("class:secondary", "Evidence\n")]
-        for index, path in enumerate(paths[:20]):
+        selected = self._selected_evidence_item(items)
+        if selected is not None and self.state.evidence_preview:
+            return [
+                ("class:secondary", f"Evidence preview · {selected.label}\n"),
+                ("class:secondary", selected.relative_path + "\n\n"),
+                ("", preview_evidence(selected, query=self.state.evidence_query)),
+            ]
+        query = f" · search: {self.state.evidence_query}" if self.state.evidence_query else ""
+        parts: list[tuple[str, str]] = [("class:secondary", f"Evidence · {len(items)} items{query}\n")]
+        for index, item in enumerate(items[:40]):
             prefix = "› " if index == self.state.selected_index else "  "
             style = "class:selected" if index == self.state.selected_index else ""
-            parts.append((style, f"{prefix}{path.relative_to(status.run_dir)}\n"))
-        if not paths:
-            parts.append(("", "This stage has not produced evidence."))
+            parts.append((style, f"{prefix}[{item.label}] {item.relative_path}\n"))
         return parts
 
     def _settings_fragments(self) -> list[tuple[str, str]]:
@@ -405,7 +437,7 @@ class LoopForgeConsole:
         counts = {
             "home": len(self._projects()),
             "project": len(self._filtered_runs(list_runs(self._project_path()).runs)),
-            "evidence": len(self._evidence_paths()),
+            "evidence": len(self._evidence_items()),
         }
         count = counts.get(self.state.screen, 0)
         if count:
@@ -446,12 +478,14 @@ class LoopForgeConsole:
             if snapshot.run and snapshot.run.next_action:
                 self._confirm_action(snapshot.run.next_action)
         elif self.state.screen == "evidence":
-            paths = self._evidence_paths()
-            if paths:
-                self.state.notice = str(paths[self.state.selected_index].name)
+            self._open_selected_evidence()
         self._refresh()
 
     def _back(self) -> None:
+        if self.state.screen == "evidence" and self.state.evidence_preview:
+            self.state.evidence_preview = False
+            self._refresh()
+            return
         back = {"home": "home", "project": "home", "run": "project", "evidence": "run", "settings": "run"}
         self.state.screen = back[self.state.screen]
         self.state.selected_index = 0
@@ -463,10 +497,61 @@ class LoopForgeConsole:
         self.state.selected_index = 0
         self._refresh()
 
-    def _evidence_paths(self) -> list[Path]:
+    def _evidence_items(self) -> tuple[EvidenceItem, ...]:
         status = current_status(self._project_path())
-        artifacts = status.run_dir / "artifacts" if status.run_dir else None
-        return sorted(path for path in artifacts.rglob("*") if path.is_file()) if artifacts and artifacts.exists() else []
+        return evidence_items(status.run_dir, query=self.state.evidence_query)
+
+    def _selected_evidence_item(self, items: tuple[EvidenceItem, ...] | None = None) -> EvidenceItem | None:
+        items = self._evidence_items() if items is None else items
+        if not items:
+            return None
+        self.state.selected_index = min(self.state.selected_index, len(items) - 1)
+        return items[self.state.selected_index]
+
+    def _open_selected_evidence(self) -> None:
+        if self.state.screen != "evidence":
+            return
+        item = self._selected_evidence_item()
+        if item is None:
+            self.state.notice = "No evidence is available."
+        else:
+            self.state.evidence_preview = True
+            self.state.notice = f"Opened {item.relative_path}"
+        self._refresh()
+
+    def _copy_selected_evidence(self) -> None:
+        item = self._selected_evidence_item()
+        if item is None:
+            self.state.notice = "No evidence is available to copy."
+        elif self.shell.copy_to_clipboard(preview_evidence(item)):
+            self.state.notice = f"Copied {item.relative_path}"
+        else:
+            path = self._export_evidence_item(item)
+            self.state.notice = f"Clipboard unavailable; exported {path}" if path else "Clipboard unavailable; export failed."
+        self._refresh()
+
+    def _export_selected_evidence(self) -> None:
+        item = self._selected_evidence_item()
+        if item is None:
+            self.state.notice = "No evidence is available to export."
+        else:
+            path = self._export_evidence_item(item)
+            self.state.notice = f"Exported {path}" if path else "Evidence export failed."
+        self._refresh()
+
+    def _export_evidence_item(self, item: EvidenceItem) -> Path | None:
+        status = current_status(self._project_path())
+        if status.run_dir is None:
+            return None
+        destination = status.run_dir / "artifacts" / "exports" / f"{item.path.stem}-evidence{item.path.suffix}"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.resolve() == item.path.resolve():
+            destination = destination.with_name(destination.stem + "-copy" + destination.suffix)
+        try:
+            shutil.copyfile(item.path, destination)
+        except OSError:
+            return None
+        return destination.relative_to(status.run_dir)
 
     def _show_action_palette(self) -> None:
         from prompt_toolkit.layout.containers import HSplit
@@ -498,15 +583,25 @@ class LoopForgeConsole:
             self._close_dialog()
             self._execute_action(action)
             return
+        approval = self._approval_summary(action)
+        lines = list(approval.lines) if approval is not None else [
+            "You approve the evidence and workflow transition shown on this screen.",
+            f"Why: {action.description}",
+        ]
+        lines.append("Permissions follow the selected pack and stage.")
         self._show_dialog(
-            f"{action.label}?",
-            [
-                "You approve the evidence and workflow transition shown on this screen.",
-                f"Why: {action.description}",
-                "Permissions follow the selected pack and stage.",
-            ],
+            approval.title if approval is not None else f"{action.label}?",
+            lines,
             [("Approve", lambda: self._execute_action(action)), ("Evidence", self._open_evidence), ("Cancel", self._close_dialog)],
         )
+
+    def _approval_summary(self, action: Any) -> ApprovalSummary | None:
+        stages = {"approve-plan": "plan", "approve-review": "review"}
+        stage = stages.get(action.id)
+        if stage is None:
+            return None
+        status = current_status(self._project_path())
+        return approval_summary(status.run_dir, status.run, stage)
 
     def _execute_action(self, action: Any) -> None:
         if action.executor_key == "collect-task":
@@ -633,6 +728,7 @@ class LoopForgeConsole:
         self._close_dialog()
         self.state.screen = "evidence"
         self.state.selected_index = 0
+        self.state.evidence_preview = False
         self._refresh()
 
     def _show_help(self) -> None:
@@ -671,10 +767,15 @@ class LoopForgeConsole:
         from prompt_toolkit.layout.containers import HSplit
         from prompt_toolkit.widgets import Button, Dialog, TextArea
 
-        field = TextArea(text=self.state.filter_text, multiline=False)
+        is_evidence = self.state.screen == "evidence"
+        field = TextArea(text=self.state.evidence_query if is_evidence else self.state.filter_text, multiline=False)
 
         def apply() -> None:
-            self.state.filter_text = field.text.strip()
+            if is_evidence:
+                self.state.evidence_query = field.text.strip()
+                self.state.evidence_preview = False
+            else:
+                self.state.filter_text = field.text.strip()
             self.state.selected_index = 0
             self._close_dialog()
             self._refresh()
@@ -687,7 +788,11 @@ class LoopForgeConsole:
         self._attach_dialog()
 
     def _clear_filter(self) -> None:
-        self.state.filter_text = ""
+        if self.state.screen == "evidence":
+            self.state.evidence_query = ""
+            self.state.evidence_preview = False
+        else:
+            self.state.filter_text = ""
         self.state.selected_index = 0
         self._close_dialog()
         self._refresh()
