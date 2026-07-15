@@ -8,13 +8,14 @@ import re
 import subprocess
 import sys
 import threading
+import time
 import uuid
 import hashlib
 import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from loopforge.engine.packs import PackRegistry
 from loopforge.engine.metrics import MetricsService
@@ -5692,6 +5693,8 @@ def execute_readonly_stage(
     stage: str,
     adapter: str,
     adapter_args: list[str] | None = None,
+    operation_callback: OperationCallback | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> StageResult:
     status = current_status(project_dir)
     if not status.initialized:
@@ -5772,6 +5775,12 @@ def execute_readonly_stage(
 
     stage_dir = status.run_dir / "artifacts" / "stages" / stage
     stage_dir.mkdir(parents=True, exist_ok=True)
+    emit_operation_event(
+        operation_callback,
+        "stage_started",
+        f"Starting read-only {stage} stage.",
+        artifact=str(stage_dir),
+    )
     prompt = render_stage_prompt(
         stage=stage,
         run=run,
@@ -5782,6 +5791,30 @@ def execute_readonly_stage(
     (stage_dir / "prompt.md").write_text(prompt, encoding="utf-8")
     before_snapshot = workspace_snapshot(workspace_dir)
     before_git = git_status_entries(workspace_dir)
+    if cancel_event is not None and cancel_event.is_set():
+        blockers = [f"read-only {stage} stage was interrupted before adapter execution."]
+        updated = update_run_for_stage_blocker(
+            run_json_path=run_json_path,
+            run=run,
+            stage=stage,
+            blockers=blockers,
+        )
+        emit_operation_event(
+            operation_callback,
+            "cancelled",
+            blockers[0],
+            artifact=str(stage_dir / "prompt.md"),
+            status="cancelled",
+        )
+        return StageResult(
+            project_dir=status.project_dir,
+            run_dir=status.run_dir,
+            run=updated,
+            stage=stage,
+            ok=False,
+            message=f"LoopForge {stage} stage was interrupted.",
+            blockers=blockers,
+        )
     try:
         command = command_for_readonly_stage(
             adapter=adapter,
@@ -5829,7 +5862,9 @@ def execute_readonly_stage(
         after_git=after_git,
     )
     returncode = child.get("returncode")
-    if not bool(child.get("completed")):
+    if cancel_event is not None and cancel_event.is_set():
+        blockers = [f"read-only {stage} stage was interrupted; its evidence was retained."]
+    elif not bool(child.get("completed")):
         blockers = [f"read-only {stage} adapter timed out."]
     elif returncode != 0:
         blockers = [f"read-only {stage} adapter failed with return code {returncode}."]
@@ -5856,6 +5891,13 @@ def execute_readonly_stage(
             stage=stage,
             blockers=blockers,
         )
+        emit_operation_event(
+            operation_callback,
+            "cancelled" if cancel_event is not None and cancel_event.is_set() else "blocked",
+            f"Read-only {stage} stage is blocked.",
+            artifact=str(stage_dir),
+            status="cancelled" if cancel_event is not None and cancel_event.is_set() else "blocked",
+        )
         return StageResult(
             project_dir=status.project_dir,
             run_dir=status.run_dir,
@@ -5880,6 +5922,13 @@ def execute_readonly_stage(
     updated["blockers"] = []
     updated["updated_at"] = utc_now()
     write_json_atomic(run_json_path, updated)
+    emit_operation_event(
+        operation_callback,
+        "completed",
+        f"Read-only {stage} stage completed.",
+        artifact=str(artifact_path),
+        status="completed",
+    )
     return StageResult(
         project_dir=status.project_dir,
         run_dir=status.run_dir,
@@ -5961,7 +6010,29 @@ def run_with_isolated_process(command: list[str], cwd: Path, timeout_seconds: in
     )
 
 
-def run_streaming_process(command: list[str], cwd: Path, timeout_seconds: int) -> dict[str, Any]:
+OperationCallback = Callable[[dict[str, Any]], None]
+
+
+def emit_operation_event(
+    callback: OperationCallback | None,
+    kind: str,
+    message: str,
+    **details: Any,
+) -> None:
+    """Publish factual work boundaries without making the engine UI-aware."""
+
+    if callback is not None:
+        callback({"kind": kind, "message": message, **details})
+
+
+def run_streaming_process(
+    command: list[str],
+    cwd: Path,
+    timeout_seconds: int,
+    *,
+    output_callback: OperationCallback | None = None,
+    cancel_event: threading.Event | None = None,
+) -> dict[str, Any]:
     isolated_process = isolated_process_module()
     policy = isolated_process.load_policy()
     bounded_timeout = min(float(timeout_seconds), float(policy["max_timeout_seconds"]))
@@ -5992,8 +6063,15 @@ def run_streaming_process(command: list[str], cwd: Path, timeout_seconds: int) -
                 if not chunk:
                     break
                 buffer.extend(chunk)
-                target.write(chunk)
-                target.flush()
+                if output_callback is not None:
+                    emit_operation_event(
+                        output_callback,
+                        "adapter_output",
+                        decode_output(chunk).strip() or "Adapter produced output.",
+                    )
+                else:
+                    target.write(chunk)
+                    target.flush()
         finally:
             source.close()
 
@@ -6012,7 +6090,25 @@ def run_streaming_process(command: list[str], cwd: Path, timeout_seconds: int) -
     timed_out = False
     interrupted = False
     try:
-        returncode = process.wait(timeout=bounded_timeout)
+        deadline = time.monotonic() + bounded_timeout
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                interrupted = True
+                process.terminate()
+                try:
+                    returncode = process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    returncode = process.wait()
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(command, bounded_timeout)
+            try:
+                returncode = process.wait(timeout=min(remaining, 0.1))
+                break
+            except subprocess.TimeoutExpired:
+                continue
     except subprocess.TimeoutExpired:
         timed_out = True
         process.kill()
@@ -6027,12 +6123,13 @@ def run_streaming_process(command: list[str], cwd: Path, timeout_seconds: int) -
             returncode = process.wait()
     stdout_thread.join(timeout=5)
     stderr_thread.join(timeout=5)
-    if interrupted:
+    if interrupted and cancel_event is None:
         raise KeyboardInterrupt
     return {
         "completed": not timed_out,
         "returncode": returncode,
         "timed_out": timed_out,
+        "interrupted": interrupted,
         "output_limit_exceeded": False,
         "stdout": bytes(stdout_buffer),
         "stderr": bytes(stderr_buffer),
@@ -6087,6 +6184,8 @@ def execute_adapter_command(
     stdin_file: Path,
     result_output: Path,
     timeout_seconds: int,
+    operation_callback: OperationCallback | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> tuple[dict[str, Any], bytes, bytes]:
     protocol_command = adapter_protocol_command(
         adapter=adapter,
@@ -6100,6 +6199,8 @@ def execute_adapter_command(
         protocol_command,
         repository_root(),
         min(timeout_seconds + 5, 600),
+        output_callback=operation_callback,
+        cancel_event=cancel_event,
     )
     stdout = child["stdout"] if isinstance(child.get("stdout"), bytes) else b""
     stderr = child["stderr"] if isinstance(child.get("stderr"), bytes) else b""
@@ -6134,6 +6235,8 @@ def execute_attempt(
     contract: dict[str, Any],
     adapter: str,
     adapter_args: list[str],
+    operation_callback: OperationCallback | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
     if adapter not in SUPPORTED_ADAPTERS:
         raise ValueError(f"unsupported adapter: {adapter}")
@@ -6151,6 +6254,13 @@ def execute_attempt(
     attempt_id = f"attempt-{number:03d}"
     attempt_dir = run_dir / "attempts" / attempt_id
     attempt_dir.mkdir(parents=True, exist_ok=False)
+
+    emit_operation_event(
+        operation_callback,
+        "attempt_started",
+        f"Starting {adapter} implementation attempt {attempt_id}.",
+        artifact=str(attempt_dir),
+    )
 
     started = utc_now()
     prompt_path = attempt_dir / "adapter-prompt.md"
@@ -6189,6 +6299,8 @@ def execute_attempt(
             stdin_file=prompt_path,
             result_output=result_path,
             timeout_seconds=timeout_seconds,
+            operation_callback=operation_callback,
+            cancel_event=cancel_event,
         )
         result = parse_adapter_result_file(result_path) or parse_adapter_result(stdout)
 
@@ -6205,10 +6317,14 @@ def execute_attempt(
     completed = bool(child.get("completed")) and returncode == 0
     timed_out = bool(child.get("timed_out"))
     output_limit_exceeded = bool(child.get("output_limit_exceeded"))
+    interrupted = bool(child.get("interrupted"))
 
     if adapter == "local-adapter-fixture":
         status = "completed" if completed and snapshot_changed else "blocked"
-        if timed_out:
+        if interrupted:
+            status = "interrupted"
+            summary = "Fixture command was interrupted."
+        elif timed_out:
             status = "failed"
             summary = "Fixture command timed out."
         elif output_limit_exceeded:
@@ -6225,6 +6341,14 @@ def execute_attempt(
             session=session,
             status=status,
             summary=summary,
+            workspace_changed=snapshot_changed,
+        )
+    elif interrupted:
+        status = "interrupted"
+        result = synthetic_adapter_result(
+            session=session,
+            status=status,
+            summary="Adapter execution was interrupted.",
             workspace_changed=snapshot_changed,
         )
     elif result is None:
@@ -6276,6 +6400,7 @@ def execute_attempt(
         "workspace_changes": workspace_changes,
         "returncode": returncode,
         "timed_out": timed_out,
+        "interrupted": interrupted,
         "output_limit_exceeded": output_limit_exceeded,
         "profile_stop_reasons": profile_stop_reasons,
         "publication_requested": bool(result.get("publication_requested", False)),
@@ -6292,6 +6417,13 @@ def execute_attempt(
     }
     write_json_atomic(attempt_dir / "attempt.json", attempt)
     append_progress(run_dir, attempt)
+    emit_operation_event(
+        operation_callback,
+        "attempt_finished",
+        f"Implementation attempt {attempt_id} {status}.",
+        artifact=str(attempt_dir / "attempt.json"),
+        status=status,
+    )
     return attempt
 
 
@@ -6625,7 +6757,13 @@ def update_loop_diagnostic(run_dir: Path, verification: dict[str, Any]) -> None:
     loop_path.write_text(before + "\n\n" + diagnostic, encoding="utf-8")
 
 
-def verify_run(project_dir: Path, *, confirmed: bool = False) -> VerifyResult:
+def verify_run(
+    project_dir: Path,
+    *,
+    confirmed: bool = False,
+    operation_callback: OperationCallback | None = None,
+    cancel_event: threading.Event | None = None,
+) -> VerifyResult:
     status = current_status(project_dir)
     if not status.initialized:
         return VerifyResult(
@@ -6697,12 +6835,40 @@ def verify_run(project_dir: Path, *, confirmed: bool = False) -> VerifyResult:
     risk_policy_sources: list[str] = []
     risk_policy_path: Path | None = None
 
+    emit_operation_event(operation_callback, "stage_started", "Starting deterministic verification.")
+
+    def cancelled_result() -> VerifyResult | None:
+        if cancel_event is None or not cancel_event.is_set():
+            return None
+        blocker = "verification was interrupted before the next check."
+        interrupted_run = normalize_run_workflow_state(run)
+        interrupted_run["updated_at"] = utc_now()
+        interrupted_run["status"] = VERIFICATION_FAILED
+        interrupted_run["blockers"] = [blocker]
+        interrupted_run["current_stage"] = "verification_blocked"
+        interrupted_run["stage_statuses"]["verification"] = "blocked"
+        write_json_atomic(run_json_path, interrupted_run)
+        emit_operation_event(operation_callback, "cancelled", blocker, status="cancelled")
+        return VerifyResult(
+            project_dir=status.project_dir,
+            run_dir=run_dir,
+            run=interrupted_run,
+            ok=False,
+            message="LoopForge verification was interrupted.",
+            blockers=[blocker],
+            verification=verification_state(interrupted_run),
+        )
+
     base_commit = run.get("base_commit")
     if not isinstance(base_commit, str) or not base_commit:
         blockers.append("patch generation requires a Git base_commit recorded in run.json.")
     elif not workspace_dir.exists() or not workspace_dir.is_dir():
         blockers.append(f"patch generation requires the run workspace: {workspace_dir}.")
     else:
+        interrupted = cancelled_result()
+        if interrupted is not None:
+            return interrupted
+        emit_operation_event(operation_callback, "check_started", "Generating complete patch.", current=1, total=4)
         generated = run_json_check(
             [
                 usable_python_executable(),
@@ -6750,8 +6916,13 @@ def verify_run(project_dir: Path, *, confirmed: bool = False) -> VerifyResult:
             )
             if not diff_summary["allowed"]:
                 blockers.append("diff policy blocked the generated patch.")
+        emit_operation_event(operation_callback, "check_finished", "Complete patch generation finished.", current=1, total=4)
 
     if patch_path.exists() and isinstance(base_commit, str) and base_commit:
+        interrupted = cancelled_result()
+        if interrupted is not None:
+            return interrupted
+        emit_operation_event(operation_callback, "check_started", "Enforcing diff policy.", current=2, total=4)
         diff_result = run_json_check(
             [
                 usable_python_executable(),
@@ -6786,6 +6957,7 @@ def verify_run(project_dir: Path, *, confirmed: bool = False) -> VerifyResult:
             error = diff_result["stderr"].strip() or diff_result["stdout"].strip()
             diff_summary.update({"status": "failed", "error": error})
             blockers.append(f"diff policy failed: {error or 'unknown error'}")
+        emit_operation_event(operation_callback, "check_finished", "Diff policy finished.", current=2, total=4)
 
         try:
             risk_policy_path, risk_policy_sources = merged_risk_policy_path(
@@ -6797,6 +6969,10 @@ def verify_run(project_dir: Path, *, confirmed: bool = False) -> VerifyResult:
             risk_summary.update({"status": "failed", "error": str(error)})
             blockers.append(f"risk policy could not be loaded: {error}")
 
+        interrupted = cancelled_result()
+        if interrupted is not None:
+            return interrupted
+        emit_operation_event(operation_callback, "check_started", "Classifying patch risk.", current=3, total=4)
         risk_result = run_json_check(
             [
                 usable_python_executable(),
@@ -6840,11 +7016,23 @@ def verify_run(project_dir: Path, *, confirmed: bool = False) -> VerifyResult:
             error = risk_result["stderr"].strip() or risk_result["stdout"].strip()
             risk_summary.update({"status": "failed", "error": error})
             blockers.append(f"risk classification failed: {error or 'unknown error'}")
+        emit_operation_event(operation_callback, "check_finished", "Patch risk classification finished.", current=3, total=4)
 
     try:
         pack_config = load_pack_checks(status.project_dir, str(run.get("pack") or DEFAULT_PACK))
         pack_checks_source = pack_config.get("source")
-        for check in pack_config["checks"]:
+        pack_checks = pack_config["checks"]
+        for index, check in enumerate(pack_checks, start=1):
+            interrupted = cancelled_result()
+            if interrupted is not None:
+                return interrupted
+            emit_operation_event(
+                operation_callback,
+                "check_started",
+                f"Running {check['name']}.",
+                current=index,
+                total=len(pack_checks),
+            )
             result = run_pack_check(
                 check,
                 project_dir=workspace_dir,
@@ -6852,6 +7040,14 @@ def verify_run(project_dir: Path, *, confirmed: bool = False) -> VerifyResult:
                 patch_path=patch_path if patch_path.exists() else None,
             )
             checks.append(result)
+            emit_operation_event(
+                operation_callback,
+                "check_finished",
+                f"{check['name']} {result['status']}.",
+                current=index,
+                total=len(pack_checks),
+                status=str(result["status"]),
+            )
             if result["status"] != "passed":
                 blockers.append(f"pack check failed: {result['name']} ({result['status']}).")
     except ValueError as error:
@@ -6922,6 +7118,13 @@ def verify_run(project_dir: Path, *, confirmed: bool = False) -> VerifyResult:
             "reasons": ["deterministic verification is blocked"],
         }
     write_json_atomic(run_json_path, updated_run)
+    emit_operation_event(
+        operation_callback,
+        "completed" if not blockers else "blocked",
+        "Verification passed." if not blockers else "Verification is blocked.",
+        artifact=str(run_dir / "verification.md"),
+        status="completed" if not blockers else "blocked",
+    )
 
     return VerifyResult(
         project_dir=status.project_dir,
@@ -6956,6 +7159,8 @@ def continue_run(
     adapter: str | None = None,
     adapter_args: list[str] | None = None,
     confirmed: bool = False,
+    operation_callback: OperationCallback | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> ContinueResult:
     status = current_status(project_dir)
     if not status.initialized:
@@ -7071,6 +7276,8 @@ def continue_run(
             contract=contract,
             adapter=adapter,
             adapter_args=adapter_args or [],
+            operation_callback=operation_callback,
+            cancel_event=cancel_event,
         )
         updated_run = update_run_after_attempt(
             run_json_path=status.run_json_path or (status.run_dir / "run.json"),
