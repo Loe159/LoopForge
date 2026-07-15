@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import loopforge
 from loopforge.adapters import local_implementation_adapter
@@ -11,12 +12,18 @@ from loopforge.contracts import policy_path
 from loopforge.checks import diff_policy, isolated_process
 from loopforge.engine import (
     create_run,
+    current_status,
     initialize_project,
     list_registered_projects,
     list_runs_all_projects,
     open_project,
     read_json,
     write_json_atomic,
+)
+from loopforge.engine.validation import (
+    cached_legacy_validation_state,
+    refresh_legacy_validation_cache,
+    validation_cache_path,
 )
 from loopforge.engine.metrics import MetricsService
 from loopforge.engine.packs import PackRegistry
@@ -357,6 +364,86 @@ class MetricsServiceTests(unittest.TestCase):
         self.assertEqual(summary["duration_seconds"]["unknown_count"], 1)
         self.assertEqual(summary["patch_size_bytes"]["sum"], 20)
         self.assertEqual(summary["verification_results"], {"passed": 1, "unknown": 1})
+
+
+class LegacyValidationCacheTests(unittest.TestCase):
+    legacy_artifact_names = (
+        "task.md",
+        "research.md",
+        "plan.md",
+        "progress.md",
+        "verification.md",
+        "review.md",
+    )
+
+    def test_status_reads_a_warm_cache_without_subprocess_or_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            project = root / "project"
+            project.mkdir()
+            initialize_project(project, home=root / "home")
+            created = create_run(project, "Cache validation", success_checks=["tests pass"])
+            cache_path = validation_cache_path(created.run_dir / "artifacts" / "legacy-agent")
+            tracked_paths = [
+                project / ".loopforge" / "config.json",
+                project / ".loopforge" / "memory.md",
+                created.run_json_path,
+                cache_path,
+            ]
+            before = {path: path.stat().st_mtime_ns for path in tracked_paths}
+
+            with mock.patch("loopforge.engine.subprocess.run") as run:
+                for _ in range(100):
+                    status = current_status(project)
+
+            run.assert_not_called()
+            self.assertEqual(status.legacy_artifacts["status"], "valid")
+            self.assertEqual(status.memory["durable_status"], "present")
+            self.assertEqual({path: path.stat().st_mtime_ns for path in tracked_paths}, before)
+
+    def test_changed_artifact_marks_the_cached_result_stale_until_explicit_refresh(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            project = root / "project"
+            project.mkdir()
+            initialize_project(project, home=root / "home")
+            created = create_run(project, "Refresh validation", success_checks=["tests pass"])
+            artifact_dir = created.run_dir / "artifacts" / "legacy-agent"
+            cache_path = validation_cache_path(artifact_dir)
+            original_cache = read_json(cache_path)
+
+            (artifact_dir / "review.md").write_text("broken", encoding="utf-8")
+
+            status = current_status(project)
+            self.assertEqual(status.legacy_artifacts["status"], "stale")
+            self.assertEqual(read_json(cache_path), original_cache)
+
+            refreshed = refresh_legacy_validation_cache(
+                artifact_dir,
+                self.legacy_artifact_names,
+            )
+            self.assertEqual(refreshed["status"], "invalid")
+            self.assertEqual(
+                cached_legacy_validation_state(
+                    artifact_dir,
+                    self.legacy_artifact_names,
+                )["status"],
+                "invalid",
+            )
+
+    def test_status_does_not_recreate_missing_project_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            project = root / "project"
+            project.mkdir()
+            initialize_project(project, home=root / "home")
+            memory_path = project / ".loopforge" / "memory.md"
+            memory_path.unlink()
+
+            status = current_status(project)
+
+            self.assertEqual(status.memory["durable_status"], "missing")
+            self.assertFalse(memory_path.exists())
 
 
 if __name__ == "__main__":

@@ -240,7 +240,27 @@ def main() -> int:
     try:
         contract = load_contract(args.contract)
         directory = args.templates if args.templates is not None else args.run
-        result = validate_directory(directory, contract, args.templates is not None)
+        if args.templates is not None:
+            result = validate_directory(directory, contract, True)
+        else:
+            # Keep the legacy launcher compatible while sharing the in-process
+            # cache used by engine status reads.
+            from loopforge.engine.validation import refresh_legacy_validation_cache
+
+            cache = refresh_legacy_validation_cache(
+                directory,
+                tuple(contract["artifacts"]),
+                contract_path=args.contract,
+            )
+            result = {
+                "valid": cache["status"] == "valid",
+                "mode": "run",
+                "directory": str(directory.resolve()),
+                "artifacts": sorted(
+                    name for name in contract["artifacts"] if (directory / name).is_file()
+                ),
+                "errors": cache["errors"],
+            }
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as error:
         print(f"artifact-contract: ERROR\n- {error}", file=sys.stderr)
         return 1

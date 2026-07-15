@@ -21,6 +21,10 @@ from loopforge.engine.packs import PackRegistry
 from loopforge.engine.metrics import MetricsService
 from loopforge.engine.storage import DEFAULT_JSON_STORE
 from loopforge.engine import projects as project_registry
+from loopforge.engine.validation import (
+    cached_legacy_validation_state,
+    refresh_legacy_validation_cache,
+)
 
 CONFIG_DIR = ".loopforge"
 CONFIG_FILE = "config.json"
@@ -1546,45 +1550,11 @@ def legacy_artifact_state(run: dict[str, Any]) -> dict[str, Any]:
             "errors": [f"missing legacy artifacts: {', '.join(missing)}"],
         }
 
-    validator = legacy_artifact_validator()
-    if not validator.exists():
-        return {
-            "status": "unchecked",
-            "artifact_dir": str(artifact_dir),
-            "issue": legacy.get("issue"),
-            "base_commit": legacy.get("base_commit"),
-            "errors": [f"validator not found: {validator}"],
-        }
-
-    try:
-        result = subprocess.run(
-            [sys.executable, "-m", "loopforge.checks.validate_artifacts", "--run", str(artifact_dir), "--format", "json"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError) as error:
-        return {
-            "status": "unchecked",
-            "artifact_dir": str(artifact_dir),
-            "issue": legacy.get("issue"),
-            "base_commit": legacy.get("base_commit"),
-            "errors": [str(error)],
-        }
-
-    try:
-        validator_result = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        validator_result = {"errors": [{"message": result.stderr.strip() or result.stdout.strip()}]}
-
-    errors = validator_result.get("errors", [])
+    state = cached_legacy_validation_state(artifact_dir, LEGACY_ARTIFACT_NAMES)
     return {
-        "status": "valid" if result.returncode == 0 else "invalid",
-        "artifact_dir": str(artifact_dir),
+        **state,
         "issue": legacy.get("issue"),
         "base_commit": legacy.get("base_commit"),
-        "errors": errors if isinstance(errors, list) else [],
     }
 
 
@@ -2228,10 +2198,12 @@ def memory_status_from_proposals(run_dir: Path) -> dict[str, int | str | None]:
 
 
 def memory_state(project_dir: Path, run_dir: Path | None) -> dict[str, Any]:
-    ensure_project_memory(project_dir)
+    memory_path = durable_memory_path(project_dir)
+    memory_missing = not memory_path.exists()
     items = durable_memory_items(project_dir)
     state: dict[str, Any] = {
-        "durable_path": str(durable_memory_path(project_dir)),
+        "durable_path": str(memory_path),
+        "durable_status": "missing" if memory_missing else "present",
         "durable_items": memory_item_count(items),
         "sections": {section: len(values) for section, values in items.items()},
         "run_snapshot": str(run_dir / "memory.md") if run_dir is not None else None,
@@ -4816,6 +4788,7 @@ def create_run(
         issue=legacy_issue,
         base_commit=legacy_base_commit,
     )
+    refresh_legacy_validation_cache(legacy_dir, LEGACY_ARTIFACT_NAMES)
 
     updated_config = dict(config)
     updated_config["current_run_id"] = run_id
@@ -6875,6 +6848,11 @@ def verify_run(
             message="LoopForge verification refused by the autonomy profile.",
             blockers=profile_blockers,
             verification=verification_state(run),
+        )
+    legacy = run.get("legacy")
+    if isinstance(legacy, dict) and isinstance(legacy.get("artifact_dir"), str):
+        refresh_legacy_validation_cache(
+            Path(legacy["artifact_dir"]).expanduser(), LEGACY_ARTIFACT_NAMES
         )
     started = utc_now()
     patch_dir = run_dir / "artifacts" / "patches"
