@@ -337,25 +337,6 @@ def print_native_artifacts(state: dict[str, object] | None) -> None:
         print(f"native missing directories: {', '.join(str(name) for name in missing_directories)}")
 
 
-def print_legacy_artifacts(state: dict[str, object] | None) -> None:
-    if state is None:
-        return
-    print(f"legacy artifacts: {state['status']}")
-    print(f"legacy issue: {state.get('issue') or 'none'}")
-    print(f"legacy artifact directory: {state.get('artifact_dir') or 'none'}")
-    errors = state.get("errors", [])
-    if errors:
-        print("legacy artifact notes:")
-        for error in errors:
-            if isinstance(error, dict):
-                artifact = error.get("artifact", "*")
-                rule = error.get("rule", "note")
-                message = error.get("message", error)
-                print(f"- {artifact} {rule}: {message}")
-            else:
-                print(f"- {error}")
-
-
 def print_loop_contract(state: dict[str, object] | None) -> None:
     if state is None:
         return
@@ -1016,7 +997,6 @@ def status_payload(project_dir: Path) -> dict[str, object]:
         "next_step": result.next_step,
         "blockers": result.blockers,
         "native_artifacts": result.native_artifacts,
-        "legacy_artifacts": result.legacy_artifacts,
         "loop_contract": result.loop_contract,
         "verification": result.verification,
         "memory": result.memory,

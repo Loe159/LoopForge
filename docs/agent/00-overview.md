@@ -14,10 +14,10 @@ artifact. The persisted workflow and its approval gates live in
   entry point are in `pyproject.toml`.
 - `loopforge = loopforge.cli:main`; the public facade is
   `src/loopforge/cli/__init__.py`.
-- Runtime dependencies are `prompt_toolkit` and `rich` (`pyproject.toml`),
-  both with reduced fallbacks in the CLI UI/shell.
-- Interactive TTY sessions open the `prompt_toolkit` full-screen console by
-  default (`cli/tui.py`). `shell --command` and `--script` remain headless;
+- Runtime dependencies are `textual`, `prompt_toolkit`, and `rich`
+  (`pyproject.toml`).
+- Interactive TTY sessions open the Textual full-screen console by default
+  (`cli/tui.py`). `shell --command` and `--script` remain headless;
   `--plain` uses the prompt-based compatibility surface.
 - Tests are `unittest` suites under `tests/`; no database, HTTP server,
   container definition, Makefile, or GitHub Actions workflow was found.
@@ -31,7 +31,7 @@ artifact. The persisted workflow and its approval gates live in
 | `src/loopforge/cli/` | CLI facade, parser, handlers, shared presentation/actions, TUI, evidence, operations, and rendering |
 | `src/loopforge/engine/` | Workflow API plus JSON storage, project registry, pack registry, and metrics service |
 | `src/loopforge/checks/`, `adapters/` | Packaged deterministic checks and local implementation adapter |
-| `src/loopforge/contracts/`, `templates/`, `packs/` | Policies/schemas, legacy templates, and bundled packs with skills, agents, permissions, workflows, checks, and protected paths |
+| `src/loopforge/contracts/`, `packs/` | Policies/schemas and bundled packs with skills, agents, permissions, workflows, checks, and protected paths |
 | `.agent/` | Compatibility launchers for migrated scripts and remaining inherited bootstrap material |
 | `tests/` | CLI integration, CLI-boundary, and engine-service coverage |
 | `docs/agent/` | Maintained audit and future-agent instructions |

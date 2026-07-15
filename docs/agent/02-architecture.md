@@ -20,7 +20,7 @@ There are three interaction surfaces after engine calls:
 
 - one-shot commands dispatched by `LoopForgeCli` and rendered through
   `TerminalRenderer` (`cli/app.py`, `cli/workflow.py`, `cli/ui.py`);
-- the default `prompt_toolkit` full-screen console (`cli/tui.py`), fed by the
+- the default Textual full-screen console (`cli/textual_app/`), fed by the
   immutable `ShellSnapshot`/`ActionDescriptor` presentation layer;
 - a prompt-based slash-command compatibility surface for `--plain` sessions
   (`cli/interactive.py`). `shell --command` and `--script` stay headless.
@@ -74,7 +74,7 @@ are compatibility launchers.
 
 `new_config` creates a `project_id`, id-keyed run/workspace roots, and one
 `current_run_id` in project-local config. `engine/projects.py` registers the
-canonical path and last-known attention under `LOOPFORGE_HOME`, migrates legacy
+canonical path and last-known attention under `LOOPFORGE_HOME`, migrates prior
 basename roots without deleting them, and rejects ambiguous moved/clone ids.
 `list_registered_projects` and `list_runs_all_projects` are the global query
 boundary used by text commands and the TUI home screen.

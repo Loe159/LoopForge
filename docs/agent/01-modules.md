@@ -10,7 +10,7 @@
 | CLI experience | `cli/ui.py`, `presentation.py`, `actions.py`, `interactive.py`, `tui.py`, `evidence.py`, `operations.py` | Text rendering, shared state/action view models, headless slash compatibility, the default full-screen console, evidence previews, and foreground-operation events. |
 | Engine facade | `engine/__init__.py` | Config, runs, lifecycle state, workspaces, adapters, verification, memory, metrics wrappers, and local draft preparation. It owns persisted lifecycle transitions. |
 | Engine services | `engine/storage.py`, `projects.py`, `packs.py`, `metrics.py` | Atomic JSON objects, project identity/registry/migration, pack discovery/validation, and unknown-safe metric aggregation. |
-| Packaged runtime | `checks/`, `adapters/`, `contracts/`, `templates/` | Executable deterministic checks, local adapter, policy/schema paths, and legacy artifact templates. |
+| Packaged runtime | `checks/`, `adapters/`, `contracts/` | Executable deterministic checks, local adapter, and policy/schema paths. |
 | Bundled packs | `packs/<name>/` | Inheritable pack metadata plus skills, agents, permission sets, workflow stages, checks, protected paths, and memory rules. Project-local homonyms take precedence. |
 
 ## CLI handler ownership
@@ -31,7 +31,7 @@ Handlers resolve dependencies through `CliContext.api`, the injected
 The headless interactive shell has a compatibility dispatch surface in
 `cli/interactive.py`: `SUPPORTED_COMMANDS`, `COMMAND_GROUPS`,
 `InteractiveShell.dispatch`, and `cmd_<name>` methods. The default TTY surface
-is `LoopForgeConsole` in `cli/tui.py`; it consumes `ShellSnapshot` and
+is `LoopForgeApp` in `cli/textual_app/`; it consumes `ShellSnapshot` and
 `ActionDescriptor` values rather than persisted run dictionaries directly.
 
 ## Engine ownership
@@ -53,7 +53,7 @@ the source for stage titles, actors, permissions, skills, and checks; UI code
 should not hard-code a second workflow catalog.
 
 `engine/projects.py` owns project identifiers, registry records, moved/clone
-handling, legacy-root migration, and global summaries. CLI/TUI code must call
+handling, prior-root migration, and global summaries. CLI/TUI code must call
 the exported engine APIs rather than scan `LOOPFORGE_HOME` itself.
 
 ## Compatibility material

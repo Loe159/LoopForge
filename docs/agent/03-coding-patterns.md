@@ -25,9 +25,9 @@
   `print_json_payload`; table commands share the facade’s table helpers.
 - Use `TerminalRenderer` and `render_*` helpers in `cli/ui.py`; preserve
   quiet, no-color, JSON/CSV, and stdout/stderr behavior.
-- `prompt_toolkit` owns the default full-screen layout in `cli/tui.py`;
+- Textual owns the default full-screen layout in `cli/textual_app/`;
   `TerminalRenderer` owns one-shot Rich/plain output. `--plain` retains the
-  `PromptSession` compatibility prompt in `cli/interactive.py`. Do not add
+  `PromptSession` prompt in `cli/interactive.py`. Do not add
   direct ANSI output or another live renderer.
 - Build UI state with `shell_snapshot`, `stage_views`, and
   `ActionDescriptor`, then execute through engine APIs. Reuse semantic roles

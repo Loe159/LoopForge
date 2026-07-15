@@ -59,12 +59,12 @@ Use one action and view-model layer, then render it in two ways:
 
 | Mode | Owner | Use |
 | --- | --- | --- |
-| Interactive TUI | `prompt_toolkit` | Full-screen layout, focus, keyboard input, selectors, dialogs, live operations |
+| Interactive TUI | Textual | Full-screen layout, focus, keyboard input, selectors, dialogs, live operations |
 | Text CLI | Rich through `TerminalRenderer` | One-shot commands, CI, redirected output, human summaries |
 | Machine output | JSON/CSV serializers | Automation; never includes ANSI, loaders, prompts, or decorative text |
 
-Do not let Rich and `prompt_toolkit` both own the live screen. In the TUI,
-`prompt_toolkit` owns layout and refresh. Rich remains the renderer for
+Do not let Rich and Textual both own the live screen. In the TUI,
+Textual owns layout and refresh. Rich remains the renderer for
 one-shot terminal output.
 
 ### 2. Make navigation primary and commands secondary

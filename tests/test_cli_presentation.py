@@ -59,7 +59,6 @@ class CliPresentationTests(unittest.TestCase):
                 "stage_statuses": {"task": "approved", "research": "complete", "plan": "awaiting_approval"},
             },
             native_artifacts=None,
-            legacy_artifacts=None,
             loop_contract=None,
             verification=None,
             memory=None,
@@ -143,7 +142,7 @@ class CliPresentationTests(unittest.TestCase):
         after_navigation = store.snapshot
         discarded = store.publish_loaded(late_load, status, runs, projects)
 
-        self.assertEqual(discarded.selected_project, other_project)
+        self.assertEqual(discarded.selected_project, other_project.resolve())
         self.assertEqual(discarded.revision, after_navigation.revision)
 
     def test_state_store_coalesces_operation_events_until_the_ui_turn_flushes(self) -> None:

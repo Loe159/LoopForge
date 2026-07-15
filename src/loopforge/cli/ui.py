@@ -182,7 +182,7 @@ def compact_path(value: object, *, project_dir: Path | None = None) -> str:
     path = Path(str(value))
     if project_dir is not None:
         try:
-            return str(path.resolve().relative_to(project_dir.resolve()))
+            return path.resolve().relative_to(project_dir.resolve()).as_posix()
         except (OSError, ValueError):
             pass
     return str(path)
@@ -359,20 +359,10 @@ def format_status_lines(result: Any, guidance: Any, *, details: bool = False) ->
 
 def _append_artifact_attention(lines: list[str], result: Any) -> None:
     native = result.native_artifacts or {}
-    legacy = result.legacy_artifacts or {}
     if native.get("status") not in {None, "complete"}:
         lines.append(
             f"native artifacts: {native.get('status')} ({native.get('present')}/{native.get('total')})"
         )
-    if legacy.get("status") not in {None, "valid"}:
-        lines.append(f"legacy artifacts: {legacy.get('status')}")
-        errors = legacy.get("errors", [])
-        for error in errors:
-            if isinstance(error, dict):
-                message = error.get("message", error)
-                lines.append(f"- {message}")
-            else:
-                lines.append(f"- {error}")
 
 
 def _status_detail_lines(result: Any) -> list[str]:
@@ -420,7 +410,6 @@ def _status_detail_lines(result: Any) -> list[str]:
 
     lines.extend(_native_artifact_lines(result.native_artifacts))
     lines.extend(_loop_contract_lines(result.loop_contract))
-    lines.extend(_legacy_artifact_lines(result.legacy_artifacts))
     lines.extend(_verification_lines(result.verification))
     lines.extend(_memory_lines(result.memory))
     return lines
@@ -438,28 +427,6 @@ def _native_artifact_lines(state: dict[str, object] | None) -> list[str]:
         lines.append(
             f"native missing directories: {', '.join(str(name) for name in missing_directories)}"
         )
-    return lines
-
-
-def _legacy_artifact_lines(state: dict[str, object] | None) -> list[str]:
-    if state is None:
-        return []
-    lines = [
-        f"legacy artifacts: {state['status']}",
-        f"legacy issue: {state.get('issue') or 'none'}",
-        f"legacy artifact directory: {state.get('artifact_dir') or 'none'}",
-    ]
-    errors = state.get("errors", [])
-    if errors:
-        lines.append("legacy artifact notes:")
-        for error in errors:
-            if isinstance(error, dict):
-                artifact = error.get("artifact", "*")
-                rule = error.get("rule", "note")
-                message = error.get("message", error)
-                lines.append(f"- {artifact} {rule}: {message}")
-            else:
-                lines.append(f"- {error}")
     return lines
 
 

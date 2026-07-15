@@ -52,7 +52,7 @@ incorrect when a child or project-local pack overrides data.
 **Paths:** `src/loopforge/engine/projects.py`, `engine/__init__.py`
 (`new_config`, `normalize_config`, run/workspace roots, project APIs).
 
-External data is keyed by generated project id and legacy basename roots can be
+External data is keyed by generated project id and prior basename roots can be
 migrated. Changing this contract can orphan runs, merge moved/cloned projects,
 or make `current_run_id` point at a different root. Preserve non-destructive
 migration and registry conflict handling; test two same-named repositories.

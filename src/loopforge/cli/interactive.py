@@ -1909,6 +1909,7 @@ class InteractiveShell:
             f"initialized: {status.initialized}",
             f"prompt_toolkit: {'available' if deps['prompt_toolkit'] else 'missing'}",
             f"rich: {'available' if deps['rich'] else 'missing'}",
+            f"textual: {'available' if deps['textual'] else 'missing'}",
             f"selected adapter: {self.selected_adapter}",
             "selected adapter args: " + " ".join(self.selected_adapter_args),
             f"renderer: {self.renderer_mode}",
@@ -1991,9 +1992,10 @@ class InteractiveShell:
 
     def run_prompt(self, *, interactive_ui: bool = True) -> int:
         deps = tui_dependency_state()
-        required = ("prompt_toolkit", "rich")
-        if os.environ.get("LOOPFORGE_TUI_BACKEND", "legacy").strip().lower() == "textual":
-            required = ("textual",)
+        required = ("textual",) if interactive_ui and self.renderer_mode != "plain" else (
+            "prompt_toolkit",
+            "rich",
+        )
         missing = [name for name in required if not deps[name]]
         if missing:
             self.write(
@@ -2007,8 +2009,6 @@ class InteractiveShell:
             )
             return 1
 
-        # The full-screen interface is opt-in for this release.  ``--command``
-        # and ``--script`` always remain on the compatibility dispatcher.
         if interactive_ui and self.renderer_mode != "plain":
             from loopforge.cli.tui import run_fullscreen_console
 

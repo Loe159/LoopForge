@@ -69,7 +69,6 @@ def status_and_guidance(case: dict[str, object], workflow: list[object]) -> tupl
         run_json_path=None,
         run=run,
         native_artifacts={"status": "complete", "present": 1, "total": 1} if run else None,
-        legacy_artifacts={"status": "valid", "errors": []} if run else None,
         loop_contract={"success_checks": ["targeted test"]} if run else None,
         verification=verification,
         memory=None,
@@ -152,7 +151,7 @@ class CliUxPhaseZeroTests(unittest.TestCase):
         }
         self.assertEqual(observed, expected)
 
-    def test_same_named_project_fixtures_record_the_legacy_collision(self) -> None:
+    def test_same_named_project_fixtures_record_the_basename_collision(self) -> None:
         projects = [
             FIXTURE_ROOT / "projects" / "same-name-a" / "LoopForge",
             FIXTURE_ROOT / "projects" / "same-name-b" / "LoopForge",

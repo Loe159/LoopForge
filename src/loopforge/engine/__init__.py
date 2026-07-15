@@ -23,10 +23,6 @@ from loopforge.engine.storage import DEFAULT_JSON_STORE
 from loopforge.engine import projects as project_registry
 from loopforge.engine import indexes as run_indexes
 from loopforge.engine.git_state import DEFAULT_GIT_STATE_SERVICE
-from loopforge.engine.validation import (
-    cached_legacy_validation_state,
-    refresh_legacy_validation_cache,
-)
 
 CONFIG_DIR = ".loopforge"
 CONFIG_FILE = "config.json"
@@ -42,7 +38,6 @@ LOOP_CONTRACT_DRAFT = "loop_contract_draft"
 LOOP_CONTRACT_READY = "loop_contract_ready"
 VERIFIED = "verified"
 VERIFICATION_FAILED = "verification_failed"
-SYNTHETIC_LEGACY_BASE_COMMIT = "0" * 40
 METRICS_RECORD_FILE = "record.json"
 USER_PREFERENCES_FILE = "preferences.json"
 
@@ -138,15 +133,6 @@ NATIVE_RUN_DIRECTORIES = (
     "attempts",
     "artifacts",
     "metrics",
-)
-
-LEGACY_ARTIFACT_NAMES = (
-    "task.md",
-    "research.md",
-    "plan.md",
-    "progress.md",
-    "verification.md",
-    "review.md",
 )
 
 REQUIRED_LOOP_SECTIONS = (
@@ -463,7 +449,6 @@ class StatusResult:
     run_json_path: Path | None
     run: dict[str, Any] | None
     native_artifacts: dict[str, Any] | None
-    legacy_artifacts: dict[str, Any] | None
     loop_contract: dict[str, Any] | None
     verification: dict[str, Any] | None
     memory: dict[str, Any] | None
@@ -670,9 +655,6 @@ def loopforge_home(home: Path | None = None) -> Path:
     configured_home = os.environ.get("LOOPFORGE_HOME")
     if configured_home:
         return Path(configured_home).expanduser()
-    legacy_home = Path.home() / "LoopForge"
-    if legacy_home.exists():
-        return legacy_home
     return platform_data_home() / "loopforge"
 
 
@@ -1025,6 +1007,12 @@ def validate_task_definition(
 
 def normalize_run_workflow_state(run: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(run)
+    normalized.pop("legacy", None)
+    artifacts = normalized.get("artifacts")
+    if isinstance(artifacts, dict):
+        normalized["artifacts"] = {
+            key: value for key, value in artifacts.items() if key != "legacy_agent"
+        }
     defaults = initial_workflow_state()
 
     current_stage = normalized.get("current_stage")
@@ -1259,14 +1247,6 @@ def repository_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
-def legacy_templates_dir() -> Path:
-    return Path(__file__).resolve().parents[1] / "templates" / "legacy"
-
-
-def legacy_artifact_validator() -> Path:
-    return Path(__file__).resolve().parents[1] / "checks" / "validate_artifacts.py"
-
-
 def local_implementation_adapter() -> Path:
     return Path(__file__).resolve().parents[1] / "adapters" / "local_implementation_adapter.py"
 
@@ -1398,97 +1378,6 @@ def usable_python_executable() -> str:
         "no usable Python executable found for isolated adapter execution; "
         "set LOOPFORGE_PYTHON to a real python.exe outside WindowsApps."
     )
-
-
-def legacy_issue_for_task(task_id: str) -> int:
-    digits = "".join(character for character in task_id if character.isdigit())
-    if digits:
-        return int(digits[:12])
-    return 1
-
-
-def render_legacy_template(template: str, values: dict[str, str]) -> str:
-    rendered = template
-    for key, value in values.items():
-        rendered = rendered.replace(f"{{{{{key}}}}}", value)
-    return rendered
-
-
-def legacy_template_text(name: str) -> str:
-    path = legacy_templates_dir() / name
-    if not path.exists():
-        raise FileNotFoundError(f"legacy artifact template not found: {path}")
-    return path.read_text(encoding="utf-8")
-
-
-def create_legacy_artifacts(
-    legacy_dir: Path,
-    *,
-    task: str,
-    issue: int,
-    base_commit: str,
-) -> None:
-    legacy_dir.mkdir(parents=True, exist_ok=True)
-    values = {
-        "issue": str(issue),
-        "base_commit": base_commit,
-        "risk": "low",
-        "goal": task,
-        "expected_behavior": "LoopForge records the task without requiring GitHub.",
-        "acceptance_criteria": "The native run exists and the legacy artifacts validate.",
-        "constraints": "Keep this artifact set for imported validator compatibility only.",
-        "out_of_scope": "Publishing, GitHub issue ingestion, or adapter execution.",
-        "scope": "Compatibility scaffold for the imported portable artifact contract.",
-        "current_state": "No separate research is required for run initialization.",
-        "evidence": "Native run metadata is stored in run.json.",
-        "risks_and_unknowns": "The legacy issue value is a generated compatibility mapping.",
-        "rejected_approaches": "Do not make GitHub issue IDs mandatory for native runs.",
-        "suggested_verification": "Run the imported artifact validator against this directory.",
-        "overview": "Create a product-native LoopForge run with a legacy validation mirror.",
-        "preconditions": "LoopForge project configuration exists.",
-        "implementation_steps": (
-            "Create native run files, create directories, and write legacy artifacts."
-        ),
-        "files_in_scope": "The external run directory.",
-        "verification": "Validate the legacy artifact directory with validate_artifacts.py.",
-        "stop_conditions": "Stop before external side effects or destructive filesystem actions.",
-        "completed": "The run has been initialized.",
-        "remaining": "No adapter attempts have run yet.",
-        "decisions": "Use task_id natively and generated numeric issue only for legacy tools.",
-        "blockers": "None.",
-        "next_step": "Inspect run.json and choose the next bounded action.",
-        "candidate": "No implementation candidate exists yet.",
-        "deterministic_checks": "Legacy artifact contract validation.",
-        "policy_result": "Not evaluated yet.",
-        "risk_classification": "Low for initialization scaffold.",
-        "residual_risks": "Legacy artifacts are compatibility metadata, not publication authority.",
-        "findings": "No review has run yet.",
-        "plan_conformance": "No approved plan exists yet.",
-        "test_coverage": "Initial CLI tests cover run creation.",
-        "recommendation": "Continue with LoopForge-native planning.",
-    }
-    statuses = {
-        "task.md": "approved",
-        "research.md": "not_required",
-        "plan.md": "awaiting_approval",
-        "progress.md": "not_started",
-        "verification.md": "pending",
-        "review.md": "pending",
-    }
-    for name in LEGACY_ARTIFACT_NAMES:
-        text = render_legacy_template(legacy_template_text(name), values)
-        text = text.replace(
-            {
-                "task.md": "status: awaiting_approval",
-                "research.md": "status: pending",
-                "plan.md": "status: awaiting_approval",
-                "progress.md": "status: not_started",
-                "verification.md": "status: pending",
-                "review.md": "status: pending",
-            }[name],
-            f"status: {statuses[name]}",
-        )
-        (legacy_dir / name).write_text(text, encoding="utf-8")
 
 
 def native_artifact_state(run_dir: Path) -> dict[str, Any]:
@@ -1704,39 +1593,6 @@ def positive_int_after_colon(text: str) -> int | None:
     if parsed < 1:
         return None
     return parsed
-
-
-def legacy_artifact_state(run: dict[str, Any]) -> dict[str, Any]:
-    legacy = run.get("legacy", {})
-    if not isinstance(legacy, dict):
-        legacy = {}
-    artifact_dir_text = legacy.get("artifact_dir")
-    if not isinstance(artifact_dir_text, str) or not artifact_dir_text:
-        return {
-            "status": "missing",
-            "artifact_dir": None,
-            "issue": legacy.get("issue"),
-            "base_commit": legacy.get("base_commit"),
-            "errors": ["run.json does not declare legacy.artifact_dir"],
-        }
-
-    artifact_dir = Path(artifact_dir_text).expanduser()
-    missing = [name for name in LEGACY_ARTIFACT_NAMES if not (artifact_dir / name).is_file()]
-    if missing:
-        return {
-            "status": "missing",
-            "artifact_dir": str(artifact_dir),
-            "issue": legacy.get("issue"),
-            "base_commit": legacy.get("base_commit"),
-            "errors": [f"missing legacy artifacts: {', '.join(missing)}"],
-        }
-
-    state = cached_legacy_validation_state(artifact_dir, LEGACY_ARTIFACT_NAMES)
-    return {
-        **state,
-        "issue": legacy.get("issue"),
-        "base_commit": legacy.get("base_commit"),
-    }
 
 
 def verification_state(run: dict[str, Any]) -> dict[str, Any] | None:
@@ -2912,7 +2768,6 @@ def current_status(project_dir: Path) -> StatusResult:
             run_json_path=None,
             run=None,
             native_artifacts=None,
-            legacy_artifacts=None,
             loop_contract=None,
             verification=None,
             memory=None,
@@ -2932,7 +2787,6 @@ def current_status(project_dir: Path) -> StatusResult:
             run_json_path=None,
             run=None,
             native_artifacts=None,
-            legacy_artifacts=None,
             loop_contract=None,
             verification=None,
             memory=memory_state(project_dir, None),
@@ -2952,7 +2806,6 @@ def current_status(project_dir: Path) -> StatusResult:
             run_json_path=run_json_path,
             run=None,
             native_artifacts=native_artifact_state(run_dir) if run_dir.exists() else None,
-            legacy_artifacts=None,
             loop_contract=loop_contract_state(run_dir / "loop.md") if run_dir.exists() else None,
             verification=None,
             memory=memory_state(project_dir, run_dir) if run_dir.exists() else None,
@@ -2976,7 +2829,6 @@ def current_status(project_dir: Path) -> StatusResult:
         run_json_path=run_json_path,
         run=run,
         native_artifacts=native_artifact_state(run_dir),
-        legacy_artifacts=legacy_artifact_state(run),
         loop_contract=contract,
         verification=verification_state(run),
         memory=memory_state(project_dir, run_dir),
@@ -3548,7 +3400,6 @@ def list_runs(project_dir: Path) -> RunListResult:
         run_json_path=None,
         run=None,
         native_artifacts=None,
-        legacy_artifacts=None,
         loop_contract=None,
         verification=None,
         memory=None,
@@ -4764,7 +4615,6 @@ def create_run(
     attempts_dir = run_dir / "attempts"
     artifacts_dir = run_dir / "artifacts"
     metrics_dir = run_dir / "metrics"
-    legacy_dir = artifacts_dir / "legacy-agent"
     for directory in (attempts_dir, artifacts_dir, metrics_dir):
         directory.mkdir(parents=True, exist_ok=False)
 
@@ -4778,8 +4628,6 @@ def create_run(
         project_id=str(config.get("project_id") or "") or None,
     )
     task_id = run_id
-    legacy_issue = legacy_issue_for_task(task_id)
-    legacy_base_commit = base_commit or SYNTHETIC_LEGACY_BASE_COMMIT
     normalized_success_checks = normalize_nonempty_strings(success_checks)
     if pack is None:
         pack_contract = detect_project_pack(project_dir)
@@ -4888,15 +4736,6 @@ def create_run(
             "attempts": str(attempts_dir),
             "artifacts": str(artifacts_dir),
             "metrics": str(metrics_dir),
-            "legacy_agent": str(legacy_dir),
-        },
-        "legacy": {
-            "issue": legacy_issue,
-            "issue_source": "generated_from_task_id",
-            "base_commit": legacy_base_commit,
-            "base_commit_source": "git" if base_commit else "synthetic_no_git_sentinel",
-            "artifact_dir": str(legacy_dir),
-            "validator": str(legacy_artifact_validator()),
         },
     }
     if source_metadata:
@@ -4976,14 +4815,6 @@ def create_run(
             "open_questions": [],
         },
     )
-    create_legacy_artifacts(
-        legacy_dir,
-        task=task.strip(),
-        issue=legacy_issue,
-        base_commit=legacy_base_commit,
-    )
-    refresh_legacy_validation_cache(legacy_dir, LEGACY_ARTIFACT_NAMES)
-
     updated_config = dict(config)
     updated_config["current_run_id"] = run_id
     updated_config["updated_at"] = now
@@ -5288,27 +5119,16 @@ def session_hash(seed: dict[str, Any], label: str) -> str:
 
 
 def expected_session_for(run: dict[str, Any], adapter: str, workspace_dir: Path) -> dict[str, Any]:
-    legacy = run.get("legacy", {})
-    if not isinstance(legacy, dict):
-        legacy = {}
-    issue = legacy.get("issue")
-    if not isinstance(issue, int) or isinstance(issue, bool) or issue < 1:
-        issue = legacy_issue_for_task(str(run.get("task_id") or run.get("run_id") or "1"))
-    base_commit = legacy.get("base_commit")
-    if not isinstance(base_commit, str) or len(base_commit) != 40:
-        base_commit = run.get("base_commit") or SYNTHETIC_LEGACY_BASE_COMMIT
     seed = {
-        "issue": issue,
-        "base_commit": base_commit,
+        "base_commit": run.get("base_commit"),
         "run_id": run.get("run_id"),
         "task_id": run.get("task_id"),
         "adapter": adapter,
         "workspace": str(workspace_dir.resolve()),
     }
     return {
-        "issue": issue,
         "risk": "low",
-        "base_commit": base_commit,
+        "base_commit": run.get("base_commit"),
         "workspace": str(workspace_dir.resolve()),
         "runner_id": adapter,
         "preflight_sha256": session_hash(seed, "preflight"),
@@ -7040,11 +6860,6 @@ def verify_run(
             message="LoopForge verification refused by the autonomy profile.",
             blockers=profile_blockers,
             verification=verification_state(run),
-        )
-    legacy = run.get("legacy")
-    if isinstance(legacy, dict) and isinstance(legacy.get("artifact_dir"), str):
-        refresh_legacy_validation_cache(
-            Path(legacy["artifact_dir"]).expanduser(), LEGACY_ARTIFACT_NAMES
         )
     started = utc_now()
     patch_dir = run_dir / "artifacts" / "patches"

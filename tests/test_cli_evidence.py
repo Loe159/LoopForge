@@ -2,12 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from types import SimpleNamespace
-from unittest.mock import patch
 import unittest
 
 from loopforge.cli.evidence import EvidenceIndex, approval_summary, evidence_items, preview_evidence
-from loopforge.cli.tui import LoopForgeConsole
+from unittest.mock import patch
 
 
 class EvidenceViewerTests(unittest.TestCase):
@@ -119,36 +117,6 @@ class EvidenceViewerTests(unittest.TestCase):
             self.assertIn("Verification: passed.", review.lines)
             self.assertIn("2 review findings recorded.", review.lines)
             self.assertIn("Recorded risk: low.", review.lines)
-
-    def test_console_opens_searches_and_exports_selected_evidence(self) -> None:
-        with TemporaryDirectory() as temporary:
-            run_dir = Path(temporary)
-            source = run_dir / "artifacts" / "attempts" / "stderr.txt"
-            source.parent.mkdir(parents=True)
-            source.write_text("adapter blocked by a check", encoding="utf-8")
-            shell = SimpleNamespace(project_dir=run_dir, copy_to_clipboard=lambda text: False)
-            console = LoopForgeConsole(shell)
-            console.state.screen = "evidence"
-            console.state.evidence_query = "blocked"
-            status = SimpleNamespace(run_dir=run_dir, run={})
-
-            console._statuses[run_dir.resolve()] = status
-            console._load_evidence_snapshot(run_dir)
-            index = console._evidence[run_dir.resolve()]
-            console.state.evidence_results = tuple(index.search_batches("blocked", batch_size=1))[-1]
-            console.state.evidence_searching = False
-            fragments = console._evidence_fragments()
-            self.assertIn("stderr.txt", "".join(text for _, text in fragments))
-            console._open_selected_evidence()
-            self.assertTrue(console.state.evidence_preview)
-            exported = console._export_evidence_item(console._selected_evidence_item())
-
-            self.assertEqual(exported, Path("artifacts/exports/stderr-evidence.txt"))
-            self.assertEqual(
-                (run_dir / exported).read_text(encoding="utf-8"),
-                "adapter blocked by a check",
-            )
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -48,8 +48,8 @@ SnapshotListener = Callable[[UiSnapshot], None]
 class StateStore:
     """Own read models and publish only observable state changes.
 
-    ``refresh`` is intentionally synchronous for the legacy backend.  A future
-    backend may call :meth:`begin_load` in a worker and then use
+    ``refresh`` is intentionally synchronous. A Textual worker may call
+    :meth:`begin_load` and then use
     :meth:`publish_loaded` on its UI thread.  The identity guard discards a
     late result after navigation.
     """

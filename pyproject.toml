@@ -6,8 +6,8 @@ requires-python = ">=3.11"
 dependencies = [
   "prompt_toolkit>=3.0",
   "rich>=13.0",
-  # Phase-7 Textual foundation uses App workers, Pilot tests, and the command
-  # palette APIs verified against Textual 8.x.
+  # The Textual full-screen application uses App workers, Pilot tests, and the
+  # command palette APIs verified against Textual 8.x.
   "textual>=8.0,<9",
 ]
 
@@ -23,7 +23,6 @@ loopforge = [
   "packs/*/*.md",
   "packs/*/agents/*.md",
   "packs/*/skills/*/*.md",
-  "templates/legacy/*.md",
   "cli/textual_app/*.tcss",
 ]
 

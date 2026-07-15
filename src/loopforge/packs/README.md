@@ -18,7 +18,7 @@ the `generic-code` base with `"extends": "generic-code"`.
   memory-rules.md
 ```
 
-Only `pack.json` is mandatory for legacy and minimal packs. Once a contribution
+Only `pack.json` is mandatory for minimal packs. Once a contribution
 file or skills directory is declared, `PackRegistry` validates that it exists
 and that agent, permission-set, prompt, skill, and workflow-stage references are
 consistent. The resolved contract is stored in `run.json`, so a run remains

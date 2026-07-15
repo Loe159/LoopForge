@@ -3,7 +3,7 @@
     "command": ["status", "--format", "json"],
     "exit_code": 0,
     "top_level_keys": ["guidance", "ok", "status"],
-    "status_keys": ["blockers", "config", "config_path", "initialized", "legacy_artifacts", "loop_contract", "memory", "native_artifacts", "next_step", "project_dir", "run", "run_dir", "verification"],
+    "status_keys": ["blockers", "config", "config_path", "initialized", "loop_contract", "memory", "native_artifacts", "next_step", "project_dir", "run", "run_dir", "verification"],
     "guidance_keys": ["blocked_reasons", "diagnostics", "evidence", "priority", "recommended_actions", "summary"]
   },
   "status_no_run": {

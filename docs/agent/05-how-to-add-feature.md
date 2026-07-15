@@ -48,7 +48,7 @@
   current duplication to remove, not a pattern to copy.
 - For multi-project behavior, reuse `engine/projects.py` through its public
   engine APIs. Do not scan storage roots or edit `current_run_id` outside
-  engine APIs. Test moved/clone conflicts and legacy-root migration.
+  engine APIs. Test moved/clone conflicts and prior-root migration.
 
 There are no HTTP endpoints, database entities/migrations, background jobs, or
 remote publication flows in the current codebase; do not scaffold them without
