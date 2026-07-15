@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "permission_sets": {
+    "read-only": {
+      "filesystem": {"read": ["{workspace}/**", "{run_dir}/**"], "write": []},
+      "git": ["status", "diff", "log", "show", "ls-files", "grep"],
+      "commands": "bounded local inspection commands",
+      "network": "deny",
+      "external_write": "deny",
+      "publication": "deny"
+    },
+    "workspace-write": {
+      "filesystem": {
+        "read": ["{workspace}/**", "{run_dir}/**"],
+        "write": ["{workspace}/**", "{run_dir}/progress.md", "{run_dir}/scratch.md"]
+      },
+      "git": ["status", "diff", "log", "show", "ls-files", "grep", "add", "commit-local"],
+      "commands": "bounded local build, lint, and test commands",
+      "network": "deny-by-default",
+      "external_write": "deny",
+      "publication": "deny",
+      "forbidden": ["git push", "git merge", "gh pr create", "deploy", "release"]
+    },
+    "deterministic-validator": {
+      "filesystem": {
+        "read": ["{workspace}/**", "{run_dir}/**"],
+        "write": ["{run_dir}/verification.md", "{run_dir}/artifacts/**"]
+      },
+      "commands": "pack checks only",
+      "network": "deny",
+      "external_write": "deny",
+      "publication": "deny"
+    }
+  }
+}

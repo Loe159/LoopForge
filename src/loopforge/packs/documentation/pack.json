@@ -1,10 +1,14 @@
 {
   "name": "documentation",
-  "version": 1,
+  "version": 2,
+  "extends": "generic-code",
   "description": "Documentation-focused project conventions.",
   "priority": 5,
   "detection": {
     "files_any": ["mkdocs.yml", "docs/conf.py"]
   },
-  "skills": ["documentation-review"]
+  "skills": ["documentation-review"],
+  "skill_file": "SKILL.md",
+  "skills_dir": "skills",
+  "checks_file": "checks.json"
 }

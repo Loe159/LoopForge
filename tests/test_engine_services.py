@@ -7,7 +7,7 @@ from pathlib import Path
 
 from loopforge.adapters import local_implementation_adapter
 from loopforge.contracts import policy_path
-from loopforge.checks import diff_policy
+from loopforge.checks import diff_policy, isolated_process
 from loopforge.engine.metrics import MetricsService
 from loopforge.engine.packs import PackRegistry
 from loopforge.engine.storage import JsonStore
@@ -48,8 +48,95 @@ class PackagedRuntimeLayoutTests(unittest.TestCase):
         )
         self.assertTrue(policy_path("diff-policy.json").is_file())
 
+    def test_isolated_environment_prefers_canonical_allowed_variable_names(self) -> None:
+        policy = isolated_process.load_policy()
+
+        selected = isolated_process.select_allowed_parent_environment(
+            {
+                "path": "lower",
+                "PATH": "canonical",
+                "HTTPS_PROXY": "secret-boundary",
+            },
+            policy,
+        )
+
+        self.assertEqual(selected, {"PATH": "canonical"})
+
 
 class PackRegistryTests(unittest.TestCase):
+    def test_bundled_python_pack_inherits_skills_agents_permissions_and_workflow(self) -> None:
+        package_root = Path(__file__).resolve().parents[1] / "src" / "loopforge"
+        registry = PackRegistry(
+            package_root,
+            bundled_root=package_root,
+            bundled_packs_root=package_root / "packs",
+            store=JsonStore(),
+        )
+
+        contract = registry.load_contract("python")
+
+        self.assertEqual(contract["inherited_from"], ["generic-code"])
+        self.assertEqual(len(contract["agents"]), 4)
+        self.assertEqual(set(contract["permission_sets"]), {
+            "read-only",
+            "workspace-write",
+            "deterministic-validator",
+        })
+        self.assertEqual([stage["id"] for stage in contract["workflow"]], [
+            "task",
+            "research",
+            "plan",
+            "implementation",
+            "verification",
+            "review",
+            "publication",
+        ])
+        self.assertIn("repository-research", contract["skills"])
+        self.assertIn("python-testing", contract["skills"])
+        self.assertEqual(len(contract["skill_definition_files"]), 7)
+
+    def test_contract_rejects_agent_with_unknown_permission_set(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pack_dir = root / "project" / ".loopforge" / "packs" / "broken"
+            pack_dir.mkdir(parents=True)
+            (pack_dir / "pack.json").write_text(
+                json.dumps(
+                    {
+                        "name": "broken",
+                        "agents_file": "agents.json",
+                        "permissions_file": "permissions.json",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (pack_dir / "agents.json").write_text(
+                json.dumps(
+                    {
+                        "agents": [
+                            {
+                                "id": "researcher",
+                                "stages": ["research"],
+                                "permission_set": "missing",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (pack_dir / "permissions.json").write_text(
+                json.dumps({"permission_sets": {"read-only": {}}}),
+                encoding="utf-8",
+            )
+            registry = PackRegistry(
+                root / "project",
+                bundled_root=root / "bundled",
+                store=JsonStore(),
+            )
+
+            with self.assertRaisesRegex(ValueError, "unknown permission set missing"):
+                registry.load_contract("broken")
+
     def test_project_local_contract_overrides_bundled_contract(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

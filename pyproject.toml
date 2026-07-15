@@ -15,8 +15,11 @@ loopforge = "loopforge.cli:main"
 loopforge = [
   "contracts/policies/*.json",
   "contracts/schemas/*.json",
+  "packs/*.md",
   "packs/*/*.json",
   "packs/*/*.md",
+  "packs/*/agents/*.md",
+  "packs/*/skills/*/*.md",
   "templates/legacy/*.md",
 ]
 

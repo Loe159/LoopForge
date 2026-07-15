@@ -85,7 +85,7 @@ GLOBAL_FLAGS = {
     "--json",
 }
 TABLE_DEFAULT_COLUMNS = {
-    "pack-list": ["current", "name", "description", "kind", "source"],
+    "pack-list": ["current", "name", "skills", "agents", "stages", "kind"],
     "runs": ["current", "run_id", "status", "task", "pack", "updated_at"],
     "metrics-runs": ["run_id", "duration_seconds", "attempt_count", "patch_size_bytes", "verification", "final_disposition"],
 }
@@ -385,6 +385,15 @@ def print_pack_contract(run: dict[str, object]) -> None:
         print(f"pack skills: {len(skills)}")
         for skill in skills:
             print(f"- {skill}")
+    agents = contract.get("agents", [])
+    if isinstance(agents, list):
+        print(f"pack agents: {len(agents)}")
+        for agent in agents:
+            if isinstance(agent, dict):
+                print(f"- {agent.get('id')}: {agent.get('mode')}")
+    workflow = contract.get("workflow", [])
+    if isinstance(workflow, list):
+        print(f"pack workflow stages: {len(workflow)}")
 
 
 def print_workspace(run: dict[str, object]) -> None:
@@ -1124,9 +1133,9 @@ def maybe_run_readonly_stage_from_cockpit(
             return 0 if result.ok else 1
         if (
             statuses.get("verification") == "complete"
-            and statuses.get("review") not in {"approved", "complete"}
+            and statuses.get("review") == "complete"
         ):
-            if not prompt_yes_no("Approve verified work for review", default=False):
+            if not prompt_yes_no("Approve completed review for draft preparation", default=False):
                 return 0
             result = approve_review(project_dir, source="local")
             render_review_approval_result(

@@ -38,25 +38,47 @@ loopforge completion powershell
 GitHub issue, it creates a run. With an active run and no new source, it resumes
 that run and offers the next eligible stage one step at a time:
 
-1. task approval (`agent:approved` for GitHub issues, local confirmation for
-   manual tasks);
-2. run read-only research and write `research.md`;
-3. run read-only planning and write `plan.md`;
-4. approve the plan before implementation;
-5. execute implementation with `loopforge continue`;
-6. run deterministic verification with `loopforge verify`;
-7. explicit review approval;
-8. prepare a local draft PR publication artifact without pushing or opening a
+1. validate the goal and objective proof, then approve the task
+   (`agent:approved` for GitHub issues, local confirmation for manual tasks);
+2. invoke the read-only `researcher` and validate `research.md`;
+3. invoke the read-only `planner`, validate `plan.md`, then approve the plan;
+4. invoke the workspace-write `developer` with `loopforge continue`;
+5. run deterministic verification with `loopforge verify`;
+6. invoke the read-only `reviewer`, validate `review.md`, then explicitly
+   approve the review;
+7. prepare a local draft PR publication artifact without pushing or opening a
    network PR.
+
+In short: task approval follows deterministic intake validation; read-only
+research precedes read-only planning. Operators approve the plan before implementation,
+and explicit review approval remains separate from the reviewer agent's report.
 
 `loopforge run --no-input` only reports the cockpit state. It never approves a
 gate, executes an adapter, or prepares publication.
 
-Research and plan stages are adapter-fed and checked as read-only against the
-project worktree. Verification produces local evidence for review; it is not
-review approval and does not authorize publication. Publication is limited to a
-deterministic local draft artifact under the run directory. LoopForge does not
-push branches, open PRs, or publish to the network from this workflow.
+Research, plan, and review stages are adapter-fed and checked as read-only
+against the project worktree. Verification produces local evidence for review;
+it is not review approval and does not authorize publication. Publication is
+limited to a deterministic local draft artifact under the run directory.
+LoopForge does not push branches, open PRs, or publish to the network from this
+workflow.
+
+## Packs
+
+A pack is a complete workflow capability, not only a detection rule. Its
+contract can contribute:
+
+- reusable skills under `skills/<skill>/SKILL.md`;
+- named agents and their prompt files;
+- permission sets for read-only, workspace-write, and deterministic work;
+- an ordered workflow with agent, deterministic, and human-gated stages;
+- checks, protected paths, and memory rules.
+
+The bundled language packs inherit the `generic-code` workflow and add their
+domain skills and checks. A project-local `.loopforge/packs/<name>/` contract
+can override a bundled pack. Use `loopforge pack list` to compare effective
+skill, agent, and stage counts, then `loopforge pack detect` to inspect the
+selected pack before starting a run.
 
 `loopforge shell` starts an interactive prompt with slash commands such as
 `/status`, `/guide`, `/actions`, `/next`, `/do`, `/context`, `/compact`,

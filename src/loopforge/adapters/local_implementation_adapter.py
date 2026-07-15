@@ -347,6 +347,7 @@ def run_adapter(
     timed_out = False
     try:
         stdin_handle = stdin_file.open("rb") if stdin_file is not None else None
+        isolation_policy = isolated_process.load_policy()
         process = subprocess.Popen(
             list(command),
             cwd=workspace,
@@ -355,8 +356,11 @@ def run_adapter(
             stderr=subprocess.PIPE,
             shell=False,
             env=isolated_process.build_child_environment(
-                os.environ,
-                isolated_process.load_policy(),
+                isolated_process.select_allowed_parent_environment(
+                    os.environ,
+                    isolation_policy,
+                ),
+                isolation_policy,
             ),
         )
         stdout_buffer = bytearray()

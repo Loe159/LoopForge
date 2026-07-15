@@ -33,10 +33,10 @@ what must be refactored.
 
 - Task approval is now part of run creation: GitHub issues require the
   `agent:approved` label, and manual tasks require local confirmation.
-- Read-only research and planning are now run-cockpit stages that write
-  `research.md` and `plan.md` from adapter output.
-- Plan approval gates implementation, and review approval is distinct from
-  deterministic verification.
+- Read-only research, planning, and review are now run-cockpit stages that
+  write `research.md`, `plan.md`, and `review.md` from adapter output.
+- Plan approval gates implementation; deterministic verification gates the
+  reviewer agent; review approval remains a separate human decision.
 - Draft PR publication is a local deterministic artifact preparation step. It
   does not push, open a network PR, or treat receipts and metrics as authority.
 

@@ -69,6 +69,29 @@ def parent_name_index(parent: Mapping[str, str]) -> dict[str, str]:
     return normalized
 
 
+def select_allowed_parent_environment(
+    parent: Mapping[str, str],
+    policy: dict[str, Any],
+) -> dict[str, str]:
+    """Select allowed variables and prefer canonical uppercase duplicates."""
+    allowed = {
+        str(name).upper()
+        for name in policy.get("allowed_parent_variables", [])
+        if isinstance(name, str)
+    }
+    selected: dict[str, tuple[str, str]] = {}
+    for name, value in parent.items():
+        if not isinstance(name, str) or not isinstance(value, str):
+            continue
+        folded = name.upper()
+        if folded not in allowed:
+            continue
+        current = selected.get(folded)
+        if current is None or name == folded:
+            selected[folded] = (name, value)
+    return {name: value for name, value in selected.values()}
+
+
 def build_child_environment(
     parent: Mapping[str, str],
     policy: dict[str, Any],

@@ -276,6 +276,87 @@ def blockers_lines(blockers: list[str]) -> list[str]:
     return ["blockers:", "- none"]
 
 
+def workflow_progress(run: dict[str, Any]) -> tuple[str, str, list[str]]:
+    contract = run.get("pack_contract", {})
+    workflow = contract.get("workflow", []) if isinstance(contract, dict) else []
+    statuses = run.get("stage_statuses", {})
+    if not isinstance(workflow, list) or not workflow or not isinstance(statuses, dict):
+        return str(run.get("current_stage") or "unknown"), "unknown", []
+
+    def complete(stage_id: str, status: object) -> bool:
+        if stage_id == "task":
+            return status == "approved"
+        if stage_id == "plan":
+            return status in {"approved", "complete"}
+        if stage_id == "review":
+            return status == "approved"
+        if stage_id == "publication":
+            return status == "draft_prepared"
+        return status == "complete"
+
+    def active_actor(stage_id: str, status: object, configured: str) -> str:
+        if stage_id == "task" and status != "approved":
+            validation = run.get("task_validation", {})
+            if isinstance(validation, dict) and validation.get("status") == "needs_input":
+                return "user"
+            return "human-approver"
+        if stage_id == "plan" and status == "awaiting_approval":
+            return "human-approver"
+        if stage_id == "review" and status == "complete":
+            return "human-approver"
+        return configured
+
+    current_index = len(workflow) - 1
+    for index, stage in enumerate(workflow):
+        if isinstance(stage, dict) and not complete(
+            str(stage.get("id") or ""), statuses.get(stage.get("id"))
+        ):
+            current_index = index
+            break
+    current = workflow[current_index] if isinstance(workflow[current_index], dict) else {}
+    actor = current.get("actor", {}) if isinstance(current, dict) else {}
+    configured_actor = (
+        str(actor.get("id") or actor.get("type") or "unknown")
+        if isinstance(actor, dict)
+        else "unknown"
+    )
+    current_stage_id = str(current.get("id") or "")
+    actor_name = active_actor(
+        current_stage_id,
+        statuses.get(current_stage_id),
+        configured_actor,
+    )
+    summary = (
+        f"{current_index + 1}/{len(workflow)} "
+        f"{current.get('title') or current.get('id') or 'unknown'}"
+    )
+    lines: list[str] = []
+    for index, stage in enumerate(workflow):
+        if not isinstance(stage, dict):
+            continue
+        stage_id = str(stage.get("id") or "unknown")
+        status = statuses.get(stage_id, "pending")
+        marker = (
+            "done"
+            if complete(stage_id, status)
+            else "current"
+            if index == current_index
+            else "pending"
+        )
+        stage_actor = stage.get("actor", {})
+        configured_stage_actor = (
+            str(stage_actor.get("id") or stage_actor.get("type") or "unknown")
+            if isinstance(stage_actor, dict)
+            else "unknown"
+        )
+        stage_actor_name = active_actor(stage_id, status, configured_stage_actor)
+        lines.append(
+            f"- {index + 1}. {stage.get('title') or stage_id}: {marker} "
+            f"[{status}] via {stage_actor_name}"
+        )
+    return summary, actor_name, lines
+
+
 def format_status_lines(result: Any, guidance: Any, *, details: bool = False) -> list[str]:
     action = guidance.recommended_actions[0] if guidance.recommended_actions else None
     command = action.command if action is not None else result.next_step
@@ -323,8 +404,11 @@ def format_status_lines(result: Any, guidance: Any, *, details: bool = False) ->
         verify = verification.get("status", "unknown")
     else:
         verify = "not run"
+    workflow_step, workflow_actor, _ = workflow_progress(run)
     rows = [
         ("status", run.get("status") or "unknown"),
+        ("step", workflow_step),
+        ("actor", workflow_actor),
         ("run", run.get("run_id") or "none"),
         ("task", compact_text(run.get("task"), limit=90)),
         ("pack", run.get("pack") or "none"),
@@ -376,6 +460,10 @@ def _status_detail_lines(result: Any) -> list[str]:
         lines.append(f"base commit: {run.get('base_commit') or 'none'}")
         lines.append(f"run directory: {result.run_dir}")
         lines.append(f"workflow stage: {run.get('current_stage') or 'task_draft'}")
+        _, _, workflow_lines = workflow_progress(run)
+        if workflow_lines:
+            lines.append("workflow:")
+            lines.extend(workflow_lines)
         workspace = run.get("workspace", {})
         if isinstance(workspace, dict) and workspace:
             lines.append(f"workspace mode: {workspace.get('mode') or 'unknown'}")
@@ -390,6 +478,14 @@ def _status_detail_lines(result: Any) -> list[str]:
             if isinstance(skills, list):
                 lines.append(f"pack skills: {len(skills)}")
                 lines.extend(f"- {skill}" for skill in skills)
+            agents = contract.get("agents", [])
+            if isinstance(agents, list):
+                lines.append(f"pack agents: {len(agents)}")
+                lines.extend(
+                    f"- {agent.get('id')}: {agent.get('mode')}"
+                    for agent in agents
+                    if isinstance(agent, dict)
+                )
 
     lines.extend(_native_artifact_lines(result.native_artifacts))
     lines.extend(_loop_contract_lines(result.loop_contract))

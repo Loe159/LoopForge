@@ -1,10 +1,14 @@
 {
   "name": "node",
-  "version": 1,
+  "version": 2,
+  "extends": "generic-code",
   "description": "Node.js project conventions and deterministic checks.",
   "priority": 10,
   "detection": {
     "files_any": ["package.json"]
   },
-  "skills": ["node-package-management"]
+  "skills": ["node-package-management", "javascript-typescript"],
+  "skill_file": "SKILL.md",
+  "skills_dir": "skills",
+  "checks_file": "checks.json"
 }

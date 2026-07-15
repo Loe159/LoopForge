@@ -148,6 +148,9 @@ class ProjectCommandHandler:
                     "current": "*" if pack.get("name") == detected.get("name") else "",
                     "name": pack.get("name") or "",
                     "description": pack.get("description") or "",
+                    "skills": len(pack.get("skills", [])),
+                    "agents": len(pack.get("agents", [])),
+                    "stages": len(pack.get("workflow", [])),
                     "kind": api.pack_kind(pack.get("source"), context.project_dir),
                     "source": pack.get("source") or "none",
                 }
@@ -184,6 +187,9 @@ class ProjectCommandHandler:
                     ("pack", pack["name"]),
                     ("score", pack.get("detection_score", 0)),
                     ("why", api.detection_reason(pack, context.project_dir)),
+                    ("skills", len(pack.get("skills", []))),
+                    ("agents", len(pack.get("agents", []))),
+                    ("stages", len(pack.get("workflow", []))),
                     ("source", pack.get("source") or "none"),
                 ],
                 next_command=(

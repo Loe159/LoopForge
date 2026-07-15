@@ -41,6 +41,37 @@ Pack detection changes selected skills/checks/risk. A project-local homonym
 overrides a bundled pack. Template names, frontmatter, and headings are parsed
 by engine/check modules, so migrate producers, consumers, and tests together.
 
+Effective pack contracts also compose `extends`, skills directories, agents,
+permission sets, and workflow stages (`engine/packs.py` and
+`packs/generic-code/`). A UI that displays a stage, actor, or permission must
+use the hydrated effective contract; a second hard-coded catalog can become
+incorrect when a child or project-local pack overrides data.
+
+## Project identity and external run roots
+
+**Path:** `src/loopforge/engine/__init__.py` (`project_name`,
+`default_run_root`, `default_workspace_root`, `new_config`, `list_runs`,
+`resume_run`).
+
+External data is currently keyed by project directory basename. Changing this
+layout can orphan existing runs, collide same-named repositories, or make
+`current_run_id` point at a different root. Any project registry/id migration
+must be non-destructive, preserve legacy discovery, cover moved/cloned
+projects, and test two repositories with the same basename.
+
+## Interactive rendering and duplicated command paths
+
+**Paths:** `src/loopforge/cli/ui.py`, `interactive.py`, `app.py`, `workflow.py`,
+and `tests/test_cli.py`.
+
+The shell combines a `prompt_toolkit` prompt with Rich output and has a second
+`cmd_*` dispatch surface. Top-level and slash commands do not always use the
+same orchestration (`run` is the clearest example). A full-screen TUI can
+flicker, corrupt scrollback, break redirected output, or diverge from CLI
+behavior if it adds another renderer/action implementation. Preserve headless
+`--command`/`--script`, JSON/CSV/plain behavior, TTY detection, confirmation
+rules, Ctrl-C semantics, and semantic no-color fallbacks.
+
 ## External effects and generated files
 
 Git, `gh`, agent executables, and local adapters are process boundaries.

@@ -1,3 +1,5 @@
-# Generic code pack
+# Generic Code Pack
 
-Keep changes bounded and verify the resulting diff.
+Follow the staged workflow, reuse existing architecture, keep implementation
+bounded to the approved plan, and treat verification as evidence rather than
+publication authority.

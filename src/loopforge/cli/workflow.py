@@ -105,10 +105,12 @@ class RunCommandHandler:
             selected_adapter_command=selected_adapter_command,
         )
         if wizard_used:
-            return cockpit.maybe_launch_adapter(
-                selected_adapter=selected_adapter,
-                selected_adapter_args=selected_adapter_args,
-                selected_adapter_command=selected_adapter_command,
+            return api.maybe_run_readonly_stage_from_cockpit(
+                context.project_dir,
+                context.renderer,
+                adapter=selected_adapter,
+                adapter_args=selected_adapter_args,
+                no_color=context.options.no_color,
             )
         return 0
 
@@ -226,9 +228,10 @@ class RunCockpitService:
                 ("run", result.run["run_id"]),
                 ("pack", result.run["pack"]),
                 ("contract", result.run["loop_contract"]["status"]),
+                ("stage", result.run.get("current_stage") or "task_draft"),
             ],
             extra_lines=extra,
-            next_command=selected_adapter_command,
+            next_command=api.next_command(context.project_dir, "loopforge run"),
         )
 
     def maybe_launch_adapter(

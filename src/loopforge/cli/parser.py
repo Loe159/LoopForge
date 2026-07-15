@@ -48,9 +48,10 @@ class CliParserBuilder:
             description="LoopForge is a portable agentic workflow engine.",
             epilog=(
                 "Workflow: loopforge init -> loopforge run --task \"...\" -> loopforge run cockpit\n"
-                "The cockpit advances one stage at a time: task approval, read-only research, "
-                "read-only plan, plan approval, implementation, deterministic verification, "
-                "explicit review, and local draft publication artifact.\n\n"
+                "The cockpit advances one stage at a time: task validation, task approval, "
+                "read-only research, read-only plan, plan approval, implementation, "
+                "deterministic verification, read-only review, review approval, and local "
+                "draft publication artifact.\n\n"
                 "Global flags: --no-color --no-input --quiet --debug --json --version -V\n"
                 "Examples:\n"
                 "  loopforge init\n"
@@ -86,9 +87,10 @@ class CliParserBuilder:
             epilog=(
                 "`loopforge run` is the cockpit for the staged workflow. With an active run "
                 "and no new task/source, it resumes that run and can prompt for at most one "
-                "eligible stage: task approval, read-only research, read-only plan, plan "
-                "approval, implementation, deterministic verification, review approval, or a "
-                "local draft PR publication artifact. GitHub issue runs require the "
+                "eligible stage: task validation, task approval, read-only research, read-only "
+                "plan, plan approval, implementation, deterministic verification, read-only "
+                "review, review approval, or a local draft PR publication artifact. GitHub "
+                "issue runs require the "
                 "`agent:approved` label before creation; manual tasks ask for local approval. "
                 "Verification is evidence for review, not publication authority. --no-input "
                 "only reports status and never approves, executes, or publishes a stage.\n\n"

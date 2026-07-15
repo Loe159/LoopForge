@@ -84,7 +84,7 @@ Validation:
 
 ## Phase 1: Minimal CLI
 
-Status: completed on 2026-07-07.
+Status: expanded on 2026-07-14.
 
 Create a Python package with a console command:
 
@@ -367,6 +367,11 @@ Create pack contract:
 ```text
 pack.json
 SKILL.md
+skills/<skill>/SKILL.md
+agents.json
+agents/<agent>.md
+permissions.json
+workflow.json
 checks.json
 protected-paths.json
 memory-rules.md
@@ -386,11 +391,15 @@ Done when:
 - [x] project detection selects a pack;
 - [x] packs contribute checks and risk rules;
 - [x] packs can add skills without changing the engine.
+- [x] packs can inherit a base pack and contribute agents, permissions, and a
+  staged workflow without changing the engine.
 
 Implementation notes:
 
-- Packs now use a product contract made of `pack.json`, `SKILL.md`,
-  `checks.json`, `protected-paths.json`, and `memory-rules.md`.
+- Packs now use a product contract made of concrete skills, agent prompts,
+  permission sets, workflow stages, checks, protected paths, and memory rules.
+- Domain packs use `extends: generic-code`; `PackRegistry` resolves and
+  validates the effective contract before it is stored on a run.
 - The bundled initial packs are `generic-code`, `python`, `node`,
   `documentation`, and `intellij-plugin`; project-local packs under
   `.loopforge/packs/<pack-name>/` override bundled packs with the same name.
@@ -399,8 +408,9 @@ Implementation notes:
   override.
 - `loopforge pack list` and `loopforge pack detect` expose available packs and
   the selected pack without requiring a run.
-- Pack skills are added to `loop.md` from `pack.json` and `SKILL.md`, so new
-  packs can contribute skills without engine changes.
+- Pack skills are added to `loop.md` from `pack.json`, top-level `SKILL.md`,
+  and validated `skills/<skill>/SKILL.md` definitions, so new packs can
+  contribute capabilities without engine changes.
 - Pack checks continue to come from `checks.json`, while
   `protected-paths.json` is merged with the imported risk policy into
   `RUN/artifacts/policies/risk-rules.merged.json` during verification.

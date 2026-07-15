@@ -140,6 +140,41 @@ Implement the approved task after human plan approval.
 """
 
 
+def valid_review_markdown() -> str:
+    return """---
+artifact_version: 1
+artifact: review
+issue: 1
+base_commit: 0000000000000000000000000000000000000000
+status: complete
+---
+
+# Scope
+
+Review the verified patch against the approved task and plan.
+
+# Findings
+
+- No blocking defect was found in the bounded patch.
+
+# Plan Conformance
+
+The patch remains inside the approved implementation scope.
+
+# Test Coverage
+
+Deterministic verification passed and the relevant checks are recorded.
+
+# Risks And Unknowns
+
+- External publication was not attempted.
+
+# Recommendation
+
+The patch is ready for explicit human review approval.
+"""
+
+
 class TtyStringIO(io.StringIO):
     def isatty(self) -> bool:
         return True
@@ -204,6 +239,21 @@ class CliTests(unittest.TestCase):
         self.approve_current_plan(run_dir)
         return run_dir
 
+    def complete_current_review(self, run_dir: Path) -> None:
+        run_json_path = run_dir / "run.json"
+        run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+        run_json["status"] = "verified"
+        run_json["current_stage"] = "review_complete"
+        run_json["stage_statuses"]["verification"] = "complete"
+        run_json["stage_statuses"]["review"] = "complete"
+        run_json.setdefault("verification", {})["status"] = "passed"
+        run_json["human_gates"]["review_approval"] = {
+            "required": True,
+            "status": "pending",
+        }
+        run_json_path.write_text(json.dumps(run_json), encoding="utf-8")
+        (run_dir / "review.md").write_text(valid_review_markdown(), encoding="utf-8")
+
     def test_init_creates_config_and_templates_in_temp_repo(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             repo = Path(temp_dir)
@@ -232,7 +282,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(config["profile"], "supervised")
             self.assertEqual(
                 config["run_root"],
-                str(Path.home() / "LoopForge" / "runs" / repo.name),
+                str(loopforge_home() / "runs" / repo.name),
             )
             self.assertIsNone(config["current_run_id"])
             self.assertEqual(config["default_adapter"], "codex")
@@ -515,7 +565,8 @@ class CliTests(unittest.TestCase):
             self.assertIn("python-testing", run_json["pack_contract"]["skills"])
             self.assertIn("pack:python:SKILL.md", loop_contract)
             self.assertIn("pack    python", output.getvalue())
-            self.assertIn("pack skills: 3", output.getvalue())
+            self.assertIn("pack skills: 8", output.getvalue())
+            self.assertIn("pack agents: 4", output.getvalue())
 
     def test_project_local_pack_can_add_skills_without_engine_changes(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -572,7 +623,7 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(main(["pack", "detect"]), 0)
 
             text = output.getvalue()
-            self.assertIn("current | name | description | kind | source", text)
+            self.assertIn("current | name | skills | agents | stages | kind", text)
             self.assertIn("generic-code", text)
             self.assertIn("node", text)
             self.assertIn("pack    node", text)
@@ -753,8 +804,13 @@ class CliTests(unittest.TestCase):
     def test_run_auto_initializes_project(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             repo = Path(temp_dir)
+            home = repo / "loopforge-home"
             output = io.StringIO()
-            with working_directory(repo), contextlib.redirect_stdout(output):
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
                 self.assertEqual(main(["run", "--task", "Do the thing"]), 0)
             config_path = repo / ".loopforge" / "config.json"
             self.assertTrue(config_path.exists())
@@ -863,7 +919,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(status.run["current_stage"], "task_draft")
             self.assertEqual(status.run["stage_statuses"]["publication"], "pending")
             self.assertFalse(status.run["approval"]["approved"])
-            self.assertEqual(guidance.state, "loop_contract_draft")
+            self.assertEqual(guidance.state, "task_needs_input")
             self.assertIn("workflow stage: task_draft", details_output.getvalue())
 
     def test_status_default_is_compact_and_details_hold_artifacts(self) -> None:
@@ -900,7 +956,7 @@ class CliTests(unittest.TestCase):
             self.assertIn("Current loop", compact_text)
             self.assertIn("Next", compact_text)
             self.assertNotIn("legacy artifact directory", compact_text)
-            self.assertLessEqual(len([line for line in compact_text.splitlines() if line]), 9)
+            self.assertLessEqual(len([line for line in compact_text.splitlines() if line]), 13)
             self.assertIn("legacy artifact directory", details_output.getvalue())
 
     def test_quiet_success_output_is_empty(self) -> None:
@@ -1317,7 +1373,7 @@ class CliTests(unittest.TestCase):
                 run_json["approval"]["source"],
                 "local/manual",
             )
-            self.assertIn("Continue later with: loopforge continue --adapter codex", output.getvalue())
+            self.assertIn("Next\nloopforge run", output.getvalue())
 
     def test_run_with_active_run_interactive_can_resume_without_creating_new_run(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1492,6 +1548,32 @@ class CliTests(unittest.TestCase):
             self.assertEqual(run_json["stage_statuses"]["research"], "complete")
             self.assertIn("Research ready", output.getvalue())
 
+    def test_incomplete_task_cannot_be_approved_or_researched(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "home"
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(main(["run", "--task", "Ambiguous change"]), 0)
+
+            run_dir = self.approve_current_run(repo, loopforge_home)
+            run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            guidance = current_guidance(repo)
+
+            self.assertEqual(run_json["task_validation"]["status"], "needs_input")
+            self.assertIn("objective success check", run_json["task_validation"]["missing"])
+            self.assertFalse(run_json["approval"]["approved"])
+            self.assertEqual(run_json["stage_statuses"]["task"], "draft")
+            self.assertEqual(run_json["stage_statuses"]["research"], "pending")
+            self.assertEqual(guidance.state, "task_needs_input")
+            self.assertEqual(guidance.recommended_actions[0].id, "complete-task")
+
     def test_run_cockpit_executes_plan_with_fixture_adapter(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)
@@ -1542,6 +1624,67 @@ class CliTests(unittest.TestCase):
             self.assertEqual(run_json["stage_statuses"]["plan"], "awaiting_approval")
             self.assertEqual(run_json["human_gates"]["plan_approval"]["status"], "pending")
             self.assertIn("Plan ready", output.getvalue())
+
+    def test_run_cockpit_executes_review_with_fixture_adapter(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            self.initialize_git_project(repo)
+            loopforge_home = workspace / "home"
+            fixture_code = f"import sys; sys.stdout.write({valid_review_markdown()!r})"
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertTrue(
+                    set_default_adapter(
+                        repo,
+                        "local-adapter-fixture",
+                        [fixture_python(), "-c", fixture_code],
+                    ).ok
+                )
+                self.assertEqual(
+                    main(["run", "--task", "Review the patch", "--success-check", "Tests pass"]),
+                    0,
+                )
+            run_dir = self.approve_current_run_for_implementation(repo, loopforge_home)
+            run_json_path = run_dir / "run.json"
+            run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+            run_json["status"] = "verified"
+            run_json["current_stage"] = "verification_ready"
+            run_json["stage_statuses"]["implementation"] = "complete"
+            run_json["stage_statuses"]["verification"] = "complete"
+            run_json["stage_statuses"]["review"] = "pending"
+            run_json.setdefault("verification", {})["status"] = "passed"
+            run_json_path.write_text(json.dumps(run_json), encoding="utf-8")
+
+            answers = iter(["1", "y"])
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                mock.patch("sys.stdin", TtyStringIO()),
+                mock.patch("builtins.input", side_effect=lambda _: next(answers)),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["run"]), 0)
+
+            run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+            self.assertEqual((run_dir / "review.md").read_text(encoding="utf-8"), valid_review_markdown())
+            self.assertEqual(run_json["current_stage"], "review_complete")
+            self.assertEqual(run_json["stage_statuses"]["review"], "complete")
+            self.assertEqual(run_json["human_gates"]["review_approval"]["status"], "pending")
+            prompt = (run_dir / "artifacts" / "stages" / "review" / "prompt.md").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("- Agent: reviewer", prompt)
+            self.assertIn("- Permission set: read-only", prompt)
+            self.assertIn('"network": "deny"', prompt)
+            self.assertIn("# Reviewer", prompt)
+            self.assertIn("Review ready", output.getvalue())
 
     def test_run_cockpit_approves_plan_for_implementation(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1671,6 +1814,7 @@ class CliTests(unittest.TestCase):
                 workspace_dir = Path(run_json["workspace"]["path"])
                 (workspace_dir / "README.md").write_text("# Project\n\nUpdated.\n", encoding="utf-8")
                 self.assertEqual(main(["verify"]), 0)
+                self.complete_current_review(run_dir)
 
             answers = iter(["1", "y"])
             output = io.StringIO()
@@ -1778,6 +1922,7 @@ class CliTests(unittest.TestCase):
                 workspace_dir = Path(run_json["workspace"]["path"])
                 (workspace_dir / "README.md").write_text("# Project\n\nUpdated.\n", encoding="utf-8")
                 self.assertEqual(main(["verify"]), 0)
+                self.complete_current_review(run_dir)
 
             answers = iter(["1", "y"])
             with (
@@ -1854,6 +1999,7 @@ class CliTests(unittest.TestCase):
                 workspace_dir = Path(run_json["workspace"]["path"])
                 (workspace_dir / "README.md").write_text("# Project\n\nUpdated.\n", encoding="utf-8")
                 self.assertEqual(main(["verify"]), 0)
+                self.complete_current_review(run_dir)
                 self.assertTrue(approve_review(repo, source="test").ok)
 
             output = io.StringIO()
@@ -2133,10 +2279,7 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(main(["run"]), 0)
 
             text = output.getvalue()
-            self.assertIn(
-                "Continue later with: loopforge continue --adapter claude-code -- --dangerously-skip-permissions",
-                text,
-            )
+            self.assertIn("Next\nloopforge run", text)
             self.assertNotIn("Launch Codex now", text)
 
     def test_run_with_task_remains_prompt_free_when_interactive(self) -> None:
@@ -2520,15 +2663,15 @@ class CliTests(unittest.TestCase):
             ):
                 self.assertEqual(main(["init"]), 0)
                 self.assertEqual(main(["run", "--task", "Draft run"]), 0)
-                self.assertEqual(current_guidance(repo).recommended_actions[0].id, "show-plan")
+                self.assertEqual(current_guidance(repo).recommended_actions[0].id, "complete-task")
 
                 self.assertEqual(
                     main(["run", "--task", "Ready run", "--success-check", "proof exists"]),
                     0,
                 )
                 ready = current_guidance(repo)
-                self.assertEqual(ready.state, "loop_contract_ready")
-                self.assertEqual(ready.recommended_actions[0].id, "continue")
+                self.assertEqual(ready.state, "task_awaiting_approval")
+                self.assertEqual(ready.recommended_actions[0].id, "approve-task")
                 self.approve_current_run_for_implementation(repo, loopforge_home)
 
                 self.assertEqual(
@@ -2546,7 +2689,7 @@ class CliTests(unittest.TestCase):
                     1,
                 )
                 blocked = current_guidance(repo)
-                self.assertEqual(blocked.state, "adapter_blocked")
+                self.assertEqual(blocked.state, "implementation_blocked")
                 self.assertEqual(blocked.recommended_actions[0].id, "retry-attempt")
                 self.assertEqual(blocked.recommended_actions[1].id, "inspect-attempt")
 
@@ -2554,19 +2697,18 @@ class CliTests(unittest.TestCase):
                     main(["run", "--task", "Verify run", "--success-check", "README changed"]),
                     0,
                 )
+                run_dir = self.approve_current_run_for_implementation(repo, loopforge_home)
                 (repo / "README.md").write_text("# Project\n\nChanged.\n", encoding="utf-8")
-                run_dir = loopforge_home / "runs" / repo.name / json.loads(
-                    (repo / ".loopforge" / "config.json").read_text(encoding="utf-8")
-                )["current_run_id"]
                 run_json_path = run_dir / "run.json"
                 run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
                 run_json["status"] = "ready_for_verification"
+                run_json["stage_statuses"]["implementation"] = "complete"
                 run_json_path.write_text(json.dumps(run_json), encoding="utf-8")
                 self.assertEqual(current_guidance(repo).recommended_actions[0].id, "verify")
 
                 self.assertEqual(main(["verify"]), 1)
                 failed = current_guidance(repo)
-                self.assertEqual(failed.state, "verification_failed")
+                self.assertEqual(failed.state, "verification_blocked")
                 self.assertEqual(failed.recommended_actions[0].id, "inspect-verification")
 
                 subprocess.run(
@@ -2599,11 +2741,20 @@ class CliTests(unittest.TestCase):
                     main(["run", "--task", "Verified run", "--success-check", "README changed"]),
                     0,
                 )
-                (repo / "README.md").write_text("# Project\n\nVerified.\n", encoding="utf-8")
+                run_dir = self.approve_current_run_for_implementation(repo, loopforge_home)
+                run_json_path = run_dir / "run.json"
+                run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+                run_json["status"] = "ready_for_verification"
+                run_json["stage_statuses"]["implementation"] = "complete"
+                run_json_path.write_text(json.dumps(run_json), encoding="utf-8")
+                workspace_dir = Path(run_json["workspace"]["path"])
+                (workspace_dir / "README.md").write_text(
+                    "# Project\n\nVerified.\n", encoding="utf-8"
+                )
                 self.assertEqual(main(["verify"]), 0)
                 verified = current_guidance(repo)
-                self.assertEqual(verified.state, "verified")
-                self.assertEqual(verified.recommended_actions[0].id, "compact")
+                self.assertEqual(verified.state, "review_pending")
+                self.assertEqual(verified.recommended_actions[0].id, "run-review")
 
     def test_guidance_reports_pending_memory_proposals(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2653,7 +2804,7 @@ class CliTests(unittest.TestCase):
                     0,
                 )
                 self.assertEqual(main(["shell", "--command", "/guide"]), 0)
-                self.assertEqual(main(["shell", "--command", "/do continue"]), 1)
+                self.assertEqual(main(["shell", "--command", "/do approve-task"]), 1)
                 self.assertEqual(main(["shell", "--command", "/do missing"]), 1)
 
             self.assertTrue((repo / ".loopforge" / "config.json").exists())
@@ -3211,7 +3362,7 @@ class CliTests(unittest.TestCase):
             ):
                 self.assertIn(label, text)
             self.assertIn("1 pending, 1 promoted, 1 rejected", text)
-            self.assertIn("loopforge learn --approve", text)
+            self.assertIn("action   approve-task", text)
 
             after = {path: path.read_text(encoding="utf-8") for path in watched_paths}
             self.assertEqual(after, before)
@@ -4347,6 +4498,7 @@ class CliTests(unittest.TestCase):
             }
             run_json_path.write_text(json.dumps(run_json), encoding="utf-8")
             (run_dir / "verification.md").write_text("# Verification\n\nPassed.\n", encoding="utf-8")
+            self.complete_current_review(run_dir)
 
             answers = iter(["1", "y"])
             output = io.StringIO()

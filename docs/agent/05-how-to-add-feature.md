@@ -30,10 +30,25 @@
   `normalize_run_workflow_state`. Preserve all coupled state fields and the
   separation between verification and review approval.
 - Add a bundled pack under `src/loopforge/packs/<name>/`; use a project-local
-  `.loopforge/packs/<name>/` pack for repository-specific behavior. Include
-  valid `pack.json` and only shell-free command lists in `checks.json`.
-- Add slash commands to the `SUPPORTED_COMMANDS` registry and a matching
-  `InteractiveShell.cmd_<name>` method in `cli/interactive.py`.
+  `.loopforge/packs/<name>/` pack for repository-specific behavior. Prefer
+  `extends: generic-code` for a domain pack. Add concrete
+  `skills/<name>/SKILL.md` definitions and, when overriding the base workflow,
+  keep `agents.json`, agent prompts, `permissions.json`, and `workflow.json`
+  internally consistent. Use only shell-free command lists in `checks.json`.
+- Before changing shell navigation or command presentation, read
+  `docs/cli-ux-command-plan.md`. Reuse `TerminalRenderer`, status/guidance
+  helpers, `workflow_progress`, and hydrated pack workflow data.
+- For the current shell, add slash commands to the `SUPPORTED_COMMANDS`
+  registry and a matching `InteractiveShell.cmd_<name>` method in
+  `cli/interactive.py`; update aliases/groups/help/completion and tests where
+  applicable. Do not add a parallel prompt loop.
+- When behavior exists in both the top-level CLI and shell, route both through
+  the same engine operation and keep intake, confirmation, result, and next
+  action consistent. `loopforge run`/`RunCockpitService` and `/run` are the
+  current duplication to remove, not a pattern to copy.
+- A multi-project UI first requires a collision-safe project identity and
+  registry. Do not build cross-project navigation by scanning basename-keyed
+  run roots or by editing `current_run_id` outside engine APIs.
 
 There are no HTTP endpoints, database entities/migrations, background jobs, or
 remote publication flows in the current codebase; do not scaffold them without

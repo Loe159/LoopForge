@@ -112,6 +112,7 @@ NATIVE_RUN_FILES = (
     "plan.md",
     "progress.md",
     "verification.md",
+    "review.md",
     "memory.md",
     "scratch.md",
     "exchange.json",
@@ -169,9 +170,10 @@ PLAN_READY_STAGE = "plan_ready"
 IMPLEMENTATION_READY_STAGE = "implementation_ready"
 VERIFICATION_READY_STAGE = "verification_ready"
 REVIEW_READY_STAGE = "review_ready"
+REVIEW_COMPLETE_STAGE = "review_complete"
 PUBLICATION_READY_STAGE = "draft_publication_ready"
 
-READONLY_WORKFLOW_STAGES = ("research", "plan")
+READONLY_WORKFLOW_STAGES = ("research", "plan", "review")
 
 REQUIRED_READONLY_STAGE_SECTIONS = {
     "research": (
@@ -191,11 +193,20 @@ REQUIRED_READONLY_STAGE_SECTIONS = {
         "Verification",
         "Stop Conditions",
     ),
+    "review": (
+        "Scope",
+        "Findings",
+        "Plan Conformance",
+        "Test Coverage",
+        "Risks And Unknowns",
+        "Recommendation",
+    ),
 }
 
 READONLY_STAGE_SUCCESS = {
     "research": ("complete", RESEARCH_READY_STAGE),
     "plan": ("awaiting_approval", PLAN_READY_STAGE),
+    "review": ("complete", REVIEW_COMPLETE_STAGE),
 }
 
 SUBJECTIVE_TASK_MARKERS = (
@@ -698,6 +709,34 @@ def initial_workflow_state() -> dict[str, Any]:
     }
 
 
+def validate_task_definition(
+    *,
+    task: str,
+    success_checks: list[str],
+    profile: str,
+    subjective: bool,
+    subjective_rubric: str,
+) -> dict[str, Any]:
+    missing: list[str] = []
+    if not task.strip():
+        missing.append("goal")
+    if not success_checks:
+        missing.append("objective success check")
+    if profile == "autonomous" and subjective and not subjective_rubric.strip():
+        missing.append("subjective rubric")
+    return {
+        "status": "valid" if not missing else "needs_input",
+        "missing": missing,
+        "checks": {
+            "goal": bool(task.strip()),
+            "objective_success_checks": bool(success_checks),
+            "subjective_rubric": not (
+                profile == "autonomous" and subjective and not subjective_rubric.strip()
+            ),
+        },
+    }
+
+
 def normalize_run_workflow_state(run: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(run)
     defaults = initial_workflow_state()
@@ -741,6 +780,11 @@ def apply_initial_task_approval(
 ) -> dict[str, Any]:
     normalized = normalize_run_workflow_state(run)
     clean_source = source.strip() if isinstance(source, str) else ""
+    task_validation = normalized.get("task_validation", {})
+    task_is_valid = not isinstance(task_validation, dict) or task_validation.get(
+        "status"
+    ) in {None, "valid"}
+    approved = approved and task_is_valid
     if approved:
         normalized["current_stage"] = TASK_APPROVED_STAGE
         normalized["stage_statuses"]["task"] = "approved"
@@ -1038,8 +1082,8 @@ def is_windows_app_execution_alias(path: Path) -> bool:
 def usable_python_executable() -> str:
     candidates: list[str | None] = [
         os.environ.get("LOOPFORGE_PYTHON"),
-        getattr(sys, "_base_executable", None),
         sys.executable,
+        getattr(sys, "_base_executable", None),
         shutil.which("python"),
         shutil.which("python3"),
         shutil.which("py"),
@@ -2433,6 +2477,34 @@ def learn_run(
 
 
 def describe_next_step(run: dict[str, Any]) -> str:
+    pack_contract = run.get("pack_contract", {})
+    workflow = pack_contract.get("workflow", []) if isinstance(pack_contract, dict) else []
+    if isinstance(workflow, list) and workflow:
+        normalized = normalize_run_workflow_state(run)
+        statuses = normalized.get("stage_statuses", {})
+        validation = normalized.get("task_validation", {})
+        if isinstance(validation, dict) and validation.get("status") == "needs_input":
+            return "Complete the task definition and objective success checks."
+        if isinstance(statuses, dict):
+            if statuses.get("task") != "approved":
+                return "Review and approve the task with `loopforge run`."
+            if statuses.get("research") != "complete":
+                return "Run the read-only researcher with `loopforge run`."
+            if statuses.get("plan") not in {"awaiting_approval", "approved", "complete"}:
+                return "Run the read-only planner with `loopforge run`."
+            if statuses.get("plan") == "awaiting_approval":
+                return "Review and approve the plan with `loopforge run`."
+            if statuses.get("implementation") != "complete":
+                return "Run the developer with `loopforge continue --adapter <adapter>`."
+            if statuses.get("verification") != "complete":
+                return "Generate the patch and run checks with `loopforge verify`."
+            if statuses.get("review") not in {"complete", "approved"}:
+                return "Run the read-only patch reviewer with `loopforge run`."
+            if statuses.get("review") == "complete":
+                return "Approve the review and draft preparation with `loopforge run`."
+            if statuses.get("publication") != "draft_prepared":
+                return "Prepare the local draft PR artifact with `loopforge run`."
+            return "Inspect the completed workflow with `loopforge status --details`."
     status = str(run.get("status", "unknown"))
     blockers = run.get("blockers", [])
     if isinstance(blockers, list) and blockers:
@@ -2557,6 +2629,150 @@ def guided_action(
     )
 
 
+def workflow_stage_guidance(
+    run: dict[str, Any],
+    *,
+    adapter: str,
+    profile: str,
+) -> tuple[str, str, str, GuidedAction] | None:
+    contract = run.get("pack_contract", {})
+    workflow = contract.get("workflow", []) if isinstance(contract, dict) else []
+    if not isinstance(workflow, list) or not workflow:
+        return None
+    normalized = normalize_run_workflow_state(run)
+    statuses = normalized.get("stage_statuses", {})
+    gates = normalized.get("human_gates", {})
+    if not isinstance(statuses, dict) or not isinstance(gates, dict):
+        return None
+
+    validation = normalized.get("task_validation", {})
+    if isinstance(validation, dict) and validation.get("status") == "needs_input":
+        missing = ", ".join(str(value) for value in validation.get("missing", []))
+        action = guided_action(
+            "complete-task",
+            "Complete the task and its objective proof",
+            'loopforge run --task "Describe the outcome" --success-check "Describe the proof"',
+            why="Research starts only after the task contract is complete and approved.",
+        )
+        return "task_needs_input", f"The task is incomplete: {missing}.", "complete_task", action
+
+    approval = normalized.get("approval", {})
+    if statuses.get("task") != "approved" or not (
+        isinstance(approval, dict) and approval.get("approved") is True
+    ):
+        action = guided_action(
+            "approve-task",
+            "Review and approve the task",
+            "loopforge run",
+            requires_confirmation=True,
+            why="Task approval is required before repository research.",
+        )
+        return "task_awaiting_approval", "The task is waiting for approval.", "approve_task", action
+
+    if statuses.get("research") != "complete":
+        action = guided_action(
+            "run-research",
+            f"Run read-only research with {adapter}",
+            "loopforge run",
+            risk="read-only-agent",
+            requires_confirmation=True,
+            why="Research maps files, tests, and reusable patterns before planning.",
+        )
+        return "research_pending", "The researcher is the next actor.", "research", action
+
+    if statuses.get("plan") not in {"awaiting_approval", "approved", "complete"}:
+        action = guided_action(
+            "run-plan",
+            f"Generate a read-only plan with {adapter}",
+            "loopforge run",
+            risk="read-only-agent",
+            requires_confirmation=True,
+            why="Implementation must be based on repository evidence.",
+        )
+        return "plan_pending", "Research is complete; the planner is next.", "plan", action
+
+    plan_gate = gates.get("plan_approval", {})
+    if statuses.get("plan") == "awaiting_approval" or not (
+        isinstance(plan_gate, dict) and plan_gate.get("status") == "approved"
+    ):
+        action = guided_action(
+            "approve-plan",
+            "Review and approve the implementation plan",
+            "loopforge run",
+            requires_confirmation=True,
+            why="Implementation cannot start until scope and checks are approved.",
+        )
+        return "plan_awaiting_approval", "The plan is waiting for approval.", "approve_plan", action
+
+    run_status = str(normalized.get("status") or "")
+    if statuses.get("implementation") != "complete":
+        blocked = statuses.get("implementation") == "blocked"
+        action = guided_action(
+            "retry-attempt" if run_status == ADAPTER_BLOCKED else "continue",
+            f"{'Retry' if blocked else 'Run'} the developer with {adapter}",
+            f"loopforge continue --adapter {adapter}",
+            risk="adapter-execution",
+            requires_confirmation=profile != "autonomous",
+            why="The developer may edit only the isolated workspace and approved scope.",
+        )
+        state = "implementation_blocked" if blocked else "implementation_pending"
+        return state, "The approved plan is ready for implementation.", "implementation", action
+
+    if statuses.get("verification") != "complete":
+        action = guided_action(
+            "verify",
+            "Generate the patch and run deterministic checks",
+            "loopforge verify",
+            risk="verification",
+            requires_confirmation=profile == "strict",
+            why="Checks and policy evidence are required before review.",
+        )
+        state = "verification_blocked" if statuses.get("verification") == "blocked" else "verification_pending"
+        return state, "Implementation is complete; verification is next.", "verification", action
+
+    if statuses.get("review") not in {"complete", "approved"}:
+        action = guided_action(
+            "run-review",
+            f"Run read-only patch review with {adapter}",
+            "loopforge run",
+            risk="read-only-agent",
+            requires_confirmation=True,
+            why="The reviewer compares the patch with the task, research, plan, and checks.",
+        )
+        return "review_pending", "Verification passed; the reviewer is next.", "review", action
+
+    review_gate = gates.get("review_approval", {})
+    if statuses.get("review") == "complete" or not (
+        isinstance(review_gate, dict) and review_gate.get("status") == "approved"
+    ):
+        action = guided_action(
+            "approve-review",
+            "Approve the review for draft preparation",
+            "loopforge run",
+            requires_confirmation=True,
+            why="Verification and review are evidence; publication authority remains human.",
+        )
+        return "review_awaiting_approval", "The review is waiting for approval.", "approve_review", action
+
+    if statuses.get("publication") != "draft_prepared":
+        action = guided_action(
+            "prepare-draft",
+            "Prepare the local draft PR artifact",
+            "loopforge run",
+            requires_confirmation=True,
+            why="This prepares a local draft without pushing or opening a network PR.",
+        )
+        return "publication_pending", "Reviewed work is ready for draft preparation.", "publication", action
+
+    action = guided_action(
+        "status",
+        "Inspect the completed run",
+        "loopforge status --details",
+        why="The full supervised workflow and local draft artifact are complete.",
+    )
+    return "draft_publication_ready", "The supervised workflow is complete.", "complete", action
+
+
 def current_guidance(project_dir: Path) -> GuidanceResult:
     status = current_status(project_dir)
     actions: list[GuidedAction] = []
@@ -2660,6 +2876,42 @@ def current_guidance(project_dir: Path) -> GuidanceResult:
                     why="Durable memory changes should be explicitly reviewed before promotion.",
                 )
             )
+
+    staged = workflow_stage_guidance(run, adapter=adapter, profile=profile)
+    if staged is not None:
+        state, summary, priority, action = staged
+        stage_actions = [action]
+        if state == "implementation_blocked":
+            stage_actions.append(
+                guided_action(
+                    "inspect-attempt",
+                    "Inspect the latest attempt stderr",
+                    'loopforge shell --command "/raw latest stderr"',
+                    why="The latest attempt artifact usually contains the actionable error.",
+                )
+            )
+        elif state == "verification_blocked":
+            stage_actions.insert(
+                0,
+                guided_action(
+                    "inspect-verification",
+                    "Inspect verification diagnostics",
+                    'loopforge shell --command "/export plan"',
+                    why="The verification report and blockers explain what must be fixed.",
+                )
+            )
+        if blocked_reasons:
+            diagnostics.extend(blocked_reasons)
+        return GuidanceResult(
+            project_dir=status.project_dir,
+            state=state,
+            summary=summary,
+            priority=priority,
+            diagnostics=diagnostics or [status.next_step],
+            recommended_actions=[*stage_actions, *actions],
+            blocked_reasons=blocked_reasons,
+            evidence=evidence,
+        )
 
     if blocked_reasons:
         diagnostics.extend(blocked_reasons)
@@ -4039,6 +4291,13 @@ def create_run(
         subjective=subjective,
         subjective_rubric=normalized_rubric,
     )
+    task_validation = validate_task_definition(
+        task=task.strip(),
+        success_checks=normalized_success_checks,
+        profile=run_profile,
+        subjective=subjective,
+        subjective_rubric=normalized_rubric,
+    )
     run_data: dict[str, Any] = {
         "run_id": run_id,
         "task_id": task_id,
@@ -4057,13 +4316,25 @@ def create_run(
             "detection": pack_detection,
             "detection_score": pack_contract.get("detection_score", 0),
             "skills": pack_skills,
+            "skill_files": pack_contract.get("skill_files", []),
+            "skills_dirs": pack_contract.get("skills_dirs", []),
+            "skill_definition_files": pack_contract.get("skill_definition_files", []),
+            "agents": pack_contract.get("agents", []),
+            "permission_sets": pack_contract.get("permission_sets", {}),
+            "workflow": pack_contract.get("workflow", []),
+            "inherited_from": pack_contract.get("inherited_from", []),
+            "contribution_sources": pack_contract.get("contribution_sources", {}),
             "skill_file": pack_contract.get("skill_file"),
+            "agents_file": pack_contract.get("agents_file"),
+            "permissions_file": pack_contract.get("permissions_file"),
+            "workflow_file": pack_contract.get("workflow_file"),
             "checks_file": pack_contract.get("checks_file"),
             "protected_paths_file": pack_contract.get("protected_paths_file"),
             "memory_rules_file": pack_contract.get("memory_rules_file"),
         },
         "status": contract_status,
         **initial_workflow_state(),
+        "task_validation": task_validation,
         "created_at": now,
         "success_checks": normalized_success_checks,
         "limits": {
@@ -4094,6 +4365,7 @@ def create_run(
             "plan": str(run_dir / "plan.md"),
             "progress": str(run_dir / "progress.md"),
             "verification": str(run_dir / "verification.md"),
+            "review": str(run_dir / "review.md"),
             "memory": str(run_dir / "memory.md"),
             "scratch": str(run_dir / "scratch.md"),
             "exchange": str(run_dir / "exchange.json"),
@@ -4162,6 +4434,10 @@ def create_run(
     )
     (run_dir / "verification.md").write_text(
         "# Verification\n\nVerification has not run yet.\n",
+        encoding="utf-8",
+    )
+    (run_dir / "review.md").write_text(
+        "# Review\n\nReview has not run yet.\n",
         encoding="utf-8",
     )
     (run_dir / "memory.md").write_text(
@@ -4252,6 +4528,116 @@ def command_for_adapter(adapter: str, adapter_args: list[str]) -> list[str]:
     return [command, *adapter_args]
 
 
+def command_for_readonly_stage(
+    *,
+    adapter: str,
+    adapter_args: list[str],
+    workspace_dir: Path,
+) -> list[str]:
+    if adapter == "local-adapter-fixture":
+        return command_for_adapter(adapter, adapter_args)
+    if adapter == "codex":
+        args = list(adapter_args)
+        if not args:
+            args = ["exec"]
+        elif args[0] not in {"exec", "e"}:
+            args = ["exec", *args]
+        for flag in ("-s", "--sandbox"):
+            if flag in args:
+                index = args.index(flag)
+                if index + 1 < len(args):
+                    args[index + 1] = "read-only"
+                break
+        else:
+            args[1:1] = ["-s", "read-only"]
+        if "-C" not in args and "--cd" not in args:
+            args[1:1] = ["--cd", str(workspace_dir)]
+        if "--color" not in args:
+            args[1:1] = ["--color", "never"]
+        args = [value for value in args if value != "--json"]
+        if "-" not in args:
+            args.append("-")
+        return ["codex", *args]
+    if adapter == "claude-code" and not adapter_args:
+        return ["claude", "-p", "--permission-mode", "plan"]
+    if not adapter_args:
+        raise ValueError(f"read-only {adapter} requires non-interactive adapter arguments")
+    return command_for_adapter(adapter, adapter_args)
+
+
+def resolve_child_executable(command: list[str]) -> list[str]:
+    """Return a command whose executable is an absolute, non-symlink file."""
+    resolved = list(command)
+    executable = Path(resolved[0])
+    if not executable.is_absolute():
+        found = shutil.which(resolved[0])
+        if not found:
+            raise FileNotFoundError(f"agent executable not found: {resolved[0]}")
+        executable = Path(found)
+    try:
+        executable = executable.resolve(strict=True)
+    except OSError as error:
+        raise FileNotFoundError(f"agent executable not found: {resolved[0]}") from error
+    if not executable.is_file():
+        raise FileNotFoundError(f"agent executable is not a regular file: {resolved[0]}")
+    resolved[0] = str(executable)
+    return resolved
+
+
+def execute_readonly_adapter_command(
+    *,
+    command: list[str],
+    prompt: bytes,
+    project_dir: Path,
+    timeout_seconds: int,
+) -> tuple[dict[str, Any], bytes, bytes]:
+    resolved = resolve_child_executable(command)
+    isolated = isolated_process_module()
+    policy = isolated.load_policy()
+    isolated.validate_command(resolved, project_dir, policy)
+    environment = isolated.build_child_environment(
+        isolated.select_allowed_parent_environment(os.environ, policy),
+        policy,
+    )
+    bounded_timeout = min(float(timeout_seconds), float(policy["max_timeout_seconds"]))
+    try:
+        completed = subprocess.run(
+            resolved,
+            cwd=project_dir,
+            env=environment,
+            input=prompt,
+            capture_output=True,
+            timeout=bounded_timeout,
+            shell=False,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        stdout = error.stdout if isinstance(error.stdout, bytes) else b""
+        stderr = error.stderr if isinstance(error.stderr, bytes) else b""
+        return (
+            {
+                "completed": False,
+                "returncode": None,
+                "timed_out": True,
+                "output_limit_exceeded": False,
+            },
+            stdout,
+            stderr,
+        )
+    output_limit = int(policy["max_captured_output_bytes"])
+    output_limit_exceeded = len(completed.stdout) + len(completed.stderr) > output_limit
+    return (
+        {
+            "completed": not output_limit_exceeded,
+            "returncode": completed.returncode,
+            "timed_out": False,
+            "output_limit_exceeded": output_limit_exceeded,
+        },
+        completed.stdout[:output_limit],
+        completed.stderr[:output_limit],
+    )
+
+
 def command_for_attempt(
     *,
     adapter: str,
@@ -4301,6 +4687,8 @@ def render_adapter_prompt(
     if isinstance(pack_contract, dict) and isinstance(pack_contract.get("skills"), list):
         skills = [str(skill) for skill in pack_contract["skills"]]
     limits = run.get("limits", {}) if isinstance(run.get("limits"), dict) else {}
+    agent = pack_agent_for_stage(run, "implementation")
+    permission = pack_permission_for_agent(run, agent)
     lines = [
         "# LoopForge Adapter Attempt",
         "",
@@ -4314,6 +4702,8 @@ def render_adapter_prompt(
         f"- Project control checkout: {run.get('project_root')}",
         f"- Attempt: {attempt_id}",
         f"- Adapter: {adapter}",
+        f"- Agent: {agent.get('id') if agent else 'developer'}",
+        f"- Permission set: {agent.get('permission_set') if agent else 'workspace-write'}",
         "",
         "Read these run artifacts before editing:",
         f"- {run_dir / 'task.md'}",
@@ -4360,6 +4750,18 @@ def render_adapter_prompt(
             "",
         ]
     )
+    if permission is not None:
+        lines.extend(
+            [
+                "",
+                "## Permission Boundary",
+                "",
+                json.dumps(permission, indent=2, sort_keys=True),
+            ]
+        )
+    agent_prompt = pack_agent_prompt(agent)
+    if agent_prompt:
+        lines.extend(["", "## Pack Agent Instructions", "", agent_prompt.strip()])
     return "\n".join(lines)
 
 
@@ -4461,6 +4863,58 @@ def git_status_entries(project_dir: Path) -> list[str] | None:
     return [line for line in result.stdout.splitlines() if line.strip()]
 
 
+def pack_workflow_stage(run: dict[str, Any], stage: str) -> dict[str, Any] | None:
+    contract = run.get("pack_contract", {})
+    workflow = contract.get("workflow", []) if isinstance(contract, dict) else []
+    if not isinstance(workflow, list):
+        return None
+    for item in workflow:
+        if isinstance(item, dict) and item.get("id") == stage:
+            return item
+    return None
+
+
+def pack_agent_for_stage(run: dict[str, Any], stage: str) -> dict[str, Any] | None:
+    workflow_stage = pack_workflow_stage(run, stage)
+    actor = workflow_stage.get("actor", {}) if workflow_stage is not None else {}
+    if not isinstance(actor, dict) or actor.get("type") != "agent":
+        return None
+    agent_id = str(actor.get("id") or "")
+    contract = run.get("pack_contract", {})
+    agents = contract.get("agents", []) if isinstance(contract, dict) else []
+    if not isinstance(agents, list):
+        return None
+    for agent in agents:
+        if isinstance(agent, dict) and agent.get("id") == agent_id:
+            return agent
+    return None
+
+
+def pack_permission_for_agent(
+    run: dict[str, Any],
+    agent: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if agent is None:
+        return None
+    contract = run.get("pack_contract", {})
+    permission_sets = contract.get("permission_sets", {}) if isinstance(contract, dict) else {}
+    if not isinstance(permission_sets, dict):
+        return None
+    value = permission_sets.get(agent.get("permission_set"))
+    return value if isinstance(value, dict) else None
+
+
+def pack_agent_prompt(agent: dict[str, Any] | None) -> str:
+    value = agent.get("prompt_path") if agent is not None else None
+    if not isinstance(value, str) or not value:
+        return ""
+    path = Path(value)
+    try:
+        return path.read_text(encoding="utf-8") if path.is_file() else ""
+    except (OSError, UnicodeError):
+        return ""
+
+
 def next_readonly_stage(run: dict[str, Any]) -> str | None:
     normalized = normalize_run_workflow_state(run)
     approval = normalized.get("approval", {})
@@ -4476,6 +4930,14 @@ def next_readonly_stage(run: dict[str, Any]) -> str | None:
         return "research"
     if statuses.get("plan") not in {"awaiting_approval", "approved", "complete"}:
         return "plan"
+    verification = normalized.get("verification", {})
+    verification_passed = (
+        statuses.get("verification") == "complete"
+        and isinstance(verification, dict)
+        and verification.get("status") == "passed"
+    )
+    if verification_passed and statuses.get("review") not in {"complete", "approved"}:
+        return "review"
     return None
 
 
@@ -4490,11 +4952,24 @@ def readonly_stage_prerequisite_blockers(run: dict[str, Any], stage: str) -> lis
     task_approved = statuses.get("task") == "approved"
     if stage == "research" and (not approved or not task_approved):
         blockers.append("research requires an approved task before adapter execution.")
+    task_validation = normalized.get("task_validation", {})
+    if stage == "research" and isinstance(task_validation, dict) and task_validation.get(
+        "status"
+    ) not in {None, "valid"}:
+        blockers.append("research requires a complete task definition and objective success check.")
     if stage == "plan":
         if not approved or not task_approved:
             blockers.append("plan requires an approved task before adapter execution.")
         if statuses.get("research") != "complete":
             blockers.append("plan requires completed research before adapter execution.")
+    if stage == "review":
+        verification = normalized.get("verification", {})
+        if (
+            statuses.get("verification") != "complete"
+            or not isinstance(verification, dict)
+            or verification.get("status") != "passed"
+        ):
+            blockers.append("review requires passed deterministic verification.")
     if stage not in READONLY_WORKFLOW_STAGES:
         blockers.append(f"unsupported read-only stage: {stage}")
     return blockers
@@ -4510,6 +4985,8 @@ def render_stage_prompt(
 ) -> str:
     artifact = f"{stage}.md"
     sections = REQUIRED_READONLY_STAGE_SECTIONS.get(stage, ())
+    agent = pack_agent_for_stage(run, stage)
+    permission = pack_permission_for_agent(run, agent)
     lines = [
         f"# LoopForge {stage.title()} Stage",
         "",
@@ -4522,6 +4999,8 @@ def render_stage_prompt(
         f"- Workspace directory: {workspace_dir}",
         f"- Artifact: {artifact}",
         f"- Adapter: {adapter}",
+        f"- Agent: {agent.get('id') if agent else stage}",
+        f"- Permission set: {agent.get('permission_set') if agent else 'read-only'}",
         "",
         "## Objective",
         "",
@@ -4538,6 +5017,18 @@ def render_stage_prompt(
     ]
     lines.extend(f"- {section}" for section in sections)
     lines.append("")
+    if permission is not None:
+        lines.extend(
+            [
+                "## Permission Boundary",
+                "",
+                json.dumps(permission, indent=2, sort_keys=True),
+                "",
+            ]
+        )
+    agent_prompt = pack_agent_prompt(agent)
+    if agent_prompt:
+        lines.extend(["## Pack Agent Instructions", "", agent_prompt.strip(), ""])
     return "\n".join(lines)
 
 
@@ -4700,11 +5191,19 @@ def approve_review(
     blockers: list[str] = []
     if statuses.get("verification") != "complete":
         blockers.append("review approval requires completed deterministic verification.")
-    if statuses.get("review") in {"approved", "complete"}:
+    verification = run.get("verification", {})
+    if not isinstance(verification, dict) or verification.get("status") != "passed":
+        blockers.append("review approval requires passed deterministic verification.")
+    if statuses.get("review") == "approved":
         blockers.append("review approval has already been recorded.")
+    elif statuses.get("review") != "complete":
+        blockers.append("review approval requires a completed read-only review.")
     verification_path = status.run_dir / "verification.md"
     if not verification_path.exists():
         blockers.append("review approval requires verification.md in the run directory.")
+    review_path = status.run_dir / "review.md"
+    if not review_path.exists():
+        blockers.append("review approval requires review.md in the run directory.")
     if blockers:
         return StageResult(
             project_dir=status.project_dir,
@@ -4714,7 +5213,7 @@ def approve_review(
             ok=False,
             message="LoopForge review approval is blocked.",
             blockers=blockers,
-            artifact_path=verification_path if verification_path.exists() else None,
+            artifact_path=review_path if review_path.exists() else None,
         )
 
     updated = apply_review_approval(run, source=source)
@@ -4728,7 +5227,7 @@ def approve_review(
         ok=True,
         message="LoopForge review approved; draft publication is now eligible.",
         blockers=[],
-        artifact_path=verification_path,
+        artifact_path=review_path,
     )
 
 
@@ -4974,26 +5473,6 @@ def execute_readonly_stage(
             message=f"LoopForge {stage} stage is blocked.",
             blockers=blockers,
         )
-    if adapter != "local-adapter-fixture":
-        blockers = [
-            f"read-only {stage} stage does not yet support adapter `{adapter}`; "
-            "configure local-adapter-fixture for this stage."
-        ]
-        updated = update_run_for_stage_blocker(
-            run_json_path=run_json_path,
-            run=run,
-            stage=stage,
-            blockers=blockers,
-        )
-        return StageResult(
-            project_dir=status.project_dir,
-            run_dir=status.run_dir,
-            run=updated,
-            stage=stage,
-            ok=False,
-            message=f"LoopForge {stage} stage is blocked.",
-            blockers=blockers,
-        )
     workspace_dir = run_workspace_path(run, status.project_dir)
     if not workspace_dir.exists() or not workspace_dir.is_dir():
         blockers = [f"run workspace is not available: {workspace_dir}"]
@@ -5015,25 +5494,35 @@ def execute_readonly_stage(
 
     stage_dir = status.run_dir / "artifacts" / "stages" / stage
     stage_dir.mkdir(parents=True, exist_ok=True)
-    (stage_dir / "prompt.md").write_text(
-        render_stage_prompt(
-            stage=stage,
-            run=run,
-            run_dir=status.run_dir,
-            workspace_dir=workspace_dir,
-            adapter=adapter,
-        ),
-        encoding="utf-8",
+    prompt = render_stage_prompt(
+        stage=stage,
+        run=run,
+        run_dir=status.run_dir,
+        workspace_dir=workspace_dir,
+        adapter=adapter,
     )
+    (stage_dir / "prompt.md").write_text(prompt, encoding="utf-8")
     before_snapshot = workspace_snapshot(workspace_dir)
     before_git = git_status_entries(workspace_dir)
     try:
-        command = command_for_adapter(adapter, adapter_args or [])
-        child, stdout, stderr = execute_fixture_command(
-            command=command,
-            project_dir=workspace_dir,
-            timeout_seconds=attempt_timeout(run, status.loop_contract or {}),
+        command = command_for_readonly_stage(
+            adapter=adapter,
+            adapter_args=adapter_args or [],
+            workspace_dir=workspace_dir,
         )
+        if adapter == "local-adapter-fixture":
+            child, stdout, stderr = execute_fixture_command(
+                command=command,
+                project_dir=workspace_dir,
+                timeout_seconds=attempt_timeout(run, status.loop_contract or {}),
+            )
+        else:
+            child, stdout, stderr = execute_readonly_adapter_command(
+                command=command,
+                prompt=prompt.encode("utf-8"),
+                project_dir=workspace_dir,
+                timeout_seconds=attempt_timeout(run, status.loop_contract or {}),
+            )
     except (OSError, RuntimeError, ValueError) as error:
         blockers = [f"read-only {stage} adapter execution could not start: {error}"]
         updated = update_run_for_stage_blocker(
@@ -5188,7 +5677,7 @@ def run_with_isolated_process(command: list[str], cwd: Path, timeout_seconds: in
     return isolated_process.run(
         command,
         cwd,
-        os.environ,
+        isolated_process.select_allowed_parent_environment(os.environ, policy),
         policy,
         timeout_seconds=bounded_timeout,
     )
@@ -5198,7 +5687,10 @@ def run_streaming_process(command: list[str], cwd: Path, timeout_seconds: int) -
     isolated_process = isolated_process_module()
     policy = isolated_process.load_policy()
     bounded_timeout = min(float(timeout_seconds), float(policy["max_timeout_seconds"]))
-    env = isolated_process.build_child_environment(os.environ, policy)
+    env = isolated_process.build_child_environment(
+        isolated_process.select_allowed_parent_environment(os.environ, policy),
+        policy,
+    )
     process = subprocess.Popen(
         command,
         cwd=cwd,
@@ -5301,12 +5793,7 @@ def execute_fixture_command(
     project_dir: Path,
     timeout_seconds: int,
 ) -> tuple[dict[str, Any], bytes, bytes]:
-    resolved_command = list(command)
-    executable = Path(resolved_command[0])
-    if not executable.is_absolute():
-        found = shutil.which(resolved_command[0])
-        if found:
-            resolved_command[0] = found
+    resolved_command = resolve_child_executable(command)
     child = run_with_isolated_process(resolved_command, project_dir, timeout_seconds)
     stdout = child["stdout"] if isinstance(child.get("stdout"), bytes) else b""
     stderr = child["stderr"] if isinstance(child.get("stderr"), bytes) else b""
@@ -5546,6 +6033,9 @@ def update_run_after_attempt(
     if attempt["status"] == "completed":
         updated["status"] = READY_FOR_VERIFICATION
         updated["blockers"] = []
+        updated = normalize_run_workflow_state(updated)
+        updated["stage_statuses"]["implementation"] = "complete"
+        updated["current_stage"] = "implementation_complete"
     else:
         updated["status"] = ADAPTER_BLOCKED
         blockers = [
@@ -5555,6 +6045,9 @@ def update_run_after_attempt(
         for reason in attempt.get("profile_stop_reasons", []):
             blockers.append(str(reason))
         updated["blockers"] = blockers
+        updated = normalize_run_workflow_state(updated)
+        updated["stage_statuses"]["implementation"] = "blocked"
+        updated["current_stage"] = "implementation_blocked"
     write_json_atomic(run_json_path, updated)
     return updated
 
@@ -6132,16 +6625,15 @@ def verify_run(project_dir: Path, *, confirmed: bool = False) -> VerifyResult:
     if not blockers:
         updated_run["current_stage"] = VERIFICATION_READY_STAGE
         updated_run["stage_statuses"]["verification"] = "complete"
-        if updated_run["stage_statuses"].get("review") not in {"approved", "complete"}:
-            updated_run["stage_statuses"]["review"] = "pending"
-            updated_run["human_gates"]["review_approval"] = {
-                **initial_workflow_state()["human_gates"]["review_approval"],
-                "status": "pending",
-            }
-            updated_run["publish_eligibility"] = {
-                "eligible": False,
-                "reasons": ["review approval is required before draft publication"],
-            }
+        updated_run["stage_statuses"]["review"] = "pending"
+        updated_run["human_gates"]["review_approval"] = {
+            **initial_workflow_state()["human_gates"]["review_approval"],
+            "status": "pending",
+        }
+        updated_run["publish_eligibility"] = {
+            "eligible": False,
+            "reasons": ["read-only review and approval are required before draft publication"],
+        }
     else:
         updated_run["current_stage"] = "verification_blocked"
         updated_run["stage_statuses"]["verification"] = "blocked"

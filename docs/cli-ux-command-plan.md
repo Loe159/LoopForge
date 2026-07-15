@@ -1,1008 +1,718 @@
-# LoopForge CLI UX Command Plan
+# LoopForge shell UX redesign
 
-This plan tracks command-by-command UX and design improvements for LoopForge's
-human-facing CLI and interactive shell.
+Status: proposed plan based on the working tree on 2026-07-15.
 
-For the end-to-end run lifecycle map, resume/new-run behavior, and human review
-requirements, see `docs/plans/2026-07-10-001-feat-run-guidance-map-plan.md`.
+## Outcome
 
-## Global Principle
+LoopForge should stop presenting the workflow as a large slash-command REPL.
+The default interactive experience should be an operator console built around
+three nested objects:
 
-Every command should show three things, in this order:
-
-1. **Important state now**: what happened, what is ready, or what is blocked.
-2. **Useful proof**: run id, status, generated file, count, risk, check, or short path.
-3. **Next action**: one concrete command to run next.
-
-Common design language:
-
-- `green`: success or ready.
-- `yellow`: attention or human action required.
-- `red`: blocked or failed.
-- `cyan`: command to run.
-- `dim`: paths and secondary detail.
-- Default output should be short; deeper details belong behind `--details`.
-- Use loaders for commands that scan, execute adapters, generate artifacts, or read many runs.
-
-## Top-Level Commands
-
-### `loopforge init`
-
-Important screen info:
-
-- Project initialized, repaired, or already ready.
-- Active profile.
-- Run root.
-
-UX improvements:
-
-- If already initialized, say `Project already ready` rather than sounding like nothing happened.
-- If repaired, list only repaired items.
-- End with `loopforge run --task "..."`.
-
-Design:
-
-```text
-LoopForge project ready
-project   LoopForge
-profile   supervised
-runs      C:\...\LoopForge\runs\LoopForge
-
-Next
-loopforge run --task "Describe the task"
+```mermaid
+flowchart LR
+  P["Projects"] --> R["Runs"]
+  R --> S["Workflow stages"]
+  S --> A["Evidence and actions"]
 ```
 
-### `loopforge run`
+The user should always be able to answer, without knowing a command:
 
-Important screen info:
+1. Which project and run am I looking at?
+2. Which stage is active, complete, blocked, or waiting for me?
+3. What is LoopForge doing now?
+4. What evidence is available?
+5. What is the safest next action?
 
-- Run created.
-- Goal.
-- Run id.
-- Selected pack.
-- Loop contract status.
-- Next action.
+The non-interactive CLI remains stable and scriptable. `--json`, CSV, plain
+text, exit codes, stdout/stderr separation, `NO_COLOR`, and `--no-input` must
+not depend on the full-screen interface.
 
-UX improvements:
+## Evidence from the current code
 
-- Keep the loader and guide behavior.
-- If `--task` is absent in a TTY, ask step by step:
-  - task;
-  - success check;
-  - optional profile or pack;
-  - rubric when subjective.
-- If no success check is present, show a short warning, not a wall of text.
+- `src/loopforge/cli/interactive.py` exposes 64 supported and 30 recognized but
+  unsupported commands through one completion catalog. This is too much
+  product surface for the default experience.
+- `InteractiveShell.run_prompt()` is a prompt with a bottom toolbar, not a
+  navigable application. Its home panel shows one project and one current run.
+- `loopforge run` uses `RunCockpitService` in `cli/workflow.py`, while `/run`
+  calls `create_run` directly in `cli/interactive.py`. The two entry points do
+  not provide the same workflow or guidance.
+- `TerminalRenderer` in `cli/ui.py` already provides Rich/plain panels,
+  tables, status spinners, semantic roles, and fallbacks. It is the correct
+  base for non-interactive output, but it is not a screen/navigation model.
+- `workflow_progress()` already derives the current stage and actor from the
+  selected pack workflow. The full-screen run view should reuse that state.
+- `default_run_root()` in `engine/__init__.py` uses only the directory basename.
+  Two projects with the same name can resolve to the same run root.
+- `list_runs()` and `dashboard_snapshot()` are scoped to the current project.
+  There is no global project registry or cross-project attention view.
+- The new pack contract in `engine/packs.py` exposes agents, permissions,
+  workflow stages, skills, checks, inheritance, and contribution sources. The
+  UI does not yet make that useful context visible at the relevant stage.
 
-Design:
+## Product decisions
 
-```text
-Run created
-goal      Improve CLI status output
-run       run-...
-pack      python
-contract  draft
+### 1. Two rendering modes, one behavior model
 
-Next
-loopforge continue
-```
+Use one action and view-model layer, then render it in two ways:
 
-### `loopforge status`
+| Mode | Owner | Use |
+| --- | --- | --- |
+| Interactive TUI | `prompt_toolkit` | Full-screen layout, focus, keyboard input, selectors, dialogs, live operations |
+| Text CLI | Rich through `TerminalRenderer` | One-shot commands, CI, redirected output, human summaries |
+| Machine output | JSON/CSV serializers | Automation; never includes ANSI, loaders, prompts, or decorative text |
 
-Important screen info:
+Do not let Rich and `prompt_toolkit` both own the live screen. In the TUI,
+`prompt_toolkit` owns layout and refresh. Rich remains the renderer for
+one-shot terminal output.
 
-- Current state.
-- Blocker or next action.
-- Active run.
-- Verification state.
+### 2. Make navigation primary and commands secondary
 
-UX improvements:
+`loopforge` and `loopforge shell` should open the console. Slash commands stay
+available for expert users and compatibility, but the main interaction is:
 
-- Default output should be 6-8 high-signal lines.
-- Move paths, artifacts, memory, and policy into `--details`.
-- Consider a short `statusline` variant later.
+- arrow keys or `j`/`k` to navigate;
+- `Enter` to open or execute the selected safe action;
+- `Esc` to go back;
+- `Tab` to move focus;
+- `Ctrl+P` to open a searchable project/run selector;
+- `Ctrl+K` to open the context-aware action palette;
+- `?` to show shortcuts for the current screen;
+- `Ctrl+C` to interrupt the active operation, then clear input, then exit on a
+  second press when idle.
 
-Design:
+The footer must always show only the keys that work in the current context.
 
-```text
-Current loop
-status    ready_for_verification
-run       run-...
-task      Improve CLI output
-checks    2 success checks
-verify    not run
+### 3. Add a real project identity and registry
 
-Next
-loopforge verify
-```
+Add a generated `project_id` to `.loopforge/config.json` and a global registry
+under `LOOPFORGE_HOME`. The registry maps `project_id` to canonical path,
+display name, last-opened time, and last known attention summary.
 
-### `loopforge guide`
-
-Important screen info:
-
-- Why LoopForge recommends the next action.
-- One priority action.
-- Blocking reasons, if any.
-
-UX improvements:
-
-- Do not repeat the full status.
-- Structure as:
-  - You are here;
-  - Why;
-  - Do this.
-- Show extra actions only as secondary `Also useful`.
-
-Design:
+New run storage should be keyed by `project_id`, not by basename:
 
 ```text
-You are here
-The run is ready for verification.
-
-Why
-The workspace changed and no patch has been verified yet.
-
-Do this
-loopforge verify
+<LOOPFORGE_HOME>/projects/<project_id>/runs/<run_id>/
+<LOOPFORGE_HOME>/projects/<project_id>/workspaces/<run_id>/
 ```
 
-### `loopforge dashboard`
+Migration from `<home>/runs/<project_name>` must be non-destructive. If the
+same `project_id` is found at a new path, ask whether the project moved or was
+cloned; never silently merge two repositories.
 
-Important screen info:
+This registry enables:
 
-- Overall operator health: runs, verification, memory, metrics.
-- Current run first.
+- a global home screen;
+- multiple repositories with the same directory name;
+- recent projects;
+- cross-project counts for runs needing approval or blocked;
+- reliable `/cd`/project switching without typing paths.
 
-UX improvements:
+### 4. Keep one selected run per project, show all runs globally
 
-- Make default output less verbose.
-- Group sections:
-  - Project;
-  - Current run;
-  - Verification;
-  - Recent runs;
-  - Next human action.
-- Show top 5 runs by default.
+The existing `current_run_id` remains the focused run for a project. The home
+screen also lists every recent run across registered projects. Historical
+attempts must not be presented as live processes. Until background execution
+exists, only the foreground operation launched by the current console may show
+`running`.
 
-Design:
+### 5. Replace internal statuses with user-facing state families
 
-- Compact sections.
-- Short tables.
-- No repeated internal state unless `--details` exists later.
+Persisted engine values remain unchanged. The presentation layer maps them to
+stable labels:
 
-### `loopforge runs`
+| Family | Examples of engine state | Label | Marker | Color |
+| --- | --- | --- | --- | --- |
+| Ready | `ready_for_run`, `loop_contract_ready` | Ready | `●` | cyan |
+| Running | foreground research, plan, implementation, verification, review | Running | `◉` | blue/cyan |
+| Needs human | draft task, plan approval, review approval | Needs approval | `◆` | yellow |
+| Blocked | `adapter_blocked`, `verification_failed`, blocked stage | Blocked | `×` | red |
+| Complete | approved/complete stages, verified checks | Complete | `✓` | green |
+| Waiting | pending future stages | Waiting | `○` | dim |
+| Archived | `archived: true` | Archived | `–` | dim |
 
-Important screen info:
+Color is never the only signal. Every color has a marker and a text label.
 
-- Known runs.
-- Current run marker.
-- Status, short task, updated time.
+## Information architecture
 
-UX improvements:
+### Global home
 
-- Add summary header:
-  - total runs;
-  - current run;
-  - latest status.
-- If no runs exist, show `No runs yet` and next command.
-
-Design:
+The home screen answers “where does my attention belong?” before it shows
+details.
 
 ```text
-Runs
-current  run-...  ready_for_verification  Improve CLI output
+LoopForge                                    3 projects · 2 need attention
+──────────────────────────────────────────────────────────────────────────
+Projects                    Recent runs
+◆ LoopForge          1      ◆ CLI UX redesign            Plan approval
+× billing-api        1      × Repair webhook retries     Verification failed
+✓ mobile-app         0      ✓ Add login animation        Review complete
 
-Run                         Status                  Updated
-* run-2026...               ready_for_verification  2026-...
-  run-2026...               verified                2026-...
+Selected: LoopForge
+7 runs · Python pack · last opened 2 min ago
+
+Enter open   n new run   Ctrl+P switch   Ctrl+K actions   ? help
 ```
 
-### `loopforge continue`
+Default sort order:
 
-Important screen info:
+1. needs human action;
+2. blocked;
+3. foreground operation;
+4. recently updated;
+5. archived, hidden unless requested.
 
-- Contract validation or adapter attempt.
-- Attempt id.
-- Adapter.
-- Result.
-- Whether workspace changed.
-- Next action.
-
-UX improvements:
-
-- Use loader when adapter runs.
-- If validation only, say clearly that no adapter executed.
-- On failure, show stderr tail and artifact path.
-- On success, hide full profile text unless `--details`.
-
-Design:
+### Project screen
 
 ```text
-Attempt completed
-attempt   attempt-001
-adapter   codex
-changed   yes
-status    completed
+LoopForge  main                               Python · supervised · 7 runs
+──────────────────────────────────────────────────────────────────────────
+Runs                       Project health
+◆ CLI UX redesign          Pack       python
+× Fix CI parser            Adapter    codex
+✓ Refactor packs           Git        4 changed files
+○ Add docs search          Memory     2 proposals
 
-Next
-loopforge verify
+Selected run
+Plan ready · waiting for approval · updated 2 min ago
+
+Enter open   n new   f fork   a archive   / filter   Esc projects
 ```
 
-Failure:
+The header always shows the project name, shortened path when useful, Git
+branch, pack, profile, and run count. Paths are secondary/dim and expandable.
+
+### Run screen
 
 ```text
-Attempt blocked
-reason    Adapter reported blocked
-stderr    attempts/attempt-001/adapter.stderr
+LoopForge / CLI UX redesign                  ◆ Needs approval
+run-20260715… · LoopForge · main · planner
+──────────────────────────────────────────────────────────────────────────
+✓ Task  ─  ✓ Research  ─  ◆ Plan  ─  ○ Build  ─  ○ Verify  ─  ○ Review
 
-Last stderr
-> ...
+Plan approval
+4 implementation steps · 6 files in scope · 3 success checks
 
-Next
-loopforge shell --command "/raw latest stderr"
+Evidence
+research.md       complete
+plan.md           ready to review
+workspace         unchanged
+
+Next action
+Review and approve the implementation plan
+
+Enter review plan   a approve   e evidence   Esc runs   ? help
 ```
 
-### `loopforge verify`
+For seven stages, wrap the stepper across two rows below 120 columns. Below 80
+columns, show a vertical list with only the current stage expanded.
 
-Important screen info:
+### Stage detail
 
-- Verification status.
-- Patch path.
-- Risk.
-- Checks passed.
-- Blockers.
+Each stage uses the same structure:
 
-UX improvements:
+1. stage title and actor;
+2. plain-language state;
+3. output/evidence preview;
+4. blockers or required decision;
+5. one primary action and at most two secondary actions.
 
-- Use loader.
-- If passing, show a clear `Verified`.
-- If failing, show the failed check and diagnostic command.
-- Hide detailed risk policy unless `--details`.
+Pack data supplies the stage title, actor, mode, permission set, and artifact.
+Internal file paths remain behind an evidence/details view.
 
-Design:
+### Approval dialog
+
+Never ask only `yes/no`. A gate must say what the user is approving:
 
 ```text
-Verification failed
-checks    3/4 passed
-risk      medium
-patch     verification/complete.patch
+Approve implementation plan?
 
-Blocking check
-unit-tests failed
+You approve:
+- the 4 steps in plan.md;
+- changes limited to 6 listed files;
+- 3 success checks before review.
 
-Next
-Inspect verification.md, fix the diagnostic, then run:
-loopforge verify
+Permissions: workspace write · network denied by default
+
+[Enter] Approve   [e] Open plan   [r] Request changes   [Esc] Cancel
 ```
 
-### `loopforge learn`
+Task, plan, review, archive, memory promotion, branch creation, and future
+publication actions use this pattern with action-specific evidence.
 
-Important screen info:
+## Visual system
 
-- Proposals created, promoted, rejected, pending.
-- Proposal path.
-- Next action.
+### Semantic tokens
 
-UX improvements:
+| Token | Default | Use |
+| --- | --- | --- |
+| `brand` | bold cyan | LoopForge title, focus border |
+| `primary` | terminal default | main content |
+| `secondary` | dim | ids, timestamps, paths, hints |
+| `ready` | cyan | safe next action, selected command |
+| `running` | bright blue/cyan | active foreground work |
+| `attention` | yellow | approval or user input required |
+| `success` | green | completed stage or passed check |
+| `danger` | bold red | blocker, failed check, high risk |
+| `selected` | reverse/bold | keyboard focus; must work without color |
+| `code` | cyan on neutral background where supported | commands, paths, ids |
 
-- If run without `--approve`, say explicitly that nothing was promoted.
-- If pending proposals exist, suggest `loopforge learn --approve`.
-- Mention `--confirm` only when strict profile requires it.
+Support default, light, dark, mono, `NO_COLOR`, 16-color terminals, and an
+ASCII marker fallback. Rich should auto-detect the terminal color system
+instead of forcing `standard` in every environment.
 
-Design:
+### Density rules
+
+- Show full run ids only in details or copy actions.
+- Show relative paths by default.
+- Truncate tasks only when a visible `…` can be opened.
+- Show at most five recent runs on home; scrolling reveals the rest.
+- Show one blocker in the summary and the full list in stage detail.
+- Never repeat the same status in the title, body, and footer.
+- Avoid panels around every section; focus, whitespace, and rules establish
+  hierarchy. Reserve a border for the selected/decision area.
+
+### Empty states
+
+Every empty state explains why it is empty and offers one action:
+
+- no registered project: `Open the current Git repository`;
+- project not initialized: `Initialize LoopForge`;
+- no runs: `Create the first run`;
+- no evidence: `This stage has not started`;
+- no attempts: `Implementation has not run`;
+- no memory proposals: `Nothing is waiting for approval`.
+
+## Loaders and live operations
+
+### Timing policy
+
+- Under 250 ms: render the result directly; no spinner flash.
+- Unknown duration over 250 ms: spinner plus elapsed time.
+- Known finite work: step progress, not a fake percentage.
+- Multiple checks: one row per check with queued/running/passed/failed state.
+- Non-TTY, JSON, CSV, `--quiet`, and `--no-input`: no animation.
+- On completion, replace the loader with a compact receipt; do not leave every
+  progress frame in scrollback.
+
+### Operation display
 
 ```text
-Memory proposals ready
-pending   2
-promoted  0
-rejected  1
-file      memory-proposals.json
+◉ Verifying run · 00:18
+✓ Generate complete patch
+✓ Enforce diff policy
+◉ Run unit tests
+○ Classify final risk
 
-Next
-Review proposals, then run:
-loopforge learn --approve
+Ctrl+C cancel   l show live output
 ```
 
-### `loopforge pack list`
+Do not invent progress from elapsed time. The operation controller receives
+real events such as `stage_started`, `artifact_written`, `check_started`,
+`check_finished`, `adapter_output`, `blocked`, and `completed`.
 
-Important screen info:
+### Loader matrix
 
-- Available packs.
-- Source.
-- Detected pack, if available.
+| Operation | Display |
+| --- | --- |
+| Register/open project | delayed spinner while resolving Git root, config, pack, and run summaries |
+| Create/fork run | steps: validate task, detect pack, prepare workspace, write contract |
+| Research/plan/review agent | spinner with actor, elapsed time, latest safe activity, output toggle |
+| Implementation adapter | live stage view, attempt id, adapter, elapsed time, output toggle, cancel |
+| Verification | determinate check list because check count is known |
+| Pack discovery | delayed spinner only when scanning is noticeable |
+| Dashboard/metrics aggregation | delayed spinner with number of projects/runs scanned when known |
+| Doctor | one row per diagnostic |
+| Copy, clear, theme, title, keymap | no loader; immediate toast |
+| Export/compact | delayed spinner; final path and size |
 
-UX improvements:
+### Errors
 
-- Keep a short table by default.
-- Add a `kind` column: bundled, local, override.
-- Mark the detected pack.
+Every failure view uses this order:
 
-Design:
+1. what failed;
+2. effect on the run;
+3. whether state/artifacts were preserved;
+4. the most actionable evidence;
+5. one recovery action.
+
+Example:
 
 ```text
-Project packs
-* generic-code   Default code changes      bundled
-  python         Python packages/tests     bundled
-  custom         Custom project pack       local override
+× Verification blocked
+Unit tests failed. The run remains at Verify; no approval changed.
+
+pytest   failed after 12.4s
+report   artifacts/verification.md
+
+Enter open failure   r rerun checks   Esc back
 ```
 
-### `loopforge pack detect`
+## Top-level command plan
 
-Important screen info:
+The following table covers every parser command in `cli/parser.py`. “Component”
+is the default human-facing UI; JSON/CSV output remains data-only.
 
-- Selected pack.
-- Score or detection reason.
-- Source.
+| Command | First-view information | Component and color | Loader | Decision |
+| --- | --- | --- | --- | --- |
+| `loopforge` | registered projects, attention counts, recent runs | global home; selected row reverse, attention yellow, blocked red | delayed project-index spinner | Make this the primary product entry point. |
+| `loopforge shell` / `interactive` | same as `loopforge` | full-screen console | same as home | Keep aliases; `--command` and `--script` remain headless compatibility modes. |
+| `loopforge init` | project, generated id, profile, detected pack, storage location | setup summary; success green, repair yellow | step loader only when Git/pack scan exceeds threshold | Register project globally and open its project screen. |
+| `loopforge run` | active project/run, task, success checks, pack, permissions | guided wizard or active-run selector; missing requirements yellow | create-run step loader | Never silently replace focus; choose resume, fork, or new. |
+| `loopforge status` | project, run, stage stepper, blocker/proof, next action | compact run snapshot | none normally | Reuse the run view model; `--details` expands evidence. |
+| `loopforge guide` | one action and one reason | next-action card; action cyan, approval yellow | none | Retain for scripts; in TUI this is the persistent Next action area. |
+| `loopforge dashboard` | attention across projects/runs, then selected project health | global/project dashboard depending on scope | delayed aggregation spinner | Add `--all-projects`; stop repeating current-run details in multiple sections. |
+| `loopforge runs` | project, current marker, stage, attention, updated time, task | searchable run table; semantic status | delayed scan for large histories | Add `--all-projects`, `--archived`, and interactive selection in TTY. |
+| `loopforge continue` | explicitly “contract check” or “implementation attempt”, run, adapter, attempt, changes | operation view then receipt; running cyan, blocked red | live operation | No ambiguous “continue”: label the exact transition before execution. |
+| `loopforge verify` | run, real check list, patch, risk, failed check, review action | determinate verification view | per-check progress | Success routes to review, never directly to learning/publication. |
+| `loopforge learn` | proposal list, source, pending/promoted/rejected counts | reviewable proposal list; approval yellow | spinner only while deriving/writing proposals | `--approve` opens or prints an evidence-rich approval summary. |
+| `loopforge pack list` | detected pack, inheritance, skills/agents/stages counts, bundled/local kind | compact table; current cyan, override yellow | delayed discovery spinner | Add a details action instead of exposing full paths by default. |
+| `loopforge pack detect` | chosen pack, evidence, inheritance, workflow size | pack card; chosen cyan | delayed discovery spinner | Explain detection evidence, not only a numeric score. |
+| `loopforge metrics record` | run, known/unknown values, destination | compact receipt; unknown yellow/dim | none normally | Keep as an advanced/automation command. |
+| `loopforge metrics summarize` | scope, records, averages, unknown counts, signal quality | summary plus optional table | delayed aggregation spinner | Support project/global scope; never render unknown as zero. |
+| `loopforge version` | version, Python, platform; diagnostic paths under details | compact diagnostic card | none | Keep stable and suitable for bug reports. |
+| `loopforge help` | core workflow first, grouped commands, examples | grouped help; commands cyan | none | Default help shows at most the primary commands; `--all` reveals expert commands. |
+| `loopforge completion` | pure completion script on stdout | no decoration | none | Keep install examples in help/stderr, never in script stdout. |
 
-UX improvements:
+### New top-level navigation commands
 
-- Explain why selected instead of only printing a score.
-- End with `loopforge run --pack <name> --task "..."`.
+| Command | Purpose |
+| --- | --- |
+| `loopforge projects` | List registered projects with attention, run count, path, and last activity; TTY can select one. |
+| `loopforge open [project-or-path]` | Open/register a project and focus it in the console. |
+| `loopforge runs --all-projects` | Give a scriptable global run list without opening the TUI. |
 
-Design:
+These commands are navigation only. They must not execute stages or change run
+approval state.
+
+## Interactive command plan
+
+The default command palette should expose roughly 15 context-relevant actions,
+not the current 94 recognized names. Existing commands can remain callable for
+compatibility while aliases, diagnostics, and unsupported placeholders are
+hidden from ordinary completion.
+
+### Start and navigation
+
+| Command | Information and component | Color | Loader | Disposition |
+| --- | --- | --- | --- | --- |
+| `/init` | setup card with project id, profile, pack | green/yellow repair | step loader | Primary only when project is uninitialized. |
+| `/run` | run wizard or current-run resume/fork/new selector | yellow for missing contract fields | step loader | Primary. Plain text may still start a run after a preview. |
+| `/new` | same run wizard, explicitly new | same as `/run` | step loader | Hidden alias of `/run --new`; never separate behavior. |
+| `/fork` | source run plus inherited task fields, checks, pack, permissions | cyan, changed inherited fields yellow | step loader | Project/run action; confirmation summary before creation. |
+| `/runs` | current project run list with attention and stage | semantic statuses | delayed scan | Primary; opens Runs screen. |
+| `/dashboard` | current project health, attention, recent runs, checks, memory | semantic statuses | delayed aggregation | Opens the Project overview; do not duplicate the Run detail screen. |
+| `/resume` | selected run summary and its next action | selected reverse, state semantic | delayed load only | Replace run-id typing with a selector when no id is supplied. |
+| `/archive` | run, retained artifacts, focus after archive | approval yellow, result dim | short spinner | Run action with explicit “artifacts are kept”. |
+| `/cd` | registered project selector and new project path option | selected reverse | delayed project scan | Rename visually to Switch project; keep `/cd` compatibility. |
+
+### Workflow actions
+
+| Command | Information and component | Color | Loader | Disposition |
+| --- | --- | --- | --- | --- |
+| `/status` | run header, stage stepper, one blocker/proof, next action | semantic state | none | Primary; same view model as top-level status. |
+| `/guide` | next action, reason, consequence | cyan or yellow when approval | none | Secondary; opens Next action detail. |
+| `/next` | focuses the primary action and shows its shortcut | cyan/yellow | none | Primary; pressing Enter should make `/do <id>` unnecessary. |
+| `/why` | evidence explaining selected/recommended action | dim evidence, yellow caveat | none | Secondary panel attached to Next action. |
+| `/actions` | only actions valid for current screen/run | safe cyan, confirm yellow, dangerous red | none | Replaced visually by `Ctrl+K` palette; keep command. |
+| `/do` | action preview, evidence, confirmation if required | action semantic | operation-specific | Expert compatibility; Enter on selected action is the normal path. |
+| `/continue` | exact stage/actor/adapter, attempt, changed files, result | running cyan, blocked red | live operation | Primary only when implementation is eligible. |
+| `/verify` | real checks, patch, risk, report, failed item | green/red/yellow risk | per-check progress | Primary only when verification is eligible. |
+| `/learn` | memory proposals with category/source/status | pending yellow, promoted green, rejected dim | delayed derive/write spinner | Secondary after review, not the automatic next action after verification. |
+| `/approve` | selected memory proposals and durable effect | yellow approval, green result | write spinner | Hidden alias/action within Memory screen. |
+
+### Review and evidence
+
+| Command | Information and component | Color | Loader | Disposition |
+| --- | --- | --- | --- | --- |
+| `/plan` | goal, stage plan, success checks, allowed tools, `plan.md` preview | checklist green/dim, missing yellow | delayed file load only | Primary evidence view at plan gate. |
+| `/review` | findings, changed files, verification, risk, decision | finding severity; approval yellow | delayed evidence aggregation | Primary at review stage; support focus filters. |
+| `/code-review` | review focused on correctness/maintainability | same as review | same | Hidden alias of `/review --focus code`. |
+| `/security-review` | only security-relevant recorded evidence | yellow/red only with evidence | same | Hidden alias of `/review --focus security`; never imply an external audit. |
+| `/simplify` | cleanup opportunities supported by diff/review | cyan suggestions | same | Hidden alias of `/review --focus simplify`. |
+| `/diff` | file list, additions/deletions, selectable patch viewer | changed cyan, deletion red, addition green | delayed Git spinner for large diff | Project/run Evidence tab. |
+| `/tasks` | attempts plus open human actions | semantic state | none | Rename visually to Activity; do not mix attempts and action ids in one table. |
+| `/ps` | recorded attempts, never fake live jobs | historical dim, current foreground cyan | none | Hidden alias of `/tasks --attempts`; remove process terminology from UI. |
+| `/raw` | attempt id, stdout/stderr/result, tail/full toggle, path | stderr red only for failures; content neutral | delayed file read | Expert log viewer; cap initial lines and support search. |
+| `/goal` | task, source, success checks, rubric | missing yellow | none | Fold into Run overview; keep command for quick access. |
+| `/recap` | one-line project/run/stage/next action | semantic state | none | Keep minimal and copy-friendly. |
+
+### Context and artifacts
+
+| Command | Information and component | Color | Loader | Disposition |
+| --- | --- | --- | --- | --- |
+| `/context` | project, run, mentioned paths, extra dirs, memory, size | neutral groups, warnings yellow | delayed size scan | Context screen; do not dump every path by default. |
+| `/mention` | selected path, type, size, inclusion scope | success green, large/sensitive warning yellow | stat/spinner only for directory | Context action with path completion. |
+| `/add-dir` | directory, estimated size/file count, session-only scope | large-dir warning yellow | bounded scan spinner | Context action; require confirmation for very large directories. |
+| `/compact` | focus, source run, output path, byte size | success green | delayed spinner | Artifact action with final open/copy shortcuts. |
+| `/copy` | target and clipboard result | success green or fallback yellow | none | Immediate toast; fallback export must be explicit. |
+| `/export` | target, format, destination, size | success green | delayed write spinner | Use a small save dialog in TUI. |
+| `/memory` | durable facts, proposals, source and status | pending yellow, promoted green | delayed load only | Memory screen. |
+| `/memories` | same screen with details expanded | same | same | Hidden alias of `/memory --details`. |
+
+### Packs, permissions, and adapters
+
+| Command | Information and component | Color | Loader | Disposition |
+| --- | --- | --- | --- | --- |
+| `/pack` | detected pack, inheritance tree, skills, agents, stages | current cyan, local override yellow | delayed discovery | Pack screen with list/detect/details tabs. |
+| `/skills` | skills grouped by effective inherited pack and stage | selected cyan | delayed load only | Pack details tab, not a standalone primary command. |
+| `/plugins` | local packs only and a precise unsupported note for external plugins | neutral/yellow | none | Hide; label it Packs in UI until plugin management exists. |
+| `/permissions` | filesystem, network, external write, publication, destructive policy | allowed green, confirm yellow, denied red | none | Permission screen derived from the current pack/stage. |
+| `/allowed-tools` | effective tools for selected stage and source | allowed green, absent dim | none | Permission subview; avoid parsing only `loop.md` when pack data exists. |
+| `/sandbox` | engine, workspace, adapter, network, publication boundaries | allowed/denied semantic | none | Permission subview; distinguish LoopForge guarantees from adapter-owned policy. |
+| `/adapter` | current adapter, default args, availability, scope of change | selected cyan, unavailable red | probe only on request | Settings selector; saving result is a toast. |
+| `/adapters` | supported adapters and current selection | current cyan | optional bounded probe | Fold into `/adapter`; hide plural alias. |
+
+### Project and Git operations
+
+| Command | Information and component | Color | Loader | Disposition |
+| --- | --- | --- | --- | --- |
+| `/branch` | current branch, dirty state, proposed branch name | dirty/creation yellow, success green | short Git spinner | Project action; preview before `git switch -c`. |
+| `/config` | effective values, source, project/user scope | changed yellow, valid green | none on show, short write spinner | Settings form; avoid raw JSON as the default view. |
+| `/doctor` | each dependency/config/Git/adapter check and an exact fix | green/yellow/red per check | determinate diagnostic list | Primary troubleshooting screen. |
+| `/debug-config` | raw paths, environment, resolved config, registry ids | dim/neutral, invalid red | none | Hidden expert diagnostics; copy/export friendly. |
+
+### Statistics and settings
+
+| Command | Information and component | Color | Loader | Disposition |
+| --- | --- | --- | --- | --- |
+| `/stats` | attempts, duration, checks, patch, known/unknown tokens/cost | unknown yellow/dim | delayed aggregation | Run Statistics tab. |
+| `/usage` | known adapter usage only; source and freshness | unknown yellow | optional adapter probe only | Hidden alias/filter of Statistics; never fabricate. |
+| `/cost` | known cost, currency, source, freshness | unknown yellow | none normally | Hidden alias/filter of Statistics. |
+| `/theme` | preview and current theme | live preview | none | Settings control; persist at user scope. |
+| `/tui` | interactive/text renderer mode and capability | neutral | none | Expert setting; automatic mode remains default. |
+| `/statusline` | visible segments and compact/full/off preview | live preview | none | Settings control; persist user preference. |
+| `/keymap` | Emacs/Vim plus effective shortcuts | selected cyan | none | Settings control; apply to the current prompt/application immediately. |
+| `/vim` | toggles the same keymap setting | selected cyan | none | Hidden alias of `/keymap vim`; do not duplicate state logic. |
+| `/title` | optional session label | neutral | none | Low-priority setting; hide from default palette. |
+
+### Help and terminal utilities
+
+| Command | Information and component | Color | Loader | Disposition |
+| --- | --- | --- | --- | --- |
+| `/commands` | searchable context actions first, expert catalog second | selected cyan | none | Replace tables with command palette; `/commands all` stays expert-only. |
+| `/help` | shortcuts/current screen help or command usage/examples | commands cyan | none | `?` opens contextual help; `/help <cmd>` remains. |
+| `/clear` | no receipt | none | none | Clear/redraw the application. |
+| `/exit` | active-operation warning if needed | warning yellow | none | Exit cleanly. |
+| `/quit` | same as exit | same | none | Hidden alias of `/exit`. |
+
+## Recognized but unsupported commands
+
+The 30 entries in `UNSUPPORTED_COMMANDS` must be removed from normal completion.
+If typed explicitly, LoopForge should show one sentence and the closest real
+surface. Do not make unavailable features look like product navigation.
+
+| Command | Explicit response / destination |
+| --- | --- |
+| `/advisor` | Not implemented; use the current run review evidence. |
+| `/agent`, `/agents` | Agent roles come from the effective pack; open Pack → Agents. Background fleets are not available. |
+| `/apps`, `/mcp` | Connector/tool configuration belongs to the selected adapter; open Adapter details. |
+| `/background`, `/bg`, `/stop` | Background execution is unavailable; the current foreground operation can be interrupted with `Ctrl+C`. |
+| `/batch` | Parallel run execution is unavailable; Projects and Runs can still show multiple recorded runs. |
+| `/btw`, `/side` | Side conversations are not persisted. |
+| `/delete` | Destructive deletion is unavailable; use Archive. |
+| `/effort`, `/fast`, `/model`, `/personality` | Model behavior belongs to adapter arguments; open Adapter settings. |
+| `/experimental` | No experimental toggle surface exists. |
+| `/feedback` | Show the project issue/reporting instructions, not a fake submission action. |
+| `/hooks` | Lifecycle hooks are unavailable. |
+| `/ide` | IDE context import is unavailable; use Context → Mention. |
+| `/import` | External agent configuration import is unavailable. |
+| `/keybindings` | Open Settings → Keymap; persistent custom bindings are not yet available. |
+| `/login`, `/logout` | Provider authentication belongs to the adapter. |
+| `/rewind` | Checkpoint rewind is unavailable; fork an earlier run when possible. |
+| `/sandbox-add-read-dir` | Use Context → Add directory; adapter sandbox grants remain adapter-owned. |
+| `/schedule` | Scheduled execution is unavailable. |
+| `/ultraplan`, `/ultrareview` | Multi-agent cloud planning/review is unavailable; use the pack planner/reviewer stages. |
+| `/usage-credits` | Credit management belongs to the adapter/provider. |
+
+## Shared action and view model
+
+The current top-level handlers and `InteractiveShell.cmd_*` methods format and
+orchestrate the same concepts independently. Introduce a shared read-only
+presentation layer before building the TUI.
+
+Proposed immutable models:
+
+- `ProjectSummary`: id, name, path, initialized, branch, profile, pack, run
+  counts, attention state, last activity;
+- `RunSummary`: id, short id, task, project, status family, current stage,
+  actor, updated time, archived, next action;
+- `StageView`: id, title, actor, permission mode, status family, artifact,
+  evidence summary, blockers, gate;
+- `ActionDescriptor`: id, label, description, risk, confirmation requirement,
+  availability, command fallback, executor key;
+- `OperationEvent`: operation id, project/run/stage, kind, timestamp, message,
+  progress totals when real, artifact, terminal status;
+- `ShellSnapshot`: projects, focused project/run, workflow, evidence, actions,
+  foreground operation, notification counts.
+
+`ActionDescriptor` is the single registry used by:
+
+- the TUI action palette;
+- guided `Enter` actions;
+- `/actions` and `/do`;
+- top-level `guide` and next-action output;
+- contextual footer shortcuts.
+
+Engine lifecycle APIs remain authoritative. The presentation layer never
+edits `run.json`, approvals, or publication fields directly.
+
+## Proposed module boundaries
 
 ```text
-Detected pack
-pack    node
-score   40
-why     package.json found
-source  .loopforge/packs/node/pack.json
+src/loopforge/cli/
+  presentation.py       # state mapping and immutable view models
+  actions.py            # shared action registry and execution adapters
+  ui.py                 # Rich/plain one-shot renderer
+  interactive.py        # compatibility facade and headless slash dispatch
+  tui/
+    app.py               # prompt_toolkit application and event loop
+    state.py             # focus, filters, selected project/run, settings
+    operations.py        # foreground worker, cancellation, OperationEvent bridge
+    screens/
+      home.py
+      project.py
+      run.py
+      evidence.py
+      settings.py
+    widgets/
+      pipeline.py
+      selector.py
+      action_bar.py
+      log_viewer.py
+      approval.py
+src/loopforge/engine/
+  projects.py            # project identity, registry, migration, global summaries
 ```
 
-### `loopforge metrics record`
-
-Important screen info:
-
-- Metrics record written or refused.
-- Run id.
-- Known and unknown fields.
-
-UX improvements:
-
-- Keep default output short.
-- Say `not reported` for missing values, not zero.
-- If no run exists, suggest `loopforge run`.
-
-Design:
-
-```text
-Metrics recorded
-run       run-...
-duration  42s
-tokens    not reported
-cost      not reported
-file      metrics/record.json
-```
-
-### `loopforge metrics summarize`
-
-Important screen info:
-
-- Record count.
-- Useful averages.
-- Unknown counts.
-- Simple signal quality warning.
-
-UX improvements:
-
-- Default to an operator summary.
-- Put per-run table behind `--details` or keep it for `json`/`csv`.
-- Warn when too many values are unknown.
-
-Design:
-
-```text
-Metrics summary
-records   8
-duration  avg 41s, 2 unknown
-attempts  avg 1.4
-cost      0 known, 8 unknown
-
-Signal
-Cost and token reporting are incomplete.
-```
-
-### `loopforge version`
-
-Important screen info:
-
-- LoopForge version.
-- Python/runtime.
-- Useful paths.
-
-UX improvements:
-
-- Keep default compact.
-- Add `--details` later for full diagnostic output.
-- Make text output suitable for issue reports.
-
-Design:
-
-```text
-LoopForge 0.1.0
-python    3.13.13
-platform  Windows
-home      C:\...\LoopForge
-config    .loopforge/config.json
-```
-
-### `loopforge help`
-
-Important screen info:
-
-- Main commands.
-- Workflow.
-- Examples.
-
-UX improvements:
-
-- Replace raw argparse feel with grouped help.
-- Groups:
-  - Start;
-  - Work loop;
-  - Inspect;
-  - Configure;
-  - Automation.
-- Keep full argparse-style help available via `--help` or future `help --all`.
-
-Design:
-
-```text
-LoopForge
-Portable agentic workflow loops.
-
-Start
-  init      Prepare this project
-  run       Create a bounded run
-
-Work
-  status    See where you are
-  continue  Execute or validate next attempt
-  verify    Generate patch and run checks
-```
-
-### `loopforge completion`
-
-Important screen info:
-
-- Completion script on stdout.
-- Installation examples in help only.
-
-UX improvements:
-
-- Keep stdout as pure script.
-- Add better examples to `loopforge completion --help`.
-
-Design:
-
-```text
-Examples
-  loopforge completion powershell > loopforge-completion.ps1
-```
-
-## Interactive Shell
-
-The shell should be the smoothest LoopForge experience, not just a slash-command
-catalog.
-
-### Shell entry screen
-
-Important screen info:
-
-- Project.
-- Current run.
-- Status.
-- Next action.
-- Adapter.
-
-UX improvements:
-
-- On startup, show a short home panel.
-- If not initialized, suggest `/init`.
-- If initialized without a run, suggest `/run`.
-
-Design:
-
-```text
-LoopForge shell
-project   LoopForge
-run       run-... ready_for_verification
-adapter   codex
-
-Next
-/do verify
-```
-
-Prompt idea:
-
-```text
-loopforge ready_for_verification >
-```
-
-Blocked prompt:
-
-```text
-loopforge blocked >
-```
-
-### `/status`
-
-Important screen info:
-
-- Same as top-level `status`, but with interactive commands.
-
-UX improvements:
-
-- Short by default.
-- Suggest `/next`, `/do <id>`, `/plan`, or `/raw latest stderr`.
-
-Design:
-
-- Compact panel.
-- Status-colored badge.
-
-### `/guide`, `/next`, `/why`
-
-Important screen info:
-
-- One action and one reason.
-
-UX improvements:
-
-- `/next`: just the next command.
-- `/why`: why that command is recommended.
-- `/guide`: short combined view.
-
-Design:
-
-```text
-Next
-/do verify
-
-Why
-Workspace changed and verification has not run.
-```
-
-### `/actions` and `/do`
-
-Important screen info:
-
-- Available actions.
-- Executed action.
-
-UX improvements:
-
-- `/actions`: short table with id, label, confirmation.
-- `/do`: before mutating work, explain what will happen.
-- If confirmation is required, prompt clearly.
-
-Design:
-
-```text
-Actions
-verify   Generate patch and run checks   safe
-learn    Propose memory updates          safe
-```
-
-### `/run`, `/new`, `/fork`
-
-Important screen info:
-
-- New run created.
-- Task.
-- Contract status.
-- Next action.
-
-UX improvements:
-
-- Make `/run` conversational:
-  - task;
-  - success checks;
-  - rubric if subjective;
-  - adapter or pack if needed.
-- `/new` stays a natural alias.
-- `/fork` shows what is inherited from the previous run.
-
-Design:
-
-- Match top-level `run` style.
-- End with `/continue`.
-
-### `/continue`
-
-Important screen info:
-
-- Validation or attempt.
-- Attempt id.
-- Result.
-- Next action.
-
-UX improvements:
-
-- Use loader.
-- Stream adapter output live, then summarize compactly.
-- On failure, suggest `/raw latest stderr`.
-
-Design:
-
-- Status badge.
-- Last stderr lines in a red or dim block.
-
-### `/verify`
-
-Important screen info:
-
-- Checks.
-- Patch.
-- Risk.
-- Next action.
-
-UX improvements:
-
-- Use loader.
-- On success, suggest `/review` or `/learn`.
-- On failure, suggest `/diff`, `/raw`, or `/export plan`.
-
-Design:
-
-- Short check table.
-- Colored global status.
-
-### `/learn`, `/approve`, `/memory`, `/memories`
-
-Important screen info:
-
-- Pending, promoted, rejected proposals.
-- Durable memory item count.
-
-UX improvements:
-
-- `/learn` proposes only.
-- `/approve` confirms promotion clearly.
-- `/memory` is summary.
-- `/memories` is detailed view.
-- Add a readable proposal review step before approval.
-
-Design:
-
-```text
-Memory
-durable   12 facts
-pending   3 proposals
-
-Next
-/approve
-```
-
-### `/runs`, `/resume`, `/archive`
-
-Important screen info:
-
-- Runs.
-- Current run.
-- Archive status.
-
-UX improvements:
-
-- `/runs`: scannable table.
-- `/resume`: after switching, show short status of resumed run.
-- `/archive`: say artifacts are kept.
-
-Design:
-
-- `*` marks current run.
-- Color status values.
-
-### `/plan`, `/tasks`, `/ps`
-
-Important screen info:
-
-- Current plan or contract.
-- Attempts.
-- Next task.
-
-UX improvements:
-
-- `/plan`: human contract, success checks, allowed tools.
-- `/tasks`: attempts plus next action.
-- `/ps`: clearly say these are recorded attempts, not live processes.
-
-Design:
-
-- Tables.
-- Success checks as checklist.
-
-### `/diff`, `/review`, `/code-review`, `/security-review`, `/simplify`
-
-Important screen info:
-
-- Local changes.
-- Risks.
-- Recommendations.
-
-UX improvements:
-
-- `/diff`: summary before raw diff.
-- `/review`: findings first, then tests.
-- `/security-review`: only security-relevant evidence; do not invent.
-- `/simplify`: cleanup opportunities only, no automatic refactor.
-
-Design:
-
-- Sections:
-  - Changed files;
-  - Risks;
-  - Suggested next step.
-
-### `/context`, `/mention`, `/add-dir`, `/compact`, `/copy`, `/export`
-
-Important screen info:
-
-- Active context.
-- Mentioned files.
-- Exported artifact.
-
-UX improvements:
-
-- `/context`: group by category.
-- `/mention`: confirm file and size.
-- `/add-dir`: warn if directory is large.
-- `/compact`: show handoff path.
-- `/copy` and `/export`: keep format and messages consistent.
-
-Design:
-
-```text
-Context
-project files   4 mentioned
-extra dirs      1
-scratch         present
-
-Exported
-compact.md
-```
-
-### `/raw`
-
-Important screen info:
-
-- Attempt.
-- Stream.
-- Requested content.
-
-UX improvements:
-
-- Limit huge output by default.
-- Support clear patterns:
-  - `/raw latest stderr`;
-  - `/raw latest stdout`;
-  - `/raw attempt-002 result`.
-- If stream is empty, say `empty`.
-
-Design:
-
-- Header with source.
-- Monospace content block.
-
-### `/adapter`, `/adapters`
-
-Important screen info:
-
-- Current adapter.
-- Supported adapters.
-- Default args.
-
-UX improvements:
-
-- `/adapter` without args shows current adapter and example change.
-- `/adapter codex -- -m gpt-5` confirms save.
-- `/adapters` is a table.
-
-Design:
-
-```text
-Adapter
-current  codex
-args     -m gpt-5
-
-Change
-/adapter local-adapter-fixture -- python script.py
-```
-
-### `/config`, `/debug-config`, `/doctor`
-
-Important screen info:
-
-- Active config.
-- Environment problems.
-- Fix command.
-
-UX improvements:
-
-- `/doctor`: ok/missing/fix.
-- `/debug-config`: paths, env vars, config merge.
-- `/config`: simple read; guided update.
-
-Design:
-
-```text
-Check              Status   Fix
-prompt_toolkit     ok
-rich               ok
-git                missing  install git
-```
-
-### `/permissions`, `/allowed-tools`, `/sandbox`
-
-Important screen info:
-
-- What is allowed.
-- What needs confirmation.
-- Sandbox limits.
-
-UX improvements:
-
-- Do not print full policy by default.
-- Summarize:
-  - filesystem;
-  - network;
-  - publication;
-  - destructive actions.
-- Suggest `/plan` for run-specific allowed tools.
-
-Design:
-
-- Badges: allowed, requires confirm, blocked.
-
-### `/pack`, `/skills`, `/plugins`
-
-Important screen info:
-
-- Detected pack.
-- Available skills.
-- Plugin boundaries.
-
-UX improvements:
-
-- `/pack`: align with top-level `pack list/detect`.
-- `/skills`: group by pack.
-- `/plugins`: explain external connector limits.
-
-Design:
-
-- Short tables.
-- Current pack marked `*`.
-
-### `/branch`
-
-Important screen info:
-
-- Current git branch.
-- Created branch, if any.
-
-UX improvements:
-
-- Before creation, show intended branch name.
-- After creation, confirm.
-- If not in a git repo, show fix.
-
-Design:
-
-```text
-Git branch
-current  main
-created  codex/cli-ux
-```
-
-### `/stats`, `/usage`, `/cost`
-
-Important screen info:
-
-- Known values.
-- Unknown values.
-
-UX improvements:
-
-- Say `not reported`, not zero.
-- `/usage`: token data if available.
-- `/cost`: cost data if available.
-- `/stats`: local summary.
-
-Design:
-
-- Small tables.
-- Unknown counts in yellow.
-
-### `/theme`, `/tui`, `/statusline`, `/keymap`, `/vim`, `/title`
-
-Important screen info:
-
-- Updated preference.
-- Current value.
-
-UX improvements:
-
-- If no argument, show current setting.
-- After change, one-line confirmation.
-
-Design:
-
-```text
-Theme set
-theme  mono
-```
-
-### `/commands`, `/help`
-
-Important screen info:
-
-- Available commands.
-- Useful groups.
-
-UX improvements:
-
-- `/commands`: grouped, not just alphabetic.
-- `/commands all`: include unsupported commands.
-- `/help <cmd>`: usage plus examples.
-
-Design groups:
-
-- Start.
-- Work Loop.
-- Review.
-- Context.
-- Settings.
-
-### `/clear`, `/cd`, `/recap`, `/goal`, `/exit`, `/quit`
-
-Important screen info:
-
-- Immediate action result.
-
-UX improvements:
-
-- `/clear`: no extra text.
-- `/cd`: show new project and short status.
-- `/recap`: one useful line.
-- `/goal`: current objective and success checks.
-- `/exit` and `/quit`: exit cleanly, no ceremony.
-
-Design:
-
-- Strictly minimal.
-
-## Implementation Priority
-
-1. **Refactor common display helpers**
-   - Add shared renderers such as `render_success`, `render_blocked`,
-     `render_next`, and `render_summary_table`.
-
-2. **Rework critical top-level commands**
-   - `status`
-   - `continue`
-   - `verify`
-   - `learn`
-   - `runs`
-
-3. **Rework discovery and operator commands**
-   - `help`
-   - `dashboard`
-   - `pack`
-   - `metrics`
-   - `version`
-
-4. **Rework shell experience**
-   - Home panel.
-   - Richer prompt.
-   - Stronger `/next`.
-   - Clearer `/do`.
-   - Grouped `/commands`.
-
-5. **Add UX tests**
-   - Default output is short.
-   - Next action is visible.
-   - Blockers are visible.
-   - JSON remains unchanged.
-   - `--quiet` is genuinely quiet.
-
-Core goal: each command should stop dumping internal state and instead become a
-small operator scene: **where I am, what matters, what to do next**.
+Keep `loopforge.cli:main`, `CliContext`, engine result types, `JsonStore`,
+`PackRegistry`, `MetricsService`, and current lifecycle APIs. The module list is
+a proposed extension, not evidence that these files already exist.
+
+## Implementation phases
+
+### Phase 0 — Freeze behavior and gather UX fixtures
+
+1. Capture golden plain and Rich outputs for uninitialized, no-run, approval,
+   blocked adapter, failed verification, review, and archived states.
+2. Add fixtures for two same-named projects and several runs at different
+   stages.
+3. Record current JSON/CSV contracts and exit codes so the redesign cannot
+   accidentally change automation behavior.
+4. Define the user-facing state-family mapping in tests.
+
+### Phase 1 — Presentation and action core
+
+1. Add the immutable view models and mappers.
+2. Move workflow/action eligibility into one `ActionDescriptor` registry backed
+   by current engine guidance and approval APIs.
+3. Make top-level text output and slash compatibility commands consume those
+   models.
+4. Remove duplicate render/orchestration choices between `RunCockpitService`
+   and `InteractiveShell.cmd_*` without changing engine state transitions.
+5. Expand semantic styles and terminal capability handling in `cli/ui.py`.
+
+### Phase 2 — Project registry and global queries
+
+1. Add generated project identities and the global registry.
+2. Add collision-safe run/workspace roots.
+3. Implement non-destructive migration and duplicate-id handling.
+4. Add global project/run summaries and attention sorting.
+5. Add `projects`, `open`, and `runs --all-projects` in text/JSON modes.
+
+### Phase 3 — Full-screen navigation
+
+1. Build the `prompt_toolkit` application with Home, Project, Run, Evidence,
+   and Settings screens.
+2. Implement focus, back navigation, filtering, selectors, responsive layouts,
+   contextual footer keys, command palette, and contextual help.
+3. Render the pack-driven pipeline and approval dialogs.
+4. Keep `shell --command` and `--script` on the compatibility dispatcher; they
+   must not require a full-screen terminal.
+
+### Phase 4 — Live operations
+
+1. Run long operations outside the UI event loop.
+2. Bridge real engine/subprocess activity into `OperationEvent` values.
+3. Add delayed spinners, elapsed time, per-check progress, output toggles,
+   cancellation, and final receipts.
+4. Ensure interrupted operations persist an honest terminal state and recovery
+   action.
+
+### Phase 5 — Command consolidation
+
+1. Limit default completion/palette to context-relevant supported actions.
+2. Convert synonyms to aliases backed by one implementation.
+3. Hide diagnostics and unsupported commands from ordinary discovery.
+4. Rewrite help around the Projects → Runs → Stages model.
+5. Persist theme/statusline/keymap at the correct user or project scope.
+
+### Phase 6 — Evidence and review polish
+
+1. Add searchable Markdown, diff, log, check, and memory proposal viewers.
+2. Add plan/review approval summaries based on real artifacts.
+3. Add open/copy/export actions with consistent toasts and paths.
+4. Make blocked states recoverable without requiring `/raw` knowledge.
+
+### Phase 7 — Accessibility, performance, and release
+
+1. Verify 60-, 80-, 120-, and 160-column layouts and terminal resize.
+2. Verify mono, `NO_COLOR`, 16-color, light/dark, ASCII, Windows Terminal, and
+   redirected-output behavior.
+3. Measure warm start, project index, 1,000-run list, and large-log rendering.
+4. Add an opt-out `--plain` path and preserve all machine formats.
+5. Ship behind an interactive feature flag for one release, then make it the
+   default after compatibility tests and real-user sessions pass.
+
+## Acceptance criteria
+
+- From the home screen, a user can identify the project/run needing approval or
+  blocked without typing a command.
+- Two repositories with the same basename never share a run root.
+- The project and run identity remain visible on every stage/evidence screen.
+- Every run shows the pack-defined workflow and clearly distinguishes complete,
+  current, waiting, blocked, and human-gated stages.
+- Every eligible stage has one plain-language primary action; internal action
+  ids are not required for normal use.
+- `loopforge run` and `/run` use the same intake, resume/fork/new decision, and
+  result presentation.
+- Loaders appear only after the delay threshold and only report real progress.
+- `Ctrl+C` can interrupt foreground work without corrupting the run or exiting
+  immediately.
+- A failed adapter or check exposes the useful evidence and recovery action in
+  one view.
+- Default completion contains no unsupported commands and no duplicate aliases.
+- JSON/CSV payloads, exit codes, stdout/stderr separation, `--no-input`,
+  `--quiet`, and no-color behavior remain deterministic.
+- The interface remains usable at 60 columns and after terminal resize.
+- No screen labels a historical attempt as live or treats verification as
+  review/publication authority.
+
+## Recommended delivery order
+
+Do not start with colors or a large widget rewrite. The sequence with the
+highest leverage is:
+
+1. shared view/action models;
+2. collision-safe project registry;
+3. global Home/Project/Run navigation;
+4. pack-driven stage and approval views;
+5. real live operations;
+6. command consolidation and visual polish.
+
+This order fixes the information model first, then makes it visually clear.
+
+## External implementation references
+
+- [`prompt_toolkit` full-screen applications](https://python-prompt-toolkit.readthedocs.io/en/stable/pages/full_screen_apps.html)
+  support layouts, styles, event-driven input, focus, and key bindings; use it
+  as the interactive screen owner.
+- Rich documents [progress displays](https://rich.readthedocs.io/en/latest/progress.html),
+  [live displays](https://rich.readthedocs.io/en/latest/live.html), and terminal
+  capability detection; keep it for one-shot CLI output and receipts.
+- [Claude Code interactive mode](https://code.claude.com/docs/en/interactive-mode)
+  documents contextual keyboard controls, history, transcripts, tasks, and
+  interrupt behavior; its [status line](https://code.claude.com/docs/en/statusline)
+  keeps session identity and operational context visible. Together with the
+  Codex session/status examples supplied for this plan, these are references
+  for interaction quality, not a reason to copy a single-agent transcript UI.

@@ -7,6 +7,8 @@ autonomy: verification is evidence, never review or publication authority.
 
 - Read `docs/agent/01-modules.md`, `03-coding-patterns.md`, and
   `04-reuse-catalog.md`.
+- Before shell, terminal rendering, project navigation, or command UX work,
+  read `docs/cli-ux-command-plan.md`.
 - Reuse the public `loopforge.cli` facade, engine APIs, `CliContext`, handlers,
   `JsonStore`, `PackRegistry`, `MetricsService`, UI helpers, and packaged
   checks. Do not create parallel variants.
@@ -17,6 +19,9 @@ autonomy: verification is evidence, never review or publication authority.
 
 - Keep `loopforge.cli:main` stable. The facade is
   `src/loopforge/cli/__init__.py`; handlers live in `src/loopforge/cli/`.
+- Keep one behavior path across top-level commands and slash commands. Reuse
+  the renderer, workflow progress, guidance, and effective pack contract; do
+  not add another command registry or live renderer.
 - `src/loopforge/engine/__init__.py` owns workflow state. Use its normalizers
   and approval APIs; do not patch lifecycle fields from CLI code.
 - Product checks, adapters, policies, schemas, templates, and bundled packs
