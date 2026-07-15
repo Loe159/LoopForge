@@ -103,13 +103,20 @@ class LoopForgeConsole:
     def _style(self) -> Any:
         from prompt_toolkit.styles import Style
 
+        themes = {
+            "default": ("bold cyan", "cyan", "ansibrightcyan"),
+            "dark": ("bold ansibrightcyan", "ansibrightcyan", "cyan"),
+            "light": ("bold blue", "blue", "ansiblue"),
+            "mono": ("bold", "", "bold"),
+        }
+        brand, ready, running = themes.get(self.shell.theme, themes["default"])
         return Style.from_dict(
             {
-                "brand": "bold cyan",
+                "brand": brand,
                 "secondary": "italic",
                 "selected": "reverse bold",
-                "ready": "cyan",
-                "running": "ansibrightcyan",
+                "ready": ready,
+                "running": running,
                 "attention": "yellow",
                 "success": "green",
                 "danger": "bold red",
@@ -202,7 +209,10 @@ class LoopForgeConsole:
         title = snapshot.project.name
         branch = self._branch_label(project)
         run = snapshot.run.short_id if snapshot.run else "no run"
-        return [("class:brand", f" LoopForge · {title}"), ("", f"  {branch}  {run}")]
+        if self.shell.statusline == "off":
+            return [("class:brand", " LoopForge")]
+        suffix = f"  {branch}" if self.shell.statusline == "compact" else f"  {branch}  {run}"
+        return [("class:brand", f" LoopForge · {title}"), ("", suffix)]
 
     def _footer_fragments(self) -> list[tuple[str, str]]:
         footer = {
@@ -328,8 +338,9 @@ class LoopForgeConsole:
             ("class:secondary", "Settings\n\n"),
             ("", f"Adapter     {self.shell.selected_adapter}\n"),
             ("", f"Theme       {self.shell.theme}\n"),
+            ("", f"Statusline  {self.shell.statusline}\n"),
             ("", f"Keymap      {self.shell.editing_mode}\n"),
-            ("", "These are session settings. Workflow permissions are shown with the selected stage."),
+            ("", "Theme, statusline, and keymap are saved for this user. Workflow settings remain project-scoped."),
         ]
 
     def _projects(self) -> list[dict[str, Any]]:

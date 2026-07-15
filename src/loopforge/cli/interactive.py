@@ -48,6 +48,8 @@ from loopforge.engine import (
     execute_readonly_stage,
     next_readonly_stage,
     prepare_draft_publication,
+    update_user_preferences,
+    user_preferences,
 )
 from loopforge.cli.actions import ActionDescriptor, action_descriptors, primary_action
 from loopforge.cli.ui import (
@@ -171,20 +173,73 @@ UNSUPPORTED_COMMANDS = {
 }
 
 
+# ``SUPPORTED_COMMANDS`` remains the complete local surface for explicit
+# compatibility commands.  Discovery deliberately uses the smaller contextual
+# catalog below; recognized-but-unavailable commands never pollute completion.
 COMMANDS = dict(sorted({**SUPPORTED_COMMANDS, **UNSUPPORTED_COMMANDS}.items()))
 ALIASES = {
     "?": "help",
+    "adapters": "adapter",
+    "code-review": "review",
+    "cost": "stats",
+    "memories": "memory",
+    "ps": "tasks",
+    "q": "exit",
+    "quit": "exit",
     "reset": "clear",
-    "q": "quit",
+    "security-review": "review",
+    "simplify": "review",
+    "usage": "stats",
+    "vim": "keymap",
+}
+
+ALIAS_ARGUMENTS = {
+    "adapters": "list",
+    "memories": "details",
+    "vim": "vim",
 }
 
 COMMAND_GROUPS = {
-    "Start": ("init", "run", "new", "fork", "resume", "runs"),
-    "Work Loop": ("status", "next", "guide", "actions", "do", "continue", "verify", "learn"),
-    "Review": ("dashboard", "plan", "tasks", "diff", "review", "code-review", "security-review"),
-    "Context": ("context", "compact", "copy", "export", "memory", "raw", "allowed-tools"),
-    "Settings": ("adapter", "adapters", "config", "theme", "tui", "statusline", "keymap", "doctor"),
+    "Projects": ("init", "cd", "dashboard", "pack", "config", "adapter"),
+    "Runs": ("run", "new", "fork", "resume", "runs", "archive"),
+    "Stages": ("status", "next", "guide", "actions", "do", "plan", "continue", "verify", "review", "learn"),
 }
+
+ALWAYS_DISCOVERABLE = {"help", "commands", "clear", "exit"}
+
+
+def contextual_commands(project_dir: Path | None = None) -> dict[str, str]:
+    """Return canonical supported commands useful in the current workflow state."""
+
+    visible = set(ALWAYS_DISCOVERABLE)
+    if project_dir is None:
+        visible.update({"init", "run", "status", "dashboard"})
+    else:
+        status = current_status(project_dir)
+        if not status.initialized:
+            visible.update({"init", "status"})
+        else:
+            visible.update({"dashboard", "runs", "status", "adapter", "config", "pack"})
+            if status.run is None:
+                visible.update({"run", "new"})
+            else:
+                visible.update({"actions", "next", "guide", "plan", "review"})
+                for action in action_descriptors(current_guidance(project_dir)):
+                    command = {
+                        "run-readonly-stage": "continue",
+                        "continue": "continue",
+                        "retry-attempt": "continue",
+                        "verify": "verify",
+                        "approve-plan": "approve",
+                        "approve-review": "approve",
+                    }.get(action.id)
+                    if command:
+                        visible.add(command)
+    return {
+        command: SUPPORTED_COMMANDS[command]
+        for command in sorted(visible)
+        if command in SUPPORTED_COMMANDS
+    }
 
 
 @dataclass(frozen=True)
@@ -201,12 +256,22 @@ def tui_dependency_state() -> dict[str, bool]:
 
 
 def available_commands() -> dict[str, str]:
+    """Return the complete explicit compatibility catalog.
+
+    Ordinary completion and ``/commands`` use :func:`contextual_commands`.
+    """
+
     return COMMANDS.copy()
 
 
 class SlashCommandCompleter(Completer):
-    def __init__(self, commands: dict[str, str]) -> None:
-        self.commands = commands
+    def __init__(
+        self,
+        commands: dict[str, str] | None = None,
+        *,
+        project_dir: Path | None = None,
+    ) -> None:
+        self.commands = commands if commands is not None else contextual_commands(project_dir)
 
     def get_completions(self, document, complete_event):  # type: ignore[no-untyped-def]
         from prompt_toolkit.completion import Completion
@@ -238,13 +303,14 @@ class InteractiveShell:
         self.error = error or sys.stderr
         self.running = True
         self.allow_confirmation = allow_confirmation
-        self.statusline = "full"
-        self.theme = "default"
+        preferences = user_preferences()
+        self.statusline = preferences["statusline"]
+        self.theme = preferences["theme"]
         self.renderer_mode = "auto"
         self.renderer = TerminalRenderer(self.output, mode=self.renderer_mode, theme=self.theme)
         self.extra_context_dirs: list[Path] = []
         self.mentioned_paths: list[Path] = []
-        self.editing_mode = "emacs"
+        self.editing_mode = preferences["keymap"]
         self.session_title = "LoopForge"
         status = current_status(self.project_dir)
         config = status.config or {}
@@ -266,7 +332,7 @@ class InteractiveShell:
             return DispatchResult(0)
 
         command, args, implicit_run = self.parse_line(line)
-        command = ALIASES.get(command, command)
+        command, args = self.canonical_command(command, args)
         if implicit_run:
             return self.cmd_run(args)
         if command in UNSUPPORTED_COMMANDS:
@@ -293,6 +359,17 @@ class InteractiveShell:
         if lowered in COMMANDS:
             return lowered, args.strip(), False
         return "run", line, True
+
+    @staticmethod
+    def canonical_command(command: str, args: str) -> tuple[str, str]:
+        canonical = ALIASES.get(command, command)
+        default_args = ALIAS_ARGUMENTS.get(command, "")
+        if default_args:
+            args = f"{default_args} {args}".strip()
+        return canonical, args
+
+    def persist_user_preference(self, key: str, value: str) -> None:
+        update_user_preferences({key: value})
 
     def split_args(self, raw: str) -> list[str] | None:
         try:
@@ -657,7 +734,7 @@ class InteractiveShell:
     def cmd_help(self, raw: str) -> DispatchResult:
         command = raw.strip().lstrip("/")
         if command:
-            command = ALIASES.get(command, command)
+            command, _ = self.canonical_command(command, "")
             if command in COMMANDS:
                 self.write(f"/{command}: {COMMANDS[command]}")
                 if command in UNSUPPORTED_COMMANDS:
@@ -665,12 +742,11 @@ class InteractiveShell:
                 return DispatchResult(0)
             self.write(f"Unknown command: /{command}", error=True)
             return DispatchResult(2)
-        self.write("LoopForge interactive shell")
-        self.write("Type plain text to create a run, or use slash commands.")
-        self.write(
-            "Useful commands: /status, /context, /compact, /run, /continue, /verify, /learn."
-        )
-        self.write("Run /commands for useful commands, or /commands all for the full catalog.")
+        self.write("LoopForge follows Projects → Runs → Stages.")
+        self.write("Projects: choose or configure a repository with /dashboard, /runs, or /pack.")
+        self.write("Runs: create or resume work with /run, /new, or /resume.")
+        self.write("Stages: inspect the current gate with /status, then use /next or /actions.")
+        self.write("Use /commands for actions useful now; /commands all is the expert catalog.")
         return DispatchResult(0)
 
     def cmd_commands(self, raw: str = "") -> DispatchResult:
@@ -683,20 +759,21 @@ class InteractiveShell:
             self.write_table("LoopForge commands", ["Command", "Status", "Description"], rows)
             return DispatchResult(0)
 
+        available = contextual_commands(self.project_dir)
         shown: set[str] = set()
         for group, commands in COMMAND_GROUPS.items():
             rows = []
             for command in commands:
-                if command in SUPPORTED_COMMANDS:
+                if command in available:
                     shown.add(command)
                     rows.append([f"/{command}", SUPPORTED_COMMANDS[command]])
             if rows:
                 self.write_table(group, ["Command", "Use"], rows)
-        remaining = sorted(set(SUPPORTED_COMMANDS) - shown)
+        remaining = sorted(set(available) - shown)
         if remaining:
             rows = [[f"/{command}", SUPPORTED_COMMANDS[command]] for command in remaining]
             self.write_table("More", ["Command", "Use"], rows)
-        self.write("Run /commands all to include commands that are recognized but not supported yet.")
+        self.write("Use /commands all for expert, alias, and unavailable-command details.")
         return DispatchResult(0)
 
     def cmd_adapters(self, raw: str = "") -> DispatchResult:
@@ -712,6 +789,13 @@ class InteractiveShell:
         tokens = self.split_args(raw)
         if tokens is None:
             return DispatchResult(2)
+        if tokens and tokens[0] == "list":
+            rows = []
+            for adapter in SUPPORTED_ADAPTERS:
+                selected = "*" if adapter == self.selected_adapter else ""
+                rows.append([selected, adapter, " ".join(self.selected_adapter_args) if adapter == self.selected_adapter else ""])
+            self.write_table("Adapters", ["", "Adapter", "Default args"], rows)
+            return DispatchResult(0)
         if not tokens:
             render_summary_table(
                 self.renderer,
@@ -1347,6 +1431,7 @@ class InteractiveShell:
             return DispatchResult(2)
         self.theme = value
         self.renderer.theme = value
+        self.persist_user_preference("theme", value)
         self.write("Theme set")
         self.write(f"theme  {self.theme}")
         return DispatchResult(0)
@@ -1382,16 +1467,14 @@ class InteractiveShell:
             self.write("usage: /keymap emacs|vim", error=True)
             return DispatchResult(2)
         self.editing_mode = value
+        self.persist_user_preference("keymap", value)
         self.write("Keymap set")
         self.write(f"keymap  {self.editing_mode}")
         return DispatchResult(0)
 
     def cmd_vim(self, raw: str = "") -> DispatchResult:
         del raw
-        self.editing_mode = "vim" if self.editing_mode != "vim" else "emacs"
-        self.write("Keymap set")
-        self.write(f"keymap  {self.editing_mode}")
-        return DispatchResult(0)
+        return self.cmd_keymap("vim")
 
     def cmd_stats(self, raw: str = "") -> DispatchResult:
         del raw
@@ -1850,6 +1933,7 @@ class InteractiveShell:
             self.write("usage: /statusline full|compact|off", error=True)
             return DispatchResult(2)
         self.statusline = value
+        self.persist_user_preference("statusline", value)
         self.write("Statusline set")
         self.write(f"statusline  {self.statusline}")
         return DispatchResult(0)

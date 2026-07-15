@@ -34,6 +34,7 @@ from loopforge.cli.interactive import (
     InteractiveShell,
     SlashCommandCompleter,
     available_commands,
+    contextual_commands,
     tui_dependency_state,
 )
 from loopforge.cli.ui import TerminalRenderer
@@ -1193,12 +1194,45 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(main(["shell", "--command", "/model"]), 0)
 
             text = output.getvalue()
-            useful_catalog, full_catalog = text.split("Run /commands all", 1)
+            useful_catalog, full_catalog = text.split("Use /commands all", 1)
             self.assertIn("/status", useful_catalog)
             self.assertNotIn("/model", useful_catalog)
             self.assertIn("/model", full_catalog)
             self.assertIn("/model is recognized but not supported yet", text)
             self.assertIn("Model selection is owned", text)
+
+    def test_shell_discovery_is_contextual_and_hides_aliases(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project = Path(temp_dir) / "project"
+            project.mkdir()
+            commands = contextual_commands(project)
+            completer = SlashCommandCompleter(project_dir=project)
+
+        self.assertIn("init", commands)
+        self.assertNotIn("model", commands)
+        self.assertNotIn("quit", commands)
+        self.assertNotIn("adapters", commands)
+        self.assertEqual(commands, completer.commands)
+
+    def test_shell_preferences_are_user_scoped_and_persisted(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            project = workspace / "project"
+            project.mkdir()
+            home = workspace / "home"
+            with mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(home)}):
+                shell = InteractiveShell(project, output=io.StringIO())
+                self.assertEqual(shell.dispatch("/theme dark").exit_code, 0)
+                self.assertEqual(shell.dispatch("/statusline compact").exit_code, 0)
+                self.assertEqual(shell.dispatch("/vim").exit_code, 0)
+                restored = InteractiveShell(project, output=io.StringIO())
+
+            preferences = json.loads((home / "preferences.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(preferences, {"keymap": "vim", "statusline": "compact", "theme": "dark"})
+        self.assertEqual(restored.theme, "dark")
+        self.assertEqual(restored.statusline, "compact")
+        self.assertEqual(restored.editing_mode, "vim")
 
     def test_shell_completer_supports_prompt_toolkit_async_api(self) -> None:
         completer = SlashCommandCompleter(available_commands())
@@ -2977,7 +3011,11 @@ class CliTests(unittest.TestCase):
             )
 
             output = io.StringIO()
-            with working_directory(repo), contextlib.redirect_stdout(output):
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(repo / "loopforge-home")}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
                 self.assertEqual(main(["shell", "--script", str(script)]), 0)
 
             config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
