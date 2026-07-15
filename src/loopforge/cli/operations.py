@@ -34,7 +34,7 @@ OperationRunner = Callable[[Callable[[dict[str, Any]], None], Event], Any]
 
 
 @dataclass
-class ForegroundOperation:
+class OperationController:
     """Run one operation outside the UI loop with cooperative cancellation."""
 
     label: str
@@ -46,6 +46,8 @@ class ForegroundOperation:
     error: BaseException | None = None
     finished: bool = False
     _thread: Thread | None = field(default=None, init=False, repr=False)
+    _history: list[OperationEvent] = field(default_factory=list, init=False, repr=False)
+    history_limit: int = 40
 
     def start(self, runner: OperationRunner) -> None:
         """Start ``runner`` once; it receives an event bridge and cancel token."""
@@ -110,6 +112,24 @@ class ForegroundOperation:
                 drained.append(self.events.get_nowait())
             except Empty:
                 return drained
+
+    @property
+    def history(self) -> tuple[OperationEvent, ...]:
+        """Return bounded event history for any UI backend."""
+
+        return tuple(self._history)
+
+    def collect_events(self) -> tuple[OperationEvent, ...]:
+        """Drain worker events into the bounded backend-neutral history."""
+
+        self._history.extend(self.drain_events())
+        self._history = self._history[-self.history_limit :]
+        return self.history
+
+
+# Compatibility name used by the existing prompt-toolkit surface and public
+# tests. New frontends should depend on the backend-neutral controller name.
+ForegroundOperation = OperationController
 
 
 def _integer_or_none(value: object) -> int | None:

@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from loopforge.cli.actions import action_descriptors, primary_action
+from loopforge.cli.models import UiSnapshot
+from loopforge.cli.operations import OperationController
 from loopforge.cli.presentation import shell_snapshot, shell_snapshot_from_status, state_family, workflow_progress
+from loopforge.cli.state_store import StateStore
 from loopforge.engine import GuidedAction, GuidanceResult, StatusResult, current_guidance, current_status, guidance_from_status
 
 
@@ -107,6 +111,63 @@ class CliPresentationTests(unittest.TestCase):
             shell_snapshot_from_status(status)
 
         status_read.assert_not_called()
+
+    def test_state_store_publishes_immutable_snapshots_only_for_current_navigation(self) -> None:
+        project = Path("/workspace/LoopForge")
+        other_project = Path("/workspace/Other")
+        status = current_status(project)
+        runs = SimpleNamespace(runs=[], blockers=[])
+        projects = SimpleNamespace(projects=[])
+        store = StateStore(
+            project,
+            status_loader=lambda _: status,
+            runs_loader=lambda _: runs,
+            projects_loader=lambda: projects,
+            branch_loader=lambda _: "main",
+        )
+        published: list[UiSnapshot] = []
+        store.subscribe(published.append)
+
+        first = store.refresh()
+        again = store.refresh()
+
+        self.assertEqual(first.revision, again.revision)
+        self.assertEqual(len(published), 1)
+        with self.assertRaises(TypeError):
+            first.home.projects[0]["name"] = "mutated"  # type: ignore[index]
+
+        late_load = store.begin_load()
+        store.select_project(other_project)
+        after_navigation = store.snapshot
+        discarded = store.publish_loaded(late_load, status, runs, projects)
+
+        self.assertEqual(discarded.selected_project, other_project)
+        self.assertEqual(discarded.revision, after_navigation.revision)
+
+    def test_state_store_coalesces_operation_events_until_the_ui_turn_flushes(self) -> None:
+        project = Path("/workspace/LoopForge")
+        status = current_status(project)
+        store = StateStore(
+            project,
+            status_loader=lambda _: status,
+            runs_loader=lambda _: SimpleNamespace(runs=[], blockers=[]),
+            projects_loader=lambda: SimpleNamespace(projects=[]),
+            branch_loader=lambda _: "main",
+        )
+        store.refresh()
+        published: list[UiSnapshot] = []
+        store.subscribe(published.append)
+        operation = OperationController("Refresh")
+        store.set_operation(operation)
+        operation.emit({"kind": "activity", "message": "First"})
+        operation.emit({"kind": "activity", "message": "Second"})
+
+        store.record_operation_events(operation)
+
+        self.assertEqual(len(published), 1)
+        snapshot = store.flush()
+        self.assertEqual(len(published), 2)
+        self.assertEqual([event.message for event in snapshot.operation.events], ["First", "Second"])
 
     @staticmethod
     def _guidance(action: GuidedAction, *, state: str = "plan_awaiting_approval") -> GuidanceResult:

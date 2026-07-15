@@ -25,20 +25,17 @@ from loopforge.cli.presentation import (
     FAMILY_PRESENTATION,
     ShellSnapshot,
     family_presentation,
-    shell_snapshot_from_status,
 )
 from loopforge.cli.operations import ForegroundOperation, OperationEvent
+from loopforge.cli.state_store import StateStore
 from loopforge.cli.evidence import ApprovalSummary, EvidenceIndex, EvidenceItem, approval_summary
 from loopforge.engine import (
     continue_run,
     current_status,
     execute_readonly_stage,
-    list_registered_projects,
-    list_runs_from_status,
     resume_run,
     verify_run,
 )
-from loopforge.engine.git_state import DEFAULT_GIT_STATE_SERVICE
 
 if TYPE_CHECKING:
     from loopforge.cli.interactive import InteractiveShell
@@ -163,6 +160,10 @@ class LoopForgeConsole:
         self._project_records: list[dict[str, Any]] = []
         self._branches: dict[Path, str] = {}
         self._spinner_timer: Timer | None = None
+        # The legacy renderer consumes the same backend-neutral store that the
+        # Textual migration will use.  Rendering below still reads only the
+        # mirrored immutable revision, never the engine.
+        self._state_store = StateStore(shell.project_dir, status_loader=current_status)
         self._load_revision(shell.project_dir)
 
     @property
@@ -572,23 +573,13 @@ class LoopForgeConsole:
         """
 
         project = project.resolve()
-        status = current_status(project)
-        snapshot = shell_snapshot_from_status(status)
-        runs_result = list_runs_from_status(status)
-        records = list(list_registered_projects().projects)
-        if not any(Path(str(record.get("path") or "")).resolve() == project for record in records):
-            records.insert(
-                0,
-                {
-                    "name": project.name,
-                    "path": str(project),
-                    "initialized": status.initialized,
-                    "run_count": len(runs_result.runs),
-                    "attention": snapshot.family,
-                    "branch": DEFAULT_GIT_STATE_SERVICE.get(project).branch,
-                    "last_activity": "current session",
-                },
-            )
+        ui_snapshot = self._state_store.refresh(project, reason="legacy-refresh")
+        status = self._state_store.status
+        if status is None:  # defensive; refresh always publishes a status
+            raise RuntimeError("StateStore did not publish a project status")
+        snapshot = ui_snapshot.run.shell
+        if snapshot is None:
+            raise RuntimeError("StateStore did not publish a render snapshot")
         previous_status = self._statuses.get(project)
         previous_run_dir = getattr(previous_status, "run_dir", None)
         if previous_run_dir != status.run_dir:
@@ -596,13 +587,13 @@ class LoopForgeConsole:
             self._cancel_evidence_search()
             self.state.evidence_results = ()
             self.state.evidence_preview = False
-        self._revision += 1
+        self._revision = ui_snapshot.revision
         self._statuses = {project: status}
         self._snapshots = {project: snapshot}
-        self._runs = {project: list(runs_result.runs)}
-        self._run_blockers = {project: list(runs_result.blockers)}
-        self._project_records = records
-        self._branches = {project: str(next((record.get("branch") for record in records if Path(str(record.get("path") or "")).resolve() == project), "") or DEFAULT_GIT_STATE_SERVICE.get(project).branch or "no Git branch")}
+        self._runs = {project: [dict(row) for row in ui_snapshot.project.runs]}
+        self._run_blockers = {project: list(ui_snapshot.project.blockers)}
+        self._project_records = [dict(row) for row in ui_snapshot.home.projects]
+        self._branches = {project: ui_snapshot.project.branch}
 
     def _load_evidence_snapshot(self, project: Path) -> None:
         """Load evidence once when its screen is entered, never from rendering."""
@@ -610,6 +601,7 @@ class LoopForgeConsole:
         project = project.resolve()
         if project not in self._evidence:
             self._evidence[project] = EvidenceIndex.build(self._statuses[project].run_dir)
+            self._state_store.set_evidence(self._evidence[project].items, query=self.state.evidence_query)
             self._begin_evidence_search()
 
     def _evidence_index(self) -> EvidenceIndex:
@@ -686,6 +678,16 @@ class LoopForgeConsole:
                 self.state.evidence_searching = False
             else:
                 self.state.evidence_results = items
+                self._state_store.set_evidence(
+                    items,
+                    query=self.state.evidence_query,
+                    state="loading",
+                )
+            if finished:
+                self._state_store.set_evidence(
+                    self.state.evidence_results,
+                    query=self.state.evidence_query,
+                )
 
     def _filtered_runs(self, runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not self.state.filter_text:
@@ -731,6 +733,7 @@ class LoopForgeConsole:
             records = self._projects()
             if records:
                 self.state.selected_project = Path(str(records[self.state.selected_index]["path"])).resolve()
+                self._state_store.select_project(self.state.selected_project)
                 # The shell is a session object, so changing its project is a
                 # navigation choice, not a workflow-state mutation. Guided
                 # actions below now target the project visible on screen.
@@ -742,6 +745,7 @@ class LoopForgeConsole:
             runs = self._filtered_runs(self._cached_runs(self._project_path()))
             if runs:
                 self.state.selected_run_id = str(runs[self.state.selected_index].get("run_id") or "")
+                self._state_store.select_run(self.state.selected_run_id)
                 result = resume_run(self._project_path(), self.state.selected_run_id)
                 if not result.ok:
                     self.state.notice = result.message
@@ -907,6 +911,7 @@ class LoopForgeConsole:
         operation = ForegroundOperation(action.label)
         self._operation = operation
         self._operation_events = []
+        self._state_store.set_operation(operation)
         project = self._project_path()
 
         def runner(emit: Any, cancel_event: Any) -> Any:
@@ -962,11 +967,16 @@ class LoopForgeConsole:
     def _collect_operation_events(self) -> None:
         if self._operation is None:
             return
-        events = self._operation.drain_events()
-        self._operation_events.extend(events)
-        self._operation_events = self._operation_events[-40:]
+        previous = len(self._operation.history)
+        history = self._operation.collect_events()
+        events = list(history[previous:])
+        self._operation_events = list(history)
         for event in events:
             self._invalidate_evidence_for_event(event)
+        # This records every worker update but publication is coalesced to the
+        # current prompt-toolkit loop turn below.
+        self._state_store.record_operation_events(self._operation)
+        self._state_store.flush()
         if self._operation.finished and not self.state.notice:
             if self._operation.error is not None:
                 self.state.notice = "Operation failed; inspect live output."
@@ -982,6 +992,12 @@ class LoopForgeConsole:
             return
         index = self._evidence.get(self._project_path())
         if index is not None and index.invalidate(event.artifact):
+            self._state_store.set_evidence(
+                index.items,
+                query=self.state.evidence_query,
+                state="stale",
+                publish=False,
+            )
             self._begin_evidence_search()
 
     def _start_spinner_timer(self) -> None:
