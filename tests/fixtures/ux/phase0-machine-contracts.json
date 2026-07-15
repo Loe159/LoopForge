@@ -1,0 +1,23 @@
+{
+  "status_uninitialized": {
+    "command": ["status", "--format", "json"],
+    "exit_code": 0,
+    "top_level_keys": ["guidance", "ok", "status"],
+    "status_keys": ["blockers", "config", "config_path", "initialized", "legacy_artifacts", "loop_contract", "memory", "native_artifacts", "next_step", "project_dir", "run", "run_dir", "verification"],
+    "guidance_keys": ["blocked_reasons", "diagnostics", "evidence", "priority", "recommended_actions", "summary"]
+  },
+  "status_no_run": {
+    "command": ["status", "--format", "json"],
+    "exit_code": 0,
+    "top_level_keys": ["guidance", "ok", "status"],
+    "initialized": true,
+    "run": null
+  },
+  "runs_empty": {
+    "json_command": ["runs", "--format", "json"],
+    "csv_command": ["runs", "--format", "csv"],
+    "exit_code": 0,
+    "json_keys": ["columns", "ok", "rows"],
+    "csv_header": "current,run_id,status,task,pack,updated_at"
+  }
+}
