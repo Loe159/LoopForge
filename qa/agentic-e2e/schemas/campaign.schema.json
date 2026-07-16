@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LoopForge E2E campaign",
+  "type": "object",
+  "required": [
+    "campaign_id",
+    "commit",
+    "verdict",
+    "scenarios",
+    "findings"
+  ],
+  "properties": {
+    "campaign_id": {
+      "type": "string"
+    },
+    "commit": {
+      "type": "string"
+    },
+    "verdict": {
+      "enum": [
+        "passed",
+        "passed_with_findings",
+        "failed",
+        "aborted"
+      ]
+    },
+    "scenarios": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "mandatory_passed": {
+      "type": "boolean"
+    },
+    "security_invariants_passed": {
+      "type": "boolean"
+    }
+  }
+}

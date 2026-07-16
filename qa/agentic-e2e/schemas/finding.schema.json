@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LoopForge E2E finding",
+  "type": "object",
+  "required": [
+    "id",
+    "title",
+    "severity",
+    "status",
+    "scenario_ids",
+    "expected",
+    "observed",
+    "reproduction",
+    "evidence"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "severity": {
+      "enum": [
+        "critical",
+        "blocker",
+        "major",
+        "minor",
+        "cosmetic"
+      ]
+    },
+    "status": {
+      "enum": [
+        "open",
+        "flaky",
+        "environment",
+        "harness",
+        "resolved_in_rerun"
+      ]
+    },
+    "scenario_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "expected": {
+      "type": "string"
+    },
+    "observed": {
+      "type": "string"
+    },
+    "reproduction": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "impact": {
+      "type": "string"
+    },
+    "recovery": {
+      "type": "string"
+    },
+    "suspected_area": {
+      "type": "string"
+    },
+    "rerun": {
+      "type": "string"
+    }
+  }
+}

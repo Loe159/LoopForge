@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LoopForge E2E scenario result",
+  "type": "object",
+  "required": [
+    "scenario_id",
+    "status",
+    "started_at",
+    "finished_at",
+    "steps",
+    "evidence",
+    "findings"
+  ],
+  "properties": {
+    "scenario_id": {
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "passed",
+        "failed",
+        "blocked",
+        "skipped",
+        "flaky",
+        "inconclusive"
+      ]
+    },
+    "started_at": {
+      "type": "string"
+    },
+    "finished_at": {
+      "type": "string"
+    },
+    "environment_id": {
+      "type": "string"
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "action",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "expected": {
+            "type": "string"
+          },
+          "observed": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

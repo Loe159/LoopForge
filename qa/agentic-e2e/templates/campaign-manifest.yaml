@@ -1,0 +1,23 @@
+campaign_id: "e2e-YYYYMMDD-HHMMSS"
+commit: "HEAD"
+suite: "mandatory"
+platforms:
+  - current
+adapters:
+  required:
+    - local-adapter-fixture
+  optional:
+    - kilo-code
+    - codex
+fixture_command:
+  executable: "<absolute-python>"
+  script: "qa/agentic-e2e/fixtures/deterministic_agent.py"
+scenarios:
+  - S00-preflight
+  - S01-full-happy-path
+  - S02-interrupt-resume
+  - S03-approval-rejection
+  - S04-verification-failure-recovery
+rerun_failures: 1
+stop_on_critical: true
+redact_environment: true
