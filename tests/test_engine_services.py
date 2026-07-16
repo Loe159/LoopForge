@@ -342,6 +342,17 @@ class PackagedRuntimeLayoutTests(unittest.TestCase):
             kilo_code.command_with_prompt(["kilo", "run", "--agent", "read-only"], "Inspect only."),
             ["kilo", "run", "--agent", "read-only", "Inspect only."],
         )
+        self.assertEqual(
+            kilo_code.headless_run_command([], default_agent=kilo_code.DEFAULT_READONLY_AGENT),
+            ["kilo", "run", "--agent", "ask"],
+        )
+        self.assertEqual(
+            kilo_code.headless_run_command(
+                ["run", "--agent=architect"],
+                default_agent=kilo_code.DEFAULT_IMPLEMENTATION_AGENT,
+            ),
+            ["kilo", "run", "--agent=architect"],
+        )
 
 
 class PackRegistryTests(unittest.TestCase):

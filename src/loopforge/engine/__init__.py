@@ -17,8 +17,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from loopforge.adapters.kilo_code import command_with_prompt as kilo_command_with_prompt
-from loopforge.adapters.kilo_code import is_kilo_run_command
+from loopforge.adapters.kilo_code import (
+    DEFAULT_IMPLEMENTATION_AGENT,
+    DEFAULT_READONLY_AGENT,
+    command_with_prompt as kilo_command_with_prompt,
+    headless_run_command as kilo_headless_run_command,
+    is_kilo_run_command,
+)
 from loopforge.engine.packs import PackRegistry
 from loopforge.engine.metrics import MetricsService
 from loopforge.engine.storage import DEFAULT_JSON_STORE
@@ -4913,14 +4918,10 @@ def command_for_readonly_stage(
     if adapter == "claude-code" and not adapter_args:
         return ["claude", "-p", "--permission-mode", "plan"]
     if adapter == "kilo-code":
-        if not adapter_args:
-            raise ValueError(
-                "read-only kilo-code requires non-interactive arguments that select a read-only agent"
-            )
-        args = list(adapter_args)
-        if args[0] != "run":
-            args.insert(0, "run")
-        return ["kilo", *args]
+        return kilo_headless_run_command(
+            adapter_args,
+            default_agent=DEFAULT_READONLY_AGENT,
+        )
     if not adapter_args:
         raise ValueError(f"read-only {adapter} requires non-interactive adapter arguments")
     return command_for_adapter(adapter, adapter_args)
@@ -5030,12 +5031,10 @@ def command_for_attempt(
             args.append("-")
         return ["codex", *args]
     if adapter == "kilo-code":
-        args = list(adapter_args)
-        if not args:
-            args = ["run"]
-        elif args[0] != "run":
-            args.insert(0, "run")
-        return ["kilo", *args]
+        return kilo_headless_run_command(
+            adapter_args,
+            default_agent=DEFAULT_IMPLEMENTATION_AGENT,
+        )
     return command_for_adapter(adapter, adapter_args)
 
 

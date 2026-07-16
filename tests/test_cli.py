@@ -4342,25 +4342,27 @@ class CliTests(unittest.TestCase):
     def test_kilo_code_commands_use_documented_headless_run_mode(self) -> None:
         self.assertEqual(
             command_for_attempt(adapter="kilo-code", adapter_args=[]),
-            ["kilo", "run"],
+            ["kilo", "run", "--agent", "code"],
         )
         self.assertEqual(
             command_for_attempt(adapter="kilo-code", adapter_args=["--model", "openai/gpt-5"]),
-            ["kilo", "run", "--model", "openai/gpt-5"],
+            ["kilo", "run", "--model", "openai/gpt-5", "--agent", "code"],
         )
-        with self.assertRaisesRegex(ValueError, "select a read-only agent"):
+        self.assertEqual(
             command_for_readonly_stage(
                 adapter="kilo-code",
                 adapter_args=[],
                 workspace_dir=Path("workspace"),
-            )
+            ),
+            ["kilo", "run", "--agent", "ask"],
+        )
         self.assertEqual(
             command_for_readonly_stage(
                 adapter="kilo-code",
-                adapter_args=["--agent", "loopforge-read-only"],
+                adapter_args=["--agent", "architect"],
                 workspace_dir=Path("workspace"),
             ),
-            ["kilo", "run", "--agent", "loopforge-read-only"],
+            ["kilo", "run", "--agent", "architect"],
         )
 
     def test_continue_fixture_adapter_failure_blocks_readably(self) -> None:

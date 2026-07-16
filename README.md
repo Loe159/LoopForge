@@ -101,6 +101,12 @@ loopforge shell --command "/export context"
 loopforge shell --script commands.loopforge
 ```
 
+Kilo Code is available as `kilo-code`. Install its `kilo` executable first,
+then select it with `loopforge shell --command "/adapter kilo-code"`. LoopForge
+uses Kilo's read-only `ask` agent for research, planning, and review, and its
+`code` agent for implementation; pass `--agent <name>` after `--` to override
+either default.
+
 ## CLI Conventions
 
 LoopForge keeps human output readable while exposing stable formats for scripts:
