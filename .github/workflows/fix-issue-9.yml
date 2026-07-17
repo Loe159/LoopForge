@@ -48,8 +48,56 @@ jobs:
           PY
           python .github/patch-issue-9.py > issue-9-patch.log 2>&1
           status=$?
+          if [[ $status -ne 0 ]]; then
+            cat issue-9-patch.log
+            exit $status
+          fi
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('src/loopforge/adapters/local_implementation_adapter.py')
+          text = path.read_text(encoding='utf-8')
+          start = text.index('def summary_for(')
+          end = text.index('\n\ndef result_value(', start)
+          replacement = '''def summary_for(
+              status: str,
+              completed: subprocess.CompletedProcess[bytes] | None,
+              timed_out: bool,
+              changed: bool,
+              policy: dict[str, Any],
+              *,
+              fixture: bool = False,
+          ) -> str:
+              command_name = "Fixture command" if fixture else "Implementation command"
+              if timed_out:
+                  text = f"{command_name} timed out."
+              elif completed is None:
+                  text = f"{command_name} was not run."
+              elif completed.returncode != 0:
+                  text = f"{command_name} failed with return code {completed.returncode}."
+              elif status == "blocked":
+                  text = f"{command_name} completed without workspace changes."
+              elif changed:
+                  text = f"{command_name} completed and changed the workspace."
+              else:
+                  text = f"{command_name} completed."
+              return text[: policy["max_summary_chars"]]
+          '''
+          text = text[:start] + replacement + text[end:]
+          old_call = '    summary = summary_for(status, completed, timed_out, changed, policy)\n'
+          new_call = '''    summary = summary_for(
+              status,
+              completed,
+              timed_out,
+              changed,
+              policy,
+              fixture=session["runner_id"] in policy["fixture_runner_ids"],
+          )
+          '''
+          if text.count(old_call) != 1:
+              raise SystemExit(f'summary call count: {text.count(old_call)}')
+          path.write_text(text.replace(old_call, new_call, 1), encoding='utf-8')
+          PY
           cat issue-9-patch.log
-          exit $status
 
       - name: Install package
         if: steps.guard.outputs.apply == 'true'
