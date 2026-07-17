@@ -34,7 +34,12 @@ jobs:
 
       - name: Apply focused patch
         if: steps.guard.outputs.apply == 'true'
-        run: python .github/patch-issue-9.py
+        shell: bash
+        run: |
+          python .github/patch-issue-9.py > issue-9-patch.log 2>&1
+          status=$?
+          cat issue-9-patch.log
+          exit $status
 
       - name: Install package
         if: steps.guard.outputs.apply == 'true'
@@ -58,8 +63,8 @@ jobs:
         if: failure() && steps.guard.outputs.apply == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: issue-9-test-log
-          path: issue-9-test.log
+          name: issue-9-diagnostics
+          path: issue-9-*.log
 
       - name: Commit validated fix
         if: success() && steps.guard.outputs.apply == 'true'
