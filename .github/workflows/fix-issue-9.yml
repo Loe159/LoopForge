@@ -127,13 +127,12 @@ jobs:
           name: issue-9-diagnostics
           path: issue-9-*.log
 
-      - name: Commit validated fix
+      - name: Upload validated sources
         if: success() && steps.guard.outputs.apply == 'true'
-        shell: bash
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm .github/fix-issue-9.trigger .github/patch-issue-9.py
-          git add src/loopforge/engine/__init__.py src/loopforge/adapters/local_implementation_adapter.py tests/test_implementation_result_integrity.py
-          git commit -m "Fix local adapter fixture protocol"
-          git push origin HEAD:${{ github.head_ref }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-9-validated-sources
+          path: |
+            src/loopforge/engine/__init__.py
+            src/loopforge/adapters/local_implementation_adapter.py
+            tests/test_implementation_result_integrity.py
