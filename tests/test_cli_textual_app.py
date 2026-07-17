@@ -106,6 +106,21 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("Current loop", result.message)
                 self.assertEqual(shell.output.getvalue(), "")
 
+    async def test_pilot_slash_filters_runs_from_project(self) -> None:
+        from loopforge.cli.textual_app import LoopForgeApp
+        from loopforge.cli.textual_app.screens import TextEntryScreen
+
+        app = LoopForgeApp(SimpleNamespace(project_dir=Path.cwd()), load_on_mount=False)
+        async with app.run_test() as pilot:
+            app._screen = "project"
+            await pilot.press("/")
+            await pilot.pause()
+            self.assertIsInstance(app.screen, TextEntryScreen)
+            self.assertEqual(app.screen.title_text, "Filter")
+            await pilot.press("enter")
+            await pilot.pause()
+            self.assertEqual(app._filter, "")
+
     async def test_pilot_evidence_shortcut_does_not_navigate_from_home(self) -> None:
         from loopforge.cli.textual_app import LoopForgeApp
 

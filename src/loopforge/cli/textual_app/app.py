@@ -291,6 +291,9 @@ class LoopForgeApp(App[None]):
     def action_command(self) -> None:
         """Open the existing slash-command surface from the full-screen UI."""
 
+        if self._screen == "project":
+            self.action_filter()
+            return
         self.push_screen(
             TextEntryScreen(
                 "Run LoopForge command",
