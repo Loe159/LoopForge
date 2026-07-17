@@ -69,11 +69,19 @@ def patch_engine() -> None:
     return 1
 
 
+def implementation_base_commit(run: dict[str, Any]) -> str:
+    value = run.get("base_commit")
+    if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{40}", value):
+        return value
+    return "0" * 40
+
+
 def expected_session_for(run: dict[str, Any], adapter: str, workspace_dir: Path) -> dict[str, Any]:
     issue = run_issue_number(run)
+    base_commit = implementation_base_commit(run)
     seed = {
         "issue": issue,
-        "base_commit": run.get("base_commit"),
+        "base_commit": base_commit,
         "run_id": run.get("run_id"),
         "task_id": run.get("task_id"),
         "adapter": adapter,
@@ -82,7 +90,7 @@ def expected_session_for(run: dict[str, Any], adapter: str, workspace_dir: Path)
     session = {
         "issue": issue,
         "risk": "low",
-        "base_commit": run.get("base_commit"),
+        "base_commit": base_commit,
         "workspace": str(workspace_dir.resolve()),
         "runner_id": adapter,
         "preflight_sha256": session_hash(seed, "preflight"),
