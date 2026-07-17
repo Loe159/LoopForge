@@ -90,7 +90,10 @@ jobs:
               timed_out,
               changed,
               policy,
-              fixture=session["runner_id"] in policy["fixture_runner_ids"],
+              fixture=(
+                  stream_output
+                  and session["runner_id"] in policy["fixture_runner_ids"]
+              ),
           )
           '''
           if text.count(old_call) != 1:
