@@ -1,20 +1,20 @@
 name: Fix issue 9
 
 on:
-  push:
-    branches: [master]
-    paths:
-      - .github/workflows/fix-issue-9.yml
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: write
 
 jobs:
   fix:
+    if: github.event.issue.number == 9 && github.event.comment.body == '/apply-fix-9'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: master
           fetch-depth: 0
 
       - uses: actions/setup-python@v5
