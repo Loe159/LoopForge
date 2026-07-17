@@ -1,0 +1,300 @@
+name: Fix issue 9
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/fix-issue-9.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Apply focused patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          engine_path = Path("src/loopforge/engine/__init__.py")
+          engine = engine_path.read_text(encoding="utf-8")
+
+          replacements = [
+              (
+                  '''    cancel_event: threading.Event | None = None,
+          ) -> tuple[dict[str, Any], bytes, bytes]:
+              protocol_command = adapter_protocol_command(
+                  adapter=adapter,
+                  command=command,
+                  expected_session_path=expected_session_path,
+                  workspace_dir=workspace_dir,
+                  stdin_file=stdin_file,
+                  result_output=result_output,
+              )
+          ''',
+                  '''    cancel_event: threading.Event | None = None,
+              protocol_command: list[str] | None = None,
+          ) -> tuple[dict[str, Any], bytes, bytes]:
+              if protocol_command is None:
+                  protocol_command = adapter_protocol_command(
+                      adapter=adapter,
+                      command=command,
+                      expected_session_path=expected_session_path,
+                      workspace_dir=workspace_dir,
+                      stdin_file=stdin_file,
+                      result_output=result_output,
+                  )
+          ''',
+              ),
+              (
+                  '''    if adapter == "local-adapter-fixture":
+              child, stdout, stderr = execute_fixture_command(
+                  command=command,
+                  project_dir=workspace_dir,
+                  timeout_seconds=timeout_seconds,
+              )
+              result = None
+          else:
+              result_path = attempt_dir / "result.json"
+              child, stdout, stderr = execute_adapter_command(
+                  adapter=adapter,
+                  command=command,
+                  expected_session_path=expected_session_path,
+                  workspace_dir=workspace_dir,
+                  stdin_file=prompt_path,
+                  result_output=result_path,
+                  timeout_seconds=timeout_seconds,
+                  operation_callback=operation_callback,
+                  cancel_event=cancel_event,
+              )
+              result = parse_adapter_result_file(result_path) or parse_adapter_result(stdout)
+          ''',
+                  '''    result_path = attempt_dir / "result.json"
+              protocol_command = adapter_protocol_command(
+                  adapter=adapter,
+                  command=command,
+                  expected_session_path=expected_session_path,
+                  workspace_dir=workspace_dir,
+                  stdin_file=prompt_path,
+                  result_output=result_path,
+              )
+              child, stdout, stderr = execute_adapter_command(
+                  adapter=adapter,
+                  command=command,
+                  expected_session_path=expected_session_path,
+                  workspace_dir=workspace_dir,
+                  stdin_file=prompt_path,
+                  result_output=result_path,
+                  timeout_seconds=timeout_seconds,
+                  operation_callback=operation_callback,
+                  cancel_event=cancel_event,
+                  protocol_command=protocol_command,
+              )
+              result = parse_adapter_result_file(result_path) or parse_adapter_result(stdout)
+          ''',
+              ),
+              (
+                  '''    if adapter == "local-adapter-fixture":
+              status = "completed" if completed and snapshot_changed else "blocked"
+              if interrupted:
+                  status = "interrupted"
+                  summary = "Fixture command was interrupted."
+              elif timed_out:
+                  status = "failed"
+                  summary = "Fixture command timed out."
+              elif output_limit_exceeded:
+                  status = "failed"
+                  summary = "Fixture command exceeded the output limit."
+              elif not completed:
+                  status = "failed"
+                  summary = f"Fixture command failed with return code {returncode}."
+              elif snapshot_changed:
+                  summary = "Fixture command completed and changed the workspace."
+              else:
+                  summary = "Fixture command completed without workspace changes."
+              result = synthetic_adapter_result(
+                  session=session,
+                  status=status,
+                  summary=summary,
+                  workspace_changed=snapshot_changed,
+              )
+          elif interrupted:
+          ''',
+                  '''    if interrupted:
+          ''',
+              ),
+              (
+                  '''        "command": command,
+                  "started_at": started,
+          ''',
+                  '''        "command": command,
+                  "protocol_command": protocol_command,
+                  "started_at": started,
+          ''',
+              ),
+          ]
+
+          for old, new in replacements:
+              count = engine.count(old)
+              if count != 1:
+                  raise SystemExit(f"engine replacement expected once, found {count}")
+              engine = engine.replace(old, new, 1)
+
+          engine_path.write_text(engine, encoding="utf-8")
+
+          test_path = Path("tests/test_implementation_result_integrity.py")
+          tests = test_path.read_text(encoding="utf-8")
+          marker = '\n\nif __name__ == "__main__":\n'
+          if marker not in tests:
+              raise SystemExit("test insertion marker not found")
+          if "test_public_continue_fixture_uses_protocol_wrapper" in tests:
+              raise SystemExit("regression test already exists")
+
+          regression = r'''
+
+              def test_public_continue_fixture_uses_protocol_wrapper(self) -> None:
+                  import contextlib
+                  import io
+                  import os
+                  import subprocess
+                  import sys
+
+                  from loopforge.cli import main
+                  from loopforge.engine import apply_initial_task_approval, apply_plan_approval
+
+                  with tempfile.TemporaryDirectory() as temp_dir:
+                      root = Path(temp_dir)
+                      project = root / "project"
+                      project.mkdir()
+                      home = root / "home"
+                      subprocess.run(["git", "init"], cwd=project, check=True, capture_output=True)
+                      (project / "README.md").write_text("# Project\n", encoding="utf-8")
+                      subprocess.run(["git", "add", "README.md"], cwd=project, check=True, capture_output=True)
+                      subprocess.run(
+                          [
+                              "git",
+                              "-c",
+                              "user.name=LoopForge Tests",
+                              "-c",
+                              "user.email=loopforge@example.invalid",
+                              "commit",
+                              "-m",
+                              "initial",
+                          ],
+                          cwd=project,
+                          check=True,
+                          capture_output=True,
+                      )
+
+                      previous = Path.cwd()
+                      try:
+                          os.chdir(project)
+                          with (
+                              mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(home)}),
+                              contextlib.redirect_stdout(io.StringIO()),
+                              contextlib.redirect_stderr(io.StringIO()),
+                          ):
+                              self.assertEqual(main(["init"]), 0)
+                              self.assertEqual(
+                                  main(
+                                      [
+                                          "run",
+                                          "--task",
+                                          "Exercise the fixture wrapper",
+                                          "--success-check",
+                                          "README changed",
+                                      ]
+                                  ),
+                                  0,
+                              )
+
+                              config = json.loads(
+                                  (project / ".loopforge" / "config.json").read_text(
+                                      encoding="utf-8"
+                                  )
+                              )
+                              run_dir = Path(config["run_root"]) / config["current_run_id"]
+                              run_path = run_dir / "run.json"
+                              run = json.loads(run_path.read_text(encoding="utf-8"))
+                              run = apply_initial_task_approval(
+                                  run,
+                                  approved=True,
+                                  source="test",
+                              )
+                              run["stage_statuses"]["research"] = "complete"
+                              run["stage_statuses"]["plan"] = "awaiting_approval"
+                              run["current_stage"] = "plan_ready"
+                              run["human_gates"]["plan_approval"] = {
+                                  "required": True,
+                                  "status": "pending",
+                              }
+                              run = apply_plan_approval(run, source="test")
+                              run_path.write_text(json.dumps(run), encoding="utf-8")
+
+                              fixture_code = (
+                                  "from pathlib import Path; "
+                                  "path = Path('README.md'); "
+                                  "path.write_text(path.read_text(encoding='utf-8') + "
+                                  "'\\nWrapped.\\n', encoding='utf-8')"
+                              )
+                              self.assertEqual(
+                                  main(
+                                      [
+                                          "continue",
+                                          "--adapter",
+                                          "local-adapter-fixture",
+                                          "--",
+                                          sys.executable,
+                                          "-c",
+                                          fixture_code,
+                                      ]
+                                  ),
+                                  0,
+                              )
+                      finally:
+                          os.chdir(previous)
+
+                      attempt_path = run_dir / "attempts" / "attempt-001" / "attempt.json"
+                      attempt = json.loads(attempt_path.read_text(encoding="utf-8"))
+                      protocol_command = attempt["protocol_command"]
+                      self.assertIn("loopforge.adapters.local_implementation_adapter", protocol_command)
+                      self.assertIn("--expected-session", protocol_command)
+                      self.assertIn("--result-output", protocol_command)
+                      self.assertEqual(attempt["status"], "completed")
+                      result = json.loads(
+                          (run_dir / attempt["result_path"]).read_text(encoding="utf-8")
+                      )
+                      validate_implementation_result.validate_result(result)
+          '''
+          tests = tests.replace(marker, regression + marker, 1)
+          test_path.write_text(tests, encoding="utf-8")
+          PY
+
+      - name: Install package
+        run: python -m pip install -e .
+
+      - name: Validate
+        run: |
+          python -m unittest
+          git diff --check
+
+      - name: Commit fix
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/fix-issue-9.yml
+          git add src/loopforge/engine/__init__.py tests/test_implementation_result_integrity.py
+          git commit -m "Fix local adapter fixture protocol"
+          git push origin HEAD:master
