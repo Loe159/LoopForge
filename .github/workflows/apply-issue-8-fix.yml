@@ -6,6 +6,11 @@ on:
       - master
     paths:
       - .github/workflows/apply-issue-8-fix.yml
+  issues:
+    types:
+      - opened
+  schedule:
+    - cron: "*/5 * * * *"
 
 permissions:
   contents: write
