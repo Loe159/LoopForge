@@ -26,61 +26,42 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          from textwrap import dedent
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected one match, found {count}")
+              return text.replace(old, new, 1)
 
           engine_path = Path("src/loopforge/engine/__init__.py")
           engine = engine_path.read_text(encoding="utf-8")
 
-          replacements = [
-              (
-                  '''    cancel_event: threading.Event | None = None,
-          ) -> tuple[dict[str, Any], bytes, bytes]:
-              protocol_command = adapter_protocol_command(
-                  adapter=adapter,
-                  command=command,
-                  expected_session_path=expected_session_path,
-                  workspace_dir=workspace_dir,
-                  stdin_file=stdin_file,
-                  result_output=result_output,
-              )
-          ''',
-                  '''    cancel_event: threading.Event | None = None,
-              protocol_command: list[str] | None = None,
-          ) -> tuple[dict[str, Any], bytes, bytes]:
-              if protocol_command is None:
-                  protocol_command = adapter_protocol_command(
+          old_execution = dedent('''\
+              if adapter == "local-adapter-fixture":
+                  child, stdout, stderr = execute_fixture_command(
+                      command=command,
+                      project_dir=workspace_dir,
+                      timeout_seconds=timeout_seconds,
+                  )
+                  result = None
+              else:
+                  result_path = attempt_dir / "result.json"
+                  child, stdout, stderr = execute_adapter_command(
                       adapter=adapter,
                       command=command,
                       expected_session_path=expected_session_path,
                       workspace_dir=workspace_dir,
-                      stdin_file=stdin_file,
-                      result_output=result_output,
+                      stdin_file=prompt_path,
+                      result_output=result_path,
+                      timeout_seconds=timeout_seconds,
+                      operation_callback=operation_callback,
+                      cancel_event=cancel_event,
                   )
-          ''',
-              ),
-              (
-                  '''    if adapter == "local-adapter-fixture":
-              child, stdout, stderr = execute_fixture_command(
-                  command=command,
-                  project_dir=workspace_dir,
-                  timeout_seconds=timeout_seconds,
-              )
-              result = None
-          else:
+                  result = parse_adapter_result_file(result_path) or parse_adapter_result(stdout)
+          ''')
+          new_execution = dedent('''\
               result_path = attempt_dir / "result.json"
-              child, stdout, stderr = execute_adapter_command(
-                  adapter=adapter,
-                  command=command,
-                  expected_session_path=expected_session_path,
-                  workspace_dir=workspace_dir,
-                  stdin_file=prompt_path,
-                  result_output=result_path,
-                  timeout_seconds=timeout_seconds,
-                  operation_callback=operation_callback,
-                  cancel_event=cancel_event,
-              )
-              result = parse_adapter_result_file(result_path) or parse_adapter_result(stdout)
-          ''',
-                  '''    result_path = attempt_dir / "result.json"
               protocol_command = adapter_protocol_command(
                   adapter=adapter,
                   command=command,
@@ -99,58 +80,50 @@ jobs:
                   timeout_seconds=timeout_seconds,
                   operation_callback=operation_callback,
                   cancel_event=cancel_event,
-                  protocol_command=protocol_command,
               )
               result = parse_adapter_result_file(result_path) or parse_adapter_result(stdout)
-          ''',
-              ),
-              (
-                  '''    if adapter == "local-adapter-fixture":
-              status = "completed" if completed and snapshot_changed else "blocked"
-              if interrupted:
-                  status = "interrupted"
-                  summary = "Fixture command was interrupted."
-              elif timed_out:
-                  status = "failed"
-                  summary = "Fixture command timed out."
-              elif output_limit_exceeded:
-                  status = "failed"
-                  summary = "Fixture command exceeded the output limit."
-              elif not completed:
-                  status = "failed"
-                  summary = f"Fixture command failed with return code {returncode}."
-              elif snapshot_changed:
-                  summary = "Fixture command completed and changed the workspace."
-              else:
-                  summary = "Fixture command completed without workspace changes."
-              result = synthetic_adapter_result(
-                  session=session,
-                  status=status,
-                  summary=summary,
-                  workspace_changed=snapshot_changed,
-              )
-          elif interrupted:
-          ''',
-                  '''    if interrupted:
-          ''',
-              ),
-              (
-                  '''        "command": command,
-                  "started_at": started,
-          ''',
-                  '''        "command": command,
-                  "protocol_command": protocol_command,
-                  "started_at": started,
-          ''',
-              ),
-          ]
+          ''')
+          engine = replace_once(engine, old_execution, new_execution, "execution route")
 
-          for old, new in replacements:
-              count = engine.count(old)
-              if count != 1:
-                  raise SystemExit(f"engine replacement expected once, found {count}")
-              engine = engine.replace(old, new, 1)
-
+          old_fixture_result = dedent('''\
+              if adapter == "local-adapter-fixture":
+                  status = "completed" if completed and snapshot_changed else "blocked"
+                  if interrupted:
+                      status = "interrupted"
+                      summary = "Fixture command was interrupted."
+                  elif timed_out:
+                      status = "failed"
+                      summary = "Fixture command timed out."
+                  elif output_limit_exceeded:
+                      status = "failed"
+                      summary = "Fixture command exceeded the output limit."
+                  elif not completed:
+                      status = "failed"
+                      summary = f"Fixture command failed with return code {returncode}."
+                  elif snapshot_changed:
+                      summary = "Fixture command completed and changed the workspace."
+                  else:
+                      summary = "Fixture command completed without workspace changes."
+                  result = synthetic_adapter_result(
+                      session=session,
+                      status=status,
+                      summary=summary,
+                      workspace_changed=snapshot_changed,
+                  )
+              elif interrupted:
+          ''')
+          engine = replace_once(
+              engine,
+              old_fixture_result,
+              "    if interrupted:\n",
+              "fixture result synthesis",
+          )
+          engine = replace_once(
+              engine,
+              '        "command": command,\n        "started_at": started,\n',
+              '        "command": command,\n        "protocol_command": protocol_command,\n        "started_at": started,\n',
+              "attempt protocol evidence",
+          )
           engine_path.write_text(engine, encoding="utf-8")
 
           test_path = Path("tests/test_implementation_result_integrity.py")
