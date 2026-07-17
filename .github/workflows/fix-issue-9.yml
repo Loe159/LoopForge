@@ -36,6 +36,16 @@ jobs:
         if: steps.guard.outputs.apply == 'true'
         shell: bash
         run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('.github/patch-issue-9.py')
+          text = path.read_text(encoding='utf-8')
+          old = '        paths.append(path.replace("\\\\", "/"))'
+          new = '        paths.append(path.replace("\\\\\\\\", "/"))'
+          if text.count(old) != 1:
+              raise SystemExit(f'escape marker count: {text.count(old)}')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
           python .github/patch-issue-9.py > issue-9-patch.log 2>&1
           status=$?
           cat issue-9-patch.log
