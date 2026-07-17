@@ -41,8 +41,43 @@ jobs:
 
           engine_path = Path("src/loopforge/engine/__init__.py")
           engine = engine_path.read_text(encoding="utf-8")
-          function_start = engine.index("def execute_attempt(")
 
+          streaming_start = engine.index("def run_streaming_process(")
+          stream_write_marker = '''                else:
+                              target.write(chunk)
+                              target.flush()
+          '''
+          if engine.count(stream_write_marker, streaming_start) != 1:
+              raise SystemExit("stream output marker was not unique")
+          engine = engine.replace(
+              stream_write_marker,
+              '''                else:
+                              binary_target = getattr(target, "buffer", None)
+                              if binary_target is not None:
+                                  binary_target.write(chunk)
+                                  binary_target.flush()
+                              else:
+                                  target.write(decode_output(chunk))
+                                  target.flush()
+          ''',
+              1,
+          )
+          stdout_target_marker = "        args=(process.stdout, sys.stdout.buffer, stdout_buffer),\n"
+          stderr_target_marker = "        args=(process.stderr, sys.stderr.buffer, stderr_buffer),\n"
+          if engine.count(stdout_target_marker) != 1 or engine.count(stderr_target_marker) != 1:
+              raise SystemExit("stream target markers were not unique")
+          engine = engine.replace(
+              stdout_target_marker,
+              "        args=(process.stdout, sys.stdout, stdout_buffer),\n",
+              1,
+          )
+          engine = engine.replace(
+              stderr_target_marker,
+              "        args=(process.stderr, sys.stderr, stderr_buffer),\n",
+              1,
+          )
+
+          function_start = engine.index("def execute_attempt(")
           execution_start = engine.index(
               '    if adapter == "local-adapter-fixture":\n',
               function_start,
@@ -76,11 +111,7 @@ jobs:
               )
               result = parse_adapter_result_file(result_path) or parse_adapter_result(stdout)
           '''
-          engine = (
-              engine[:execution_start]
-              + replacement_execution
-              + engine[execution_end:]
-          )
+          engine = engine[:execution_start] + replacement_execution + engine[execution_end:]
 
           result_start = engine.index(
               '    if adapter == "local-adapter-fixture":\n',
