@@ -1,27 +1,39 @@
 name: Fix issue 9
 
 on:
-  issue_comment:
-    types: [created]
+  pull_request:
+    types: [opened, synchronize]
 
 permissions:
   contents: write
 
 jobs:
   fix:
-    if: github.event.issue.number == 9 && github.event.comment.body == '/apply-fix-9'
+    if: github.head_ref == 'agent/apply-fix-9'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: master
+          ref: ${{ github.head_ref }}
           fetch-depth: 0
 
+      - name: Check trigger
+        id: guard
+        shell: bash
+        run: |
+          if [[ -f .github/fix-issue-9.trigger ]]; then
+            echo "apply=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "apply=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/setup-python@v5
+        if: steps.guard.outputs.apply == 'true'
         with:
           python-version: "3.11"
 
       - name: Apply focused patch
+        if: steps.guard.outputs.apply == 'true'
         shell: bash
         run: |
           python - <<'PY'
@@ -255,19 +267,22 @@ jobs:
           PY
 
       - name: Install package
+        if: steps.guard.outputs.apply == 'true'
         run: python -m pip install -e .
 
       - name: Validate
+        if: steps.guard.outputs.apply == 'true'
         run: |
           python -m unittest
           git diff --check
 
-      - name: Commit fix
+      - name: Commit validated fix
+        if: steps.guard.outputs.apply == 'true'
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm .github/workflows/fix-issue-9.yml
+          git rm .github/workflows/fix-issue-9.yml .github/fix-issue-9.trigger
           git add src/loopforge/engine/__init__.py tests/test_implementation_result_integrity.py
           git commit -m "Fix local adapter fixture protocol"
-          git push origin HEAD:master
+          git push origin HEAD:${{ github.head_ref }}
