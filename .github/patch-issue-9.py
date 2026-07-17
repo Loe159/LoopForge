@@ -115,6 +115,120 @@ adapter = replace_once(
 ''',
     "git failure diagnostic",
 )
+adapter = replace_once(
+    adapter,
+    '''def git_status_paths(workspace: Path) -> list[str]:
+    output = run_git(workspace, "status", "--porcelain=v1", "--untracked-files=all")
+    paths: list[str] = []
+    for raw_line in output.decode("utf-8", errors="replace").splitlines():
+        if not raw_line:
+            continue
+        path = raw_line[3:].strip()
+        if " -> " in path:
+            path = path.rsplit(" -> ", 1)[1].strip()
+        paths.append(path.replace("\\", "/"))
+    return paths
+
+
+''',
+    '''def git_status_paths(workspace: Path) -> list[str] | None:
+    try:
+        output = run_git(workspace, "status", "--porcelain=v1", "--untracked-files=all")
+    except ValueError as error:
+        if "not a git repository" in str(error).lower():
+            return None
+        raise
+    paths: list[str] = []
+    for raw_line in output.decode("utf-8", errors="replace").splitlines():
+        if not raw_line:
+            continue
+        path = raw_line[3:].strip()
+        if " -> " in path:
+            path = path.rsplit(" -> ", 1)[1].strip()
+        paths.append(path.replace("\\", "/"))
+    return paths
+
+
+def relevant_git_status_paths(paths: list[str], policy: dict[str, Any]) -> list[str]:
+    ignored_prefixes = tuple(policy["ignored_workspace_status_prefixes"])
+    return [
+        path
+        for path in paths
+        if not any(path == prefix.rstrip("/") or path.startswith(prefix) for prefix in ignored_prefixes)
+    ]
+
+
+def workspace_file_snapshot(workspace: Path, policy: dict[str, Any]) -> dict[str, tuple[int, int]]:
+    ignored_prefixes = tuple(policy["ignored_workspace_status_prefixes"])
+    snapshot: dict[str, tuple[int, int]] = {}
+    for path in workspace.rglob("*"):
+        if ".git" in path.parts or not path.is_file():
+            continue
+        relative = path.relative_to(workspace).as_posix()
+        if any(
+            relative == prefix.rstrip("/") or relative.startswith(prefix)
+            for prefix in ignored_prefixes
+        ):
+            continue
+        stat = path.stat()
+        snapshot[relative] = (stat.st_size, stat.st_mtime_ns)
+    return snapshot
+
+
+''',
+    "git status fallback",
+)
+adapter = replace_once(
+    adapter,
+    '''def workspace_dirty(workspace: Path, policy: dict[str, Any]) -> bool:
+    ignored_prefixes = tuple(policy["ignored_workspace_status_prefixes"])
+    return any(
+        not any(path == prefix.rstrip("/") or path.startswith(prefix) for prefix in ignored_prefixes)
+        for path in git_status_paths(workspace)
+    )
+''',
+    '''def workspace_dirty(workspace: Path, policy: dict[str, Any]) -> bool:
+    paths = git_status_paths(workspace)
+    return bool(relevant_git_status_paths(paths, policy)) if paths is not None else False
+''',
+    "workspace dirty fallback",
+)
+adapter = replace_once(
+    adapter,
+    '''    validate_command_allowed(command, session, policy)
+    if policy["require_clean_workspace_at_start"] and workspace_dirty(workspace, policy):
+        value = result_value(
+''',
+    '''    validate_command_allowed(command, session, policy)
+    initial_git_paths = git_status_paths(workspace)
+    initial_snapshot = (
+        workspace_file_snapshot(workspace, policy)
+        if initial_git_paths is None
+        else None
+    )
+    if (
+        policy["require_clean_workspace_at_start"]
+        and initial_git_paths is not None
+        and relevant_git_status_paths(initial_git_paths, policy)
+    ):
+        value = result_value(
+''',
+    "workspace preflight state",
+)
+adapter = replace_once(
+    adapter,
+    '''    output_size = len(completed.stdout or b"") + len(completed.stderr or b"")
+    changed = workspace_dirty(workspace, policy)
+''',
+    '''    output_size = len(completed.stdout or b"") + len(completed.stderr or b"")
+    current_git_paths = git_status_paths(workspace)
+    if current_git_paths is None:
+        changed = initial_snapshot != workspace_file_snapshot(workspace, policy)
+    else:
+        changed = bool(relevant_git_status_paths(current_git_paths, policy))
+''',
+    "workspace change state",
+)
 adapter_path.write_text(adapter, encoding="utf-8")
 
 test_path = Path("tests/test_implementation_result_integrity.py")
