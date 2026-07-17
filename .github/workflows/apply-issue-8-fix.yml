@@ -1,0 +1,49 @@
+name: Apply issue 8 fix
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/apply-issue-8-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Apply deterministic patch
+        run: python tools/apply_issue_8_fix.py
+
+      - name: Install project
+        run: python -m pip install -e .
+
+      - name: Run focused regression test
+        run: python -m unittest discover -s tests -p 'test_implementation_result_integrity.py'
+
+      - name: Run full test suite
+        run: python -m unittest
+
+      - name: Check diff integrity
+        run: git diff --check
+
+      - name: Commit validated fix and remove temporary automation
+        run: |
+          git rm tools/apply_issue_8_fix.py .github/workflows/apply-issue-8-fix.yml
+          git add -A
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Fix implementation result validation"
+          git push origin HEAD:master
