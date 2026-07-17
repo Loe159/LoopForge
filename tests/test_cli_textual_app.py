@@ -80,7 +80,7 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
             await pilot.press("escape")
             self.assertEqual(app._screen, "run")
             app.action_show_evidence()
-            self.assertEqual(app._screen, "evidence")
+            self.assertEqual(app._screen, "run")
             app.request_action(action)
             await pilot.pause(0.1)
             await pilot.press("escape")
@@ -105,6 +105,21 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result.exit_code, 0)
                 self.assertIn("Current loop", result.message)
                 self.assertEqual(shell.output.getvalue(), "")
+
+    async def test_pilot_evidence_shortcut_does_not_navigate_from_home(self) -> None:
+        from loopforge.cli.textual_app import LoopForgeApp
+
+        app = LoopForgeApp(SimpleNamespace(project_dir=Path.cwd()), load_on_mount=False)
+        async with app.run_test() as pilot:
+            await pilot.press("e")
+            await pilot.pause()
+            self.assertEqual(app._screen, "home")
+            self.assertEqual(app._notice, "Open a run to view its evidence.")
+            app._screen = "run"
+            await pilot.press("e")
+            await pilot.pause()
+            self.assertEqual(app._screen, "run")
+            self.assertEqual(app._notice, "Open a run to view its evidence.")
 
     async def test_pilot_approves_initial_task_after_confirmation(self) -> None:
         from loopforge.cli import main

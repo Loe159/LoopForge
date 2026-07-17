@@ -229,6 +229,10 @@ class LoopForgeApp(App[None]):
         self._render_snapshot(self._snapshot)
 
     def action_show_evidence(self) -> None:
+        if self._screen != "run" or self.store.status is None or self.store.status.run_dir is None:
+            self._notice = "Open a run to view its evidence."
+            self._render_snapshot(self._snapshot)
+            return
         self._screen = "evidence"
         self._selected_index = 0
         self._evidence_preview = ""
