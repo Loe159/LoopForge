@@ -20,6 +20,7 @@ from loopforge.engine import (
     list_registered_projects,
     list_runs_all_projects,
     open_project,
+    prepare_run_workspace,
     read_json,
     rebuild_indexes,
     write_json_atomic,
@@ -164,6 +165,75 @@ class GitStateServiceTests(unittest.TestCase):
             state = GitStateService().get(project)
 
             self.assertEqual(state.state, "not_repository")
+
+
+class RunWorkspaceTests(unittest.TestCase):
+    def test_worktree_creation_enables_long_paths_and_relative_git_links(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            project = root / "project"
+            project.mkdir()
+            with (
+                mock.patch("loopforge.engine.git_toplevel", return_value=project),
+                mock.patch("loopforge.engine.default_workspace_root", return_value=root / "workspaces"),
+                mock.patch("loopforge.engine.subprocess.run") as run,
+            ):
+                run.return_value = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+                prepare_run_workspace(
+                    project_dir=project,
+                    run_id="run-001",
+                    base_commit="a" * 40,
+                    now="2026-07-17T00:00:00Z",
+                )
+
+            command = run.call_args.args[0]
+            self.assertEqual(command[:4], ["git", "-c", "core.longpaths=true", "-c"])
+            self.assertIn("--relative-paths", command)
+
+    def test_failed_worktree_creation_removes_partial_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project = Path(temp_dir) / "project"
+            project.mkdir()
+            workspace = Path(temp_dir) / "home" / "projects" / "project-id" / "workspaces" / "run-001"
+
+            def failed_add(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+                if command[1:5] == ["-c", "core.longpaths=true", "-c", f"safe.directory={project.as_posix()}"]:
+                    workspace.mkdir(parents=True)
+                    return subprocess.CompletedProcess(command, 1, stdout="", stderr="fatal: path too long")
+                return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+            with (
+                mock.patch("loopforge.engine.git_toplevel", return_value=project),
+                mock.patch("loopforge.engine.default_workspace_root", return_value=workspace.parent),
+                mock.patch("loopforge.engine.subprocess.run", side_effect=failed_add),
+            ):
+                with self.assertRaisesRegex(ValueError, "could not create run worktree"):
+                    prepare_run_workspace(
+                        project_dir=project,
+                        run_id="run-001",
+                        base_commit="a" * 40,
+                        now="2026-07-17T00:00:00Z",
+                        project_id="project-id",
+                    )
+
+            self.assertFalse(workspace.exists())
+
+    def test_create_run_removes_artifacts_when_workspace_preparation_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            project = root / "project"
+            project.mkdir()
+            initialized = initialize_project(project, home=root / "home")
+
+            with mock.patch(
+                "loopforge.engine.prepare_run_workspace",
+                side_effect=ValueError("could not create run worktree: fatal"),
+            ):
+                with self.assertRaisesRegex(ValueError, "could not create run worktree"):
+                    create_run(project, "Create a resilient worktree", success_checks=["tests pass"])
+
+            run_root = Path(initialized.config["run_root"])
+            self.assertEqual([path for path in run_root.iterdir() if path.is_dir()], [])
 
 
 class ProjectRegistryTests(unittest.TestCase):

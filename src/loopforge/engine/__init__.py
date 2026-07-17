@@ -2007,17 +2007,21 @@ def prepare_run_workspace(
     if workspace_path.exists():
         raise ValueError(f"workspace already exists: {workspace_path}")
     workspace_path.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        "git",
+        "-c",
+        "core.longpaths=true",
+        "-c",
+        f"safe.directory={project_dir.resolve().as_posix()}",
+        "worktree",
+        "add",
+        "--detach",
+        "--relative-paths",
+        str(workspace_path),
+        base_commit,
+    ]
     result = subprocess.run(
-        [
-            "git",
-            "-c",
-            f"safe.directory={project_dir.resolve().as_posix()}",
-            "worktree",
-            "add",
-            "--detach",
-            str(workspace_path),
-            base_commit,
-        ],
+        command,
         cwd=project_dir,
         capture_output=True,
         text=True,
@@ -2026,6 +2030,22 @@ def prepare_run_workspace(
     )
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or "unknown error"
+        # A failed checkout can leave both a directory and Git worktree metadata
+        # behind. Remove only this run's controlled path before surfacing the
+        # original error, so the user can retry safely.
+        if workspace_path.exists():
+            try:
+                subprocess.run(
+                    ["git", "worktree", "remove", "--force", str(workspace_path)],
+                    cwd=project_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+            shutil.rmtree(workspace_path, ignore_errors=True)
         raise ValueError(f"could not create run worktree: {detail}")
     return {
         "mode": WORKSPACE_MODE_GIT_WORKTREE,
@@ -4629,13 +4649,19 @@ def create_run(
 
     now = utc_now()
     base_commit = detect_git_base_commit(project_dir)
-    workspace_state = prepare_run_workspace(
-        project_dir=project_dir,
-        run_id=run_id,
-        base_commit=base_commit,
-        now=now,
-        project_id=str(config.get("project_id") or "") or None,
-    )
+    try:
+        workspace_state = prepare_run_workspace(
+            project_dir=project_dir,
+            run_id=run_id,
+            base_commit=base_commit,
+            now=now,
+            project_id=str(config.get("project_id") or "") or None,
+        )
+    except Exception:
+        # No run is valid until its isolated workspace exists. The run artifacts
+        # created above are therefore disposable and must not be left behind.
+        shutil.rmtree(run_dir, ignore_errors=True)
+        raise
     task_id = run_id
     normalized_success_checks = normalize_nonempty_strings(success_checks)
     if pack is None:
