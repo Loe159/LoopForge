@@ -236,12 +236,27 @@ jobs:
 
       - name: Validate
         if: steps.guard.outputs.apply == 'true'
+        shell: bash
         run: |
-          python -m unittest
-          git diff --check
+          set +e
+          python -m unittest > issue-9-test.log 2>&1
+          test_status=$?
+          git diff --check >> issue-9-test.log 2>&1
+          diff_status=$?
+          cat issue-9-test.log
+          if [[ $test_status -ne 0 || $diff_status -ne 0 ]]; then
+            exit 1
+          fi
+
+      - name: Upload diagnostics
+        if: failure() && steps.guard.outputs.apply == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-9-test-log
+          path: issue-9-test.log
 
       - name: Commit validated fix
-        if: steps.guard.outputs.apply == 'true'
+        if: success() && steps.guard.outputs.apply == 'true'
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
