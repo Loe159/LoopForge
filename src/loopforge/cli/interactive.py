@@ -45,6 +45,7 @@ from loopforge.engine import (
     profile_permission_lines,
     approve_plan,
     approve_review,
+    approve_initial_task,
     execute_readonly_stage,
     next_readonly_stage,
     prepare_draft_publication,
@@ -480,6 +481,8 @@ class InteractiveShell:
             return DispatchResult(2)
         if key == "run-readonly-stage":
             return self.execute_readonly_guided_stage()
+        if key == "approve-task":
+            return self.execute_initial_task_approval()
         if key == "approve-plan":
             return self.execute_approval("plan")
         if key == "approve-review":
@@ -525,6 +528,25 @@ class InteractiveShell:
             render_blocked(
                 self.renderer,
                 f"{stage.title()} blocked",
+                [("status", result.message)],
+                blockers=result.blockers,
+                next_command="/status",
+            )
+        return DispatchResult(0 if result.ok else 1)
+
+    def execute_initial_task_approval(self) -> DispatchResult:
+        result = approve_initial_task(self.project_dir, source="interactive")
+        if result.ok:
+            render_success(
+                self.renderer,
+                "Task approved",
+                [("status", result.message), ("artifact", result.artifact_path or "none")],
+                next_command="/status",
+            )
+        else:
+            render_blocked(
+                self.renderer,
+                "Task approval blocked",
                 [("status", result.message)],
                 blockers=result.blockers,
                 next_command="/status",

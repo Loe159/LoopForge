@@ -5454,6 +5454,70 @@ def update_run_for_stage_blocker(
     return updated
 
 
+def approve_initial_task(
+    project_dir: Path,
+    *,
+    source: str = "local",
+) -> StageResult:
+    """Record the explicit approval required before research can begin."""
+
+    status = current_status(project_dir)
+    if not status.initialized:
+        return StageResult(
+            project_dir=status.project_dir,
+            run_dir=None,
+            run=None,
+            stage="initial_task_approval",
+            ok=False,
+            message="Initialize LoopForge before approving a task.",
+            blockers=[status.next_step],
+        )
+    if status.run is None or status.run_dir is None:
+        return StageResult(
+            project_dir=status.project_dir,
+            run_dir=status.run_dir,
+            run=None,
+            stage="initial_task_approval",
+            ok=False,
+            message="No current run is ready for task approval.",
+            blockers=status.blockers or [status.next_step],
+        )
+
+    run = normalize_run_workflow_state(status.run)
+    gate = run.get("human_gates", {}).get("initial_task_approval", {})
+    blockers: list[str] = []
+    if not isinstance(gate, dict) or gate.get("status") != "pending":
+        blockers.append("initial task approval is not pending.")
+    task_validation = run.get("task_validation", {})
+    if isinstance(task_validation, dict) and task_validation.get("status") not in {None, "valid"}:
+        blockers.append("task approval requires a valid task definition.")
+    if blockers:
+        return StageResult(
+            project_dir=status.project_dir,
+            run_dir=status.run_dir,
+            run=run,
+            stage="initial_task_approval",
+            ok=False,
+            message="LoopForge task approval is blocked.",
+            blockers=blockers,
+            artifact_path=status.run_dir / "task.md",
+        )
+
+    updated = apply_initial_task_approval(run, approved=True, source=source)
+    updated["updated_at"] = utc_now()
+    persist_run_json(status.project_dir, status.run_json_path or (status.run_dir / "run.json"), updated)
+    return StageResult(
+        project_dir=status.project_dir,
+        run_dir=status.run_dir,
+        run=updated,
+        stage="initial_task_approval",
+        ok=True,
+        message="LoopForge task approved; research is ready.",
+        blockers=[],
+        artifact_path=status.run_dir / "task.md",
+    )
+
+
 def approve_plan(
     project_dir: Path,
     *,

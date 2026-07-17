@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -103,3 +105,65 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result.exit_code, 0)
                 self.assertIn("Current loop", result.message)
                 self.assertEqual(shell.output.getvalue(), "")
+
+    async def test_pilot_approves_initial_task_after_confirmation(self) -> None:
+        from loopforge.cli import main
+        from loopforge.cli.actions import ActionDescriptor
+        from loopforge.cli.interactive import InteractiveShell
+        from loopforge.cli.textual_app import LoopForgeApp
+        from loopforge.engine import current_guidance, current_status
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project = Path(temp_dir) / "project"
+            project.mkdir()
+            subprocess.run(["git", "init"], cwd=project, check=True, capture_output=True, text=True)
+            (project / "README.md").write_text("# Project\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=project, check=True, capture_output=True, text=True)
+            subprocess.run(
+                ["git", "-c", "user.name=LoopForge Tests", "-c", "user.email=loopforge@example.invalid", "commit", "-m", "initial"],
+                cwd=project,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            loopforge_home = Path(temp_dir) / "home"
+            previous_home = os.environ.get("LOOPFORGE_HOME")
+            os.environ["LOOPFORGE_HOME"] = str(loopforge_home)
+            try:
+                previous_cwd = Path.cwd()
+                os.chdir(project)
+                try:
+                    self.assertEqual(main(["init"]), 0)
+                    self.assertEqual(main(["run", "--task", "Approve this task", "--success-check", "Proof exists"]), 0)
+                finally:
+                    os.chdir(previous_cwd)
+
+                shell = InteractiveShell(project, output=io.StringIO(), error=io.StringIO())
+                action = ActionDescriptor(
+                    "approve-task",
+                    "Approve task",
+                    "Approve the task before research starts.",
+                    "medium",
+                    True,
+                    True,
+                    "/approve-task",
+                    "approve-task",
+                )
+                app = LoopForgeApp(shell, load_on_mount=False)
+                async with app.run_test() as pilot:
+                    app.request_action(action)
+                    await pilot.pause(0.1)
+                    await pilot.press("enter")
+                    for _ in range(20):
+                        if app._operation is not None and app._operation.finished:
+                            break
+                        await pilot.pause(0.05)
+
+                status = current_status(project)
+                self.assertEqual(status.run["human_gates"]["initial_task_approval"]["status"], "approved")
+                self.assertEqual(current_guidance(project).recommended_actions[0].id, "run-research")
+            finally:
+                if previous_home is None:
+                    os.environ.pop("LOOPFORGE_HOME", None)
+                else:
+                    os.environ["LOOPFORGE_HOME"] = previous_home

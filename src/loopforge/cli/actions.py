@@ -26,7 +26,7 @@ class ActionDescriptor:
 ACTION_EXECUTORS = {
     "init": "initialize",
     "complete-task": "collect-task",
-    "approve-task": "open-run",
+    "approve-task": "approve-task",
     "run-research": "run-readonly-stage",
     "run-plan": "run-readonly-stage",
     "approve-plan": "approve-plan",
