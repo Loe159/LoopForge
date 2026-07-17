@@ -24,6 +24,7 @@ from loopforge.adapters.kilo_code import (
     headless_run_command as kilo_headless_run_command,
     is_kilo_run_command,
 )
+from loopforge.checks import validate_implementation_result
 from loopforge.engine.packs import PackRegistry
 from loopforge.engine.metrics import MetricsService
 from loopforge.engine.storage import DEFAULT_JSON_STORE
@@ -5167,22 +5168,75 @@ def session_hash(seed: dict[str, Any], label: str) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def run_issue_number(run: dict[str, Any]) -> int:
+    direct = run.get("issue")
+    if isinstance(direct, int) and not isinstance(direct, bool) and direct >= 1:
+        return direct
+
+    evidence = run.get("evidence", {})
+    source = evidence.get("source", {}) if isinstance(evidence, dict) else {}
+    if isinstance(source, dict):
+        for key in ("issue", "number", "issue_number"):
+            value = source.get(key)
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 1:
+                return value
+        for key in ("reference", "url"):
+            value = source.get(key)
+            if not isinstance(value, str):
+                continue
+            match = re.search(r"(?:#|/issues/)([1-9][0-9]*)(?:\D|$)", value)
+            if match:
+                return int(match.group(1))
+
+    # Native tasks do not always originate from an issue, while the portable
+    # implementation-result contract requires a positive issue identifier.
+    return 1
+
+
+def implementation_base_commit(run: dict[str, Any]) -> str:
+    value = run.get("base_commit")
+    if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{40}", value):
+        return value
+    return "0" * 40
+
+
 def expected_session_for(run: dict[str, Any], adapter: str, workspace_dir: Path) -> dict[str, Any]:
+    issue = run_issue_number(run)
+    base_commit = implementation_base_commit(run)
     seed = {
-        "base_commit": run.get("base_commit"),
+        "issue": issue,
+        "base_commit": base_commit,
         "run_id": run.get("run_id"),
         "task_id": run.get("task_id"),
         "adapter": adapter,
         "workspace": str(workspace_dir.resolve()),
     }
-    return {
+    session = {
+        "issue": issue,
         "risk": "low",
-        "base_commit": run.get("base_commit"),
+        "base_commit": base_commit,
         "workspace": str(workspace_dir.resolve()),
         "runner_id": adapter,
         "preflight_sha256": session_hash(seed, "preflight"),
         "start_authorization_receipt_sha256": session_hash(seed, "start-authorization"),
     }
+    return validate_implementation_result.validate_expected_session(session)
+
+
+def validate_attempt_result(
+    result: dict[str, Any],
+    session: dict[str, Any],
+) -> dict[str, Any]:
+    expected_session = validate_implementation_result.validate_expected_session(session)
+    validated = validate_implementation_result.validate_result(result)
+    mismatched = sorted(
+        key for key, value in expected_session.items() if validated.get(key) != value
+    )
+    if mismatched:
+        raise ValueError(
+            "Implementation result session mismatch: " + ", ".join(mismatched)
+        )
+    return validated
 
 
 def decode_output(value: bytes) -> str:
@@ -6543,10 +6597,31 @@ def execute_attempt(
         if profile_stop_reasons and status == "completed":
             status = "blocked"
             result["status"] = status
+            result["next_action"] = "human_review"
             result["summary"] = (
                 str(result.get("summary", "")).rstrip()
                 + " Autonomy profile stopped for human review."
             ).strip()
+
+    contract_validation_error = ""
+    invalid_result_path: Path | None = None
+    try:
+        result = validate_attempt_result(result, session)
+        status = str(result["status"])
+    except ValueError as error:
+        contract_validation_error = str(error)
+        invalid_result_path = attempt_dir / "result.invalid.json"
+        write_json_atomic(invalid_result_path, result)
+        status = "failed"
+        result = synthetic_adapter_result(
+            session=session,
+            status=status,
+            summary=(
+                f"Implementation result contract validation failed: {error}"
+            )[:1000],
+            workspace_changed=snapshot_changed,
+        )
+        result = validate_attempt_result(result, session)
 
     stdout_path = attempt_dir / "adapter.stdout"
     stderr_path = attempt_dir / "adapter.stderr"
@@ -6571,6 +6646,12 @@ def execute_attempt(
         "interrupted": interrupted,
         "output_limit_exceeded": output_limit_exceeded,
         "profile_stop_reasons": profile_stop_reasons,
+        "contract_validation_error": contract_validation_error or None,
+        "invalid_result_path": (
+            relative_to_run(run_dir, invalid_result_path)
+            if invalid_result_path is not None
+            else None
+        ),
         "publication_requested": bool(result.get("publication_requested", False)),
         "network_requested": bool(result.get("network_requested", False)),
         "attempt_dir": str(attempt_dir),

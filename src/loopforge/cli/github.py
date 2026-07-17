@@ -339,6 +339,7 @@ class GitHubIssueClient:
         return {
             "type": "github_issue",
             "provider": "github",
+            "issue": ref.number,
             "reference": f"{ref.owner}/{ref.repo}#{ref.number}",
             "url": ref.url,
             "title": title,
