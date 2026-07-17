@@ -50,7 +50,9 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_implementation_result_integrity.py'
 
       - name: Run full test suite
-        run: python -m unittest
+        run: |
+          set -o pipefail
+          python -m unittest 2>&1 | tee /tmp/full-tests.log
 
       - name: Check diff integrity
         run: git diff --check
@@ -69,4 +71,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh issue comment 13 --body "La validation automatique du correctif #8 a échoué. Exécution : ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          {
+            echo "La validation automatique du correctif #8 a échoué."
+            echo
+            echo "Exécution : ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            if [ -f /tmp/full-tests.log ]; then
+              echo
+              echo '```text'
+              tail -c 12000 /tmp/full-tests.log
+              echo '```'
+            fi
+          } > /tmp/issue-8-failure.md
+          gh issue comment 13 --body-file /tmp/issue-8-failure.md
