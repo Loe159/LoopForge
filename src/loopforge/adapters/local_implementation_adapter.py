@@ -82,12 +82,19 @@ def run_git(workspace: Path, *args: str) -> bytes:
         shell=False,
     )
     if completed.returncode != 0:
-        raise ValueError("Local implementation adapter git command failed")
+        detail = completed.stderr.decode("utf-8", errors="replace").strip()
+        suffix = f": {detail}" if detail else ""
+        raise ValueError(f"Local implementation adapter git command failed{suffix}")
     return completed.stdout
 
 
-def git_status_paths(workspace: Path) -> list[str]:
-    output = run_git(workspace, "status", "--porcelain=v1", "--untracked-files=all")
+def git_status_paths(workspace: Path) -> list[str] | None:
+    try:
+        output = run_git(workspace, "status", "--porcelain=v1", "--untracked-files=all")
+    except ValueError as error:
+        if "not a git repository" in str(error).lower():
+            return None
+        raise
     paths: list[str] = []
     for raw_line in output.decode("utf-8", errors="replace").splitlines():
         if not raw_line:
@@ -99,12 +106,38 @@ def git_status_paths(workspace: Path) -> list[str]:
     return paths
 
 
-def workspace_dirty(workspace: Path, policy: dict[str, Any]) -> bool:
+def relevant_git_status_paths(paths: list[str], policy: dict[str, Any]) -> list[str]:
     ignored_prefixes = tuple(policy["ignored_workspace_status_prefixes"])
-    return any(
-        not any(path == prefix.rstrip("/") or path.startswith(prefix) for prefix in ignored_prefixes)
-        for path in git_status_paths(workspace)
-    )
+    return [
+        path
+        for path in paths
+        if not any(
+            path == prefix.rstrip("/") or path.startswith(prefix)
+            for prefix in ignored_prefixes
+        )
+    ]
+
+
+def workspace_file_snapshot(workspace: Path, policy: dict[str, Any]) -> dict[str, tuple[int, int]]:
+    ignored_prefixes = tuple(policy["ignored_workspace_status_prefixes"])
+    snapshot: dict[str, tuple[int, int]] = {}
+    for path in workspace.rglob("*"):
+        if ".git" in path.parts or not path.is_file():
+            continue
+        relative = path.relative_to(workspace).as_posix()
+        if any(
+            relative == prefix.rstrip("/") or relative.startswith(prefix)
+            for prefix in ignored_prefixes
+        ):
+            continue
+        stat = path.stat()
+        snapshot[relative] = (stat.st_size, stat.st_mtime_ns)
+    return snapshot
+
+
+def workspace_dirty(workspace: Path, policy: dict[str, Any]) -> bool:
+    paths = git_status_paths(workspace)
+    return bool(relevant_git_status_paths(paths, policy)) if paths is not None else False
 
 
 def command_basename(command: Sequence[str]) -> str:
@@ -298,19 +331,22 @@ def summary_for(
     timed_out: bool,
     changed: bool,
     policy: dict[str, Any],
+    *,
+    fixture: bool = False,
 ) -> str:
+    command_name = "Fixture command" if fixture else "Implementation command"
     if timed_out:
-        text = "Implementation command timed out."
+        text = f"{command_name} timed out."
     elif completed is None:
-        text = "Implementation command was not run."
+        text = f"{command_name} was not run."
     elif completed.returncode != 0:
-        text = f"Implementation command failed with return code {completed.returncode}."
+        text = f"{command_name} failed with return code {completed.returncode}."
     elif status == "blocked":
-        text = "Implementation command completed without workspace changes."
+        text = f"{command_name} completed without workspace changes."
     elif changed:
-        text = "Implementation command completed and changed the workspace."
+        text = f"{command_name} completed and changed the workspace."
     else:
-        text = "Implementation command completed."
+        text = f"{command_name} completed."
     return text[: policy["max_summary_chars"]]
 
 
@@ -355,7 +391,17 @@ def run_adapter(
     if policy["require_expected_session_workspace_match"] and str(workspace) != session["workspace"]:
         raise ValueError("Adapter workspace does not match expected session")
     validate_command_allowed(command, session, policy)
-    if policy["require_clean_workspace_at_start"] and workspace_dirty(workspace, policy):
+    initial_git_paths = git_status_paths(workspace)
+    initial_snapshot = (
+        workspace_file_snapshot(workspace, policy)
+        if initial_git_paths is None
+        else None
+    )
+    if (
+        policy["require_clean_workspace_at_start"]
+        and initial_git_paths is not None
+        and relevant_git_status_paths(initial_git_paths, policy)
+    ):
         value = result_value(
             session,
             "failed",
@@ -469,14 +515,28 @@ def run_adapter(
         )
 
     output_size = len(completed.stdout or b"") + len(completed.stderr or b"")
-    changed = workspace_dirty(workspace, policy)
+    current_git_paths = git_status_paths(workspace)
+    if current_git_paths is None:
+        changed = initial_snapshot != workspace_file_snapshot(workspace, policy)
+    else:
+        changed = bool(relevant_git_status_paths(current_git_paths, policy))
     if timed_out or completed.returncode != 0 or output_size > policy["max_child_output_bytes"]:
         status = "failed"
     elif changed:
         status = "completed"
     else:
         status = "blocked"
-    summary = summary_for(status, completed, timed_out, changed, policy)
+    summary = summary_for(
+    status,
+    completed,
+    timed_out,
+    changed,
+    policy,
+    fixture=(
+        stream_output
+        and session["runner_id"] in policy["fixture_runner_ids"]
+    ),
+)
     if output_size > policy["max_child_output_bytes"]:
         summary = "Implementation command exceeded the adapter output limit."
     value = result_value(session, status, summary, changed)

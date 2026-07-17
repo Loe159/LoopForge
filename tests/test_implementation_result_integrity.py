@@ -138,5 +138,120 @@ class ImplementationResultIntegrityTests(unittest.TestCase):
             self.assertEqual(updated["current_stage"], "implementation_blocked")
 
 
+    def test_public_continue_fixture_uses_protocol_wrapper(self) -> None:
+        import contextlib
+        import io
+        import os
+        import subprocess
+        import sys
+
+        from loopforge.cli import main
+        from loopforge.engine import apply_initial_task_approval, apply_plan_approval
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            project = root / "project"
+            project.mkdir()
+            home = root / "home"
+            subprocess.run(["git", "init"], cwd=project, check=True, capture_output=True)
+            (project / "README.md").write_text("# Project\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=project, check=True, capture_output=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=LoopForge Tests",
+                    "-c",
+                    "user.email=loopforge@example.invalid",
+                    "commit",
+                    "-m",
+                    "initial",
+                ],
+                cwd=project,
+                check=True,
+                capture_output=True,
+            )
+
+            previous = Path.cwd()
+            try:
+                os.chdir(project)
+                with (
+                    mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(home)}),
+                    contextlib.redirect_stdout(io.StringIO()),
+                    contextlib.redirect_stderr(io.StringIO()),
+                ):
+                    self.assertEqual(main(["init"]), 0)
+                    self.assertEqual(
+                        main(
+                            [
+                                "run",
+                                "--task",
+                                "Exercise the fixture wrapper",
+                                "--success-check",
+                                "README changed",
+                            ]
+                        ),
+                        0,
+                    )
+
+                    config = json.loads(
+                        (project / ".loopforge" / "config.json").read_text(
+                            encoding="utf-8"
+                        )
+                    )
+                    run_dir = Path(config["run_root"]) / config["current_run_id"]
+                    run_path = run_dir / "run.json"
+                    run = json.loads(run_path.read_text(encoding="utf-8"))
+                    run = apply_initial_task_approval(
+                        run,
+                        approved=True,
+                        source="test",
+                    )
+                    run["stage_statuses"]["research"] = "complete"
+                    run["stage_statuses"]["plan"] = "awaiting_approval"
+                    run["current_stage"] = "plan_ready"
+                    run["human_gates"]["plan_approval"] = {
+                        "required": True,
+                        "status": "pending",
+                    }
+                    run = apply_plan_approval(run, source="test")
+                    run_path.write_text(json.dumps(run), encoding="utf-8")
+
+                    fixture_code = (
+                        "from pathlib import Path; "
+                        "path = Path('README.md'); "
+                        "path.write_text(path.read_text(encoding='utf-8') + "
+                        "'\\nWrapped.\\n', encoding='utf-8')"
+                    )
+                    self.assertEqual(
+                        main(
+                            [
+                                "continue",
+                                "--adapter",
+                                "local-adapter-fixture",
+                                "--",
+                                sys.executable,
+                                "-c",
+                                fixture_code,
+                            ]
+                        ),
+                        0,
+                    )
+            finally:
+                os.chdir(previous)
+
+            attempt_path = run_dir / "attempts" / "attempt-001" / "attempt.json"
+            attempt = json.loads(attempt_path.read_text(encoding="utf-8"))
+            protocol_command = attempt["protocol_command"]
+            self.assertIn("loopforge.adapters.local_implementation_adapter", protocol_command)
+            self.assertIn("--expected-session", protocol_command)
+            self.assertIn("--result-output", protocol_command)
+            self.assertEqual(attempt["status"], "completed")
+            result = json.loads(
+                (run_dir / attempt["result_path"]).read_text(encoding="utf-8")
+            )
+            validate_implementation_result.validate_result(result)
+
+
 if __name__ == "__main__":
     unittest.main()

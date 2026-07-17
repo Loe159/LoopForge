@@ -6292,19 +6292,24 @@ def run_streaming_process(
                         decode_output(chunk).strip() or "Adapter produced output.",
                     )
                 else:
-                    target.write(chunk)
-                    target.flush()
+                    binary_target = getattr(target, "buffer", None)
+                    if binary_target is not None:
+                        binary_target.write(chunk)
+                        binary_target.flush()
+                    else:
+                        target.write(decode_output(chunk))
+                        target.flush()
         finally:
             source.close()
 
     stdout_thread = threading.Thread(
         target=pump,
-        args=(process.stdout, sys.stdout.buffer, stdout_buffer),
+        args=(process.stdout, sys.stdout, stdout_buffer),
         daemon=True,
     )
     stderr_thread = threading.Thread(
         target=pump,
-        args=(process.stderr, sys.stderr.buffer, stderr_buffer),
+        args=(process.stderr, sys.stderr, stderr_buffer),
         daemon=True,
     )
     stdout_thread.start()
@@ -6504,27 +6509,27 @@ def execute_attempt(
     before_git = git_status_entries(workspace_dir)
     timeout_seconds = attempt_timeout(run, contract)
 
-    if adapter == "local-adapter-fixture":
-        child, stdout, stderr = execute_fixture_command(
-            command=command,
-            project_dir=workspace_dir,
-            timeout_seconds=timeout_seconds,
-        )
-        result = None
-    else:
-        result_path = attempt_dir / "result.json"
-        child, stdout, stderr = execute_adapter_command(
-            adapter=adapter,
-            command=command,
-            expected_session_path=expected_session_path,
-            workspace_dir=workspace_dir,
-            stdin_file=prompt_path,
-            result_output=result_path,
-            timeout_seconds=timeout_seconds,
-            operation_callback=operation_callback,
-            cancel_event=cancel_event,
-        )
-        result = parse_adapter_result_file(result_path) or parse_adapter_result(stdout)
+    result_path = attempt_dir / "result.json"
+    protocol_command = adapter_protocol_command(
+        adapter=adapter,
+        command=command,
+        expected_session_path=expected_session_path,
+        workspace_dir=workspace_dir,
+        stdin_file=prompt_path,
+        result_output=result_path,
+    )
+    child, stdout, stderr = execute_adapter_command(
+        adapter=adapter,
+        command=command,
+        expected_session_path=expected_session_path,
+        workspace_dir=workspace_dir,
+        stdin_file=prompt_path,
+        result_output=result_path,
+        timeout_seconds=timeout_seconds,
+        operation_callback=operation_callback,
+        cancel_event=cancel_event,
+    )
+    result = parse_adapter_result_file(result_path) or parse_adapter_result(stdout)
 
     finished = utc_now()
     after_snapshot = workspace_snapshot(workspace_dir)
@@ -6541,31 +6546,7 @@ def execute_attempt(
     output_limit_exceeded = bool(child.get("output_limit_exceeded"))
     interrupted = bool(child.get("interrupted"))
 
-    if adapter == "local-adapter-fixture":
-        status = "completed" if completed and snapshot_changed else "blocked"
-        if interrupted:
-            status = "interrupted"
-            summary = "Fixture command was interrupted."
-        elif timed_out:
-            status = "failed"
-            summary = "Fixture command timed out."
-        elif output_limit_exceeded:
-            status = "failed"
-            summary = "Fixture command exceeded the output limit."
-        elif not completed:
-            status = "failed"
-            summary = f"Fixture command failed with return code {returncode}."
-        elif snapshot_changed:
-            summary = "Fixture command completed and changed the workspace."
-        else:
-            summary = "Fixture command completed without workspace changes."
-        result = synthetic_adapter_result(
-            session=session,
-            status=status,
-            summary=summary,
-            workspace_changed=snapshot_changed,
-        )
-    elif interrupted:
+    if interrupted:
         status = "interrupted"
         result = synthetic_adapter_result(
             session=session,
@@ -6635,6 +6616,7 @@ def execute_attempt(
         "number": number,
         "adapter": adapter,
         "command": command,
+        "protocol_command": protocol_command,
         "started_at": started,
         "finished_at": finished,
         "status": status,
