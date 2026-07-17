@@ -115,23 +115,10 @@ adapter = replace_once(
 ''',
     "git failure diagnostic",
 )
-adapter = replace_once(
-    adapter,
-    '''def git_status_paths(workspace: Path) -> list[str]:
-    output = run_git(workspace, "status", "--porcelain=v1", "--untracked-files=all")
-    paths: list[str] = []
-    for raw_line in output.decode("utf-8", errors="replace").splitlines():
-        if not raw_line:
-            continue
-        path = raw_line[3:].strip()
-        if " -> " in path:
-            path = path.rsplit(" -> ", 1)[1].strip()
-        paths.append(path.replace("\\", "/"))
-    return paths
 
-
-''',
-    '''def git_status_paths(workspace: Path) -> list[str] | None:
+git_status_start = adapter.index("def git_status_paths(")
+command_basename_start = adapter.index("def command_basename(", git_status_start)
+status_helpers = '''def git_status_paths(workspace: Path) -> list[str] | None:
     try:
         output = run_git(workspace, "status", "--porcelain=v1", "--untracked-files=all")
     except ValueError as error:
@@ -154,7 +141,10 @@ def relevant_git_status_paths(paths: list[str], policy: dict[str, Any]) -> list[
     return [
         path
         for path in paths
-        if not any(path == prefix.rstrip("/") or path.startswith(prefix) for prefix in ignored_prefixes)
+        if not any(
+            path == prefix.rstrip("/") or path.startswith(prefix)
+            for prefix in ignored_prefixes
+        )
     ]
 
 
@@ -175,24 +165,14 @@ def workspace_file_snapshot(workspace: Path, policy: dict[str, Any]) -> dict[str
     return snapshot
 
 
-''',
-    "git status fallback",
-)
-adapter = replace_once(
-    adapter,
-    '''def workspace_dirty(workspace: Path, policy: dict[str, Any]) -> bool:
-    ignored_prefixes = tuple(policy["ignored_workspace_status_prefixes"])
-    return any(
-        not any(path == prefix.rstrip("/") or path.startswith(prefix) for prefix in ignored_prefixes)
-        for path in git_status_paths(workspace)
-    )
-''',
-    '''def workspace_dirty(workspace: Path, policy: dict[str, Any]) -> bool:
+def workspace_dirty(workspace: Path, policy: dict[str, Any]) -> bool:
     paths = git_status_paths(workspace)
     return bool(relevant_git_status_paths(paths, policy)) if paths is not None else False
-''',
-    "workspace dirty fallback",
-)
+
+
+'''
+adapter = adapter[:git_status_start] + status_helpers + adapter[command_basename_start:]
+
 adapter = replace_once(
     adapter,
     '''    validate_command_allowed(command, session, policy)
