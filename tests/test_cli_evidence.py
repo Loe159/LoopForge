@@ -66,6 +66,18 @@ class EvidenceViewerTests(unittest.TestCase):
             self.assertTrue(batches)
             self.assertEqual([item.relative_path for item in batches[-1]], ["second.log"])
 
+    def test_index_excludes_exported_evidence(self) -> None:
+        with TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            (run_dir / "plan.md").write_text("source evidence", encoding="utf-8")
+            exported = run_dir / "artifacts" / "exports" / "plan.md"
+            exported.parent.mkdir(parents=True)
+            exported.write_text("exported evidence", encoding="utf-8")
+
+            items = EvidenceIndex.build(run_dir).items
+
+            self.assertEqual([item.relative_path for item in items], ["plan.md"])
+
     def test_indexes_searches_and_previews_real_run_artifacts(self) -> None:
         with TemporaryDirectory() as temporary:
             run_dir = Path(temporary)

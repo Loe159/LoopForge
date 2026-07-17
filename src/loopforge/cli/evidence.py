@@ -70,7 +70,7 @@ class EvidenceIndex:
             if not path.is_file() or not _is_within_root(path, root):
                 continue
             item = _evidence_item(root, path)
-            if item is not None:
+            if item is not None and not _is_export(item.relative_path):
                 items.append(item)
         items.sort(key=lambda item: (KIND_ORDER[item.kind], item.relative_path.casefold()))
         return cls(root, tuple(items))
@@ -145,6 +145,8 @@ class EvidenceIndex:
             candidate = candidate.resolve()
             relative_path = candidate.relative_to(self.root).as_posix()
         except (OSError, ValueError):
+            return False
+        if _is_export(relative_path):
             return False
         previous = next((item for item in self.items if item.path.resolve() == candidate), None)
         updated = _evidence_item(self.root, candidate) if candidate.is_file() else None
@@ -242,6 +244,12 @@ def _is_within_root(path: Path, root: Path) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _is_export(relative_path: str) -> bool:
+    """Keep user-facing evidence separate from files exported from it."""
+
+    return relative_path.casefold().startswith("artifacts/exports/")
 
 
 def _kind_for(relative_path: str) -> tuple[str, str]:
