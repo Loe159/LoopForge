@@ -235,6 +235,17 @@ READONLY_STAGE_INPUT_ARTIFACTS = {
     ),
 }
 
+IMPLEMENTATION_INPUT_ARTIFACTS = (
+    "task.md",
+    "loop.md",
+    "research.md",
+    "plan.md",
+    "memory.md",
+    "scratch.md",
+)
+
+EMBEDDED_RUN_ARTIFACT_LIMIT = 12_000
+
 SUBJECTIVE_TASK_MARKERS = (
     "better",
     "copy",
@@ -5113,8 +5124,6 @@ def command_for_attempt(
             args[1:1] = ["-s", "workspace-write"]
         if workspace_dir is not None and "-C" not in args and "--cd" not in args:
             args[1:1] = ["--cd", str(workspace_dir)]
-        if run_dir is not None and "--add-dir" not in args:
-            args[1:1] = ["--add-dir", str(run_dir)]
         if "--color" not in args:
             args[1:1] = ["--color", "never"]
         if "--json" not in args:
@@ -5128,6 +5137,39 @@ def command_for_attempt(
             default_agent=DEFAULT_IMPLEMENTATION_AGENT,
         )
     return command_for_adapter(adapter, adapter_args)
+
+
+def render_embedded_run_artifacts(run_dir: Path, artifact_names: tuple[str, ...]) -> list[str]:
+    """Return bounded prompt context without granting a sandbox write access to the run."""
+
+    lines = [
+        "## Embedded Run Inputs",
+        "",
+        "The adapter sandbox may not access the external run directory. "
+        "The approved input artifacts are embedded below; treat them as the source of truth.",
+    ]
+    for name in artifact_names:
+        path = run_dir / name
+        try:
+            content = path.read_text(encoding="utf-8") if path.is_file() else ""
+        except (OSError, UnicodeError):
+            content = ""
+        if len(content) > EMBEDDED_RUN_ARTIFACT_LIMIT:
+            content = (
+                content[:EMBEDDED_RUN_ARTIFACT_LIMIT]
+                + "\n\n[LoopForge truncated this artifact for the adapter prompt.]\n"
+            )
+        lines.extend(
+            [
+                "",
+                f"### {name}",
+                "",
+                "```text",
+                content or "[No content recorded.]",
+                "```",
+            ]
+        )
+    return lines
 
 
 def render_adapter_prompt(
@@ -5168,12 +5210,6 @@ def render_adapter_prompt(
         f"- Agent: {agent.get('id') if agent else 'developer'}",
         f"- Permission set: {agent.get('permission_set') if agent else 'workspace-write'}",
         "",
-        "Read these run artifacts before editing:",
-        f"- {run_dir / 'task.md'}",
-        f"- {run_dir / 'loop.md'}",
-        f"- {run_dir / 'memory.md'}",
-        f"- {run_dir / 'scratch.md'}",
-        "",
         "Make code changes only in the workspace directory unless the run contract says otherwise.",
         "Preserve unrelated working-tree changes.",
         "Do not publish, push, deploy, delete unrelated files, expose secrets, "
@@ -5190,6 +5226,8 @@ def render_adapter_prompt(
         lines.extend(f"- {check}" for check in success_checks)
     else:
         lines.append("- None recorded.")
+    lines.extend([""])
+    lines.extend(render_embedded_run_artifacts(run_dir, IMPLEMENTATION_INPUT_ARTIFACTS))
     lines.extend(["", "## Allowed Tools", ""])
     if allowed_tools:
         lines.extend(f"- {tool}" for tool in allowed_tools)
@@ -5517,9 +5555,6 @@ def render_stage_prompt(
         "",
         "## Required Inputs",
         "",
-        "Read every listed run artifact before producing the requested artifact.",
-        *[f"- {run_dir / name}" for name in input_artifacts],
-        "",
         "## Required Artifact",
         "",
         "- YAML frontmatter with artifact_version, artifact, issue, base_commit, and status.",
@@ -5529,6 +5564,8 @@ def render_stage_prompt(
         "## Required Sections",
         "",
     ]
+    lines.extend(render_embedded_run_artifacts(run_dir, input_artifacts))
+    lines.append("")
     lines.extend(f"- {section}" for section in sections)
     lines.append("")
     if permission is not None:

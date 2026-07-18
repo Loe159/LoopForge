@@ -27,6 +27,7 @@ from loopforge.engine import (
     loopforge_home,
     platform_cache_home,
     prepare_draft_publication,
+    render_stage_prompt,
     run_streaming_process,
     set_default_adapter,
     usable_python_executable,
@@ -4490,6 +4491,9 @@ class CliTests(unittest.TestCase):
             self.assertIn(str(run_dir), prompt_text)
             self.assertIn(str(workspace_dir), prompt_text)
             self.assertIn("Create output in worktree", prompt_text)
+            self.assertIn("## Embedded Run Inputs", prompt_text)
+            self.assertIn(valid_research_markdown(), prompt_text)
+            self.assertIn(valid_plan_markdown(), prompt_text)
 
     def test_codex_attempt_command_uses_exec_and_stdin_prompt(self) -> None:
         self.assertEqual(
@@ -4523,8 +4527,7 @@ class CliTests(unittest.TestCase):
         )
         self.assertIn("--cd", command)
         self.assertIn("workspace", command)
-        self.assertIn("--add-dir", command)
-        self.assertIn("run", command)
+        self.assertNotIn("--add-dir", command)
         readonly_command = command_for_readonly_stage(
             adapter="codex",
             adapter_args=[],
@@ -4535,6 +4538,28 @@ class CliTests(unittest.TestCase):
         self.assertIn("workspace", readonly_command)
         self.assertIn("--add-dir", readonly_command)
         self.assertIn("run", readonly_command)
+
+    def test_plan_stage_prompt_embeds_approved_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            run_dir.mkdir()
+            (run_dir / "task.md").write_text("# Task\n\nImplement the approved change.\n", encoding="utf-8")
+            (run_dir / "loop.md").write_text("# Loop\n\nBounded local workflow.\n", encoding="utf-8")
+            (run_dir / "research.md").write_text(valid_research_markdown(), encoding="utf-8")
+            (run_dir / "memory.md").write_text("# Memory\n\nKeep this fact.\n", encoding="utf-8")
+
+            prompt = render_stage_prompt(
+                stage="plan",
+                run={"task": "Implement the approved change."},
+                run_dir=run_dir,
+                workspace_dir=Path(temp_dir) / "workspace",
+                adapter="codex",
+            )
+
+            self.assertIn("## Embedded Run Inputs", prompt)
+            self.assertIn("### task.md", prompt)
+            self.assertIn("### research.md", prompt)
+            self.assertIn(valid_research_markdown(), prompt)
 
     def test_kilo_code_commands_use_documented_headless_run_mode(self) -> None:
         self.assertEqual(
