@@ -5280,6 +5280,25 @@ class CliTests(unittest.TestCase):
             ):
                 self.assertEqual(usable_python_executable(), str(real_python))
 
+    def test_adapter_python_resolution_accepts_packaged_windows_app_python(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            windows_apps = workspace / "AppData" / "Local" / "Microsoft" / "WindowsApps"
+            package_python = (
+                windows_apps
+                / "PythonSoftwareFoundation.Python.3.13_test"
+                / "python.exe"
+            )
+            package_python.parent.mkdir(parents=True)
+            package_python.write_text("", encoding="utf-8")
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_PYTHON": ""}),
+                mock.patch("loopforge.engine.sys.executable", str(package_python)),
+                mock.patch("loopforge.engine.shutil.which", return_value=None),
+            ):
+                self.assertEqual(usable_python_executable(), str(package_python))
+
     def test_imported_adapter_ignores_loopforge_runtime_metadata_for_clean_check(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)

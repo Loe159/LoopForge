@@ -1366,7 +1366,10 @@ def isolated_process_module() -> Any:
 
 def is_windows_app_execution_alias(path: Path) -> bool:
     normalized = str(path).replace("/", "\\").upper()
-    return "\\APPDATA\\LOCAL\\MICROSOFT\\WINDOWSAPPS\\" in normalized
+    return (
+        "\\APPDATA\\LOCAL\\MICROSOFT\\WINDOWSAPPS\\" in normalized
+        and path.parent.name.casefold() == "windowsapps"
+    )
 
 
 def usable_python_executable() -> str:
