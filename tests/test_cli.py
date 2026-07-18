@@ -1663,6 +1663,11 @@ class CliTests(unittest.TestCase):
             self.assertEqual(run_json["current_stage"], "plan_ready")
             self.assertEqual(run_json["stage_statuses"]["plan"], "awaiting_approval")
             self.assertEqual(run_json["human_gates"]["plan_approval"]["status"], "pending")
+            prompt = (run_dir / "artifacts" / "stages" / "plan" / "prompt.md").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn(str(run_dir / "task.md"), prompt)
+            self.assertIn(str(run_dir / "research.md"), prompt)
             self.assertIn("Plan ready", output.getvalue())
 
     def test_run_cockpit_executes_review_with_fixture_adapter(self) -> None:
@@ -4520,6 +4525,16 @@ class CliTests(unittest.TestCase):
         self.assertIn("workspace", command)
         self.assertIn("--add-dir", command)
         self.assertIn("run", command)
+        readonly_command = command_for_readonly_stage(
+            adapter="codex",
+            adapter_args=[],
+            workspace_dir=Path("workspace"),
+            run_dir=Path("run"),
+        )
+        self.assertIn("--cd", readonly_command)
+        self.assertIn("workspace", readonly_command)
+        self.assertIn("--add-dir", readonly_command)
+        self.assertIn("run", readonly_command)
 
     def test_kilo_code_commands_use_documented_headless_run_mode(self) -> None:
         self.assertEqual(

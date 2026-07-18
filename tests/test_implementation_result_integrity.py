@@ -243,7 +243,12 @@ class ImplementationResultIntegrityTests(unittest.TestCase):
             attempt_path = run_dir / "attempts" / "attempt-001" / "attempt.json"
             attempt = json.loads(attempt_path.read_text(encoding="utf-8"))
             protocol_command = attempt["protocol_command"]
-            self.assertIn("loopforge.adapters.local_implementation_adapter", protocol_command)
+            self.assertTrue(
+                any(
+                    "loopforge.adapters.local_implementation_adapter" in value
+                    for value in protocol_command
+                )
+            )
             self.assertIn("--expected-session", protocol_command)
             self.assertIn("--result-output", protocol_command)
             self.assertEqual(attempt["status"], "completed")

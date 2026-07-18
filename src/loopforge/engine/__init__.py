@@ -221,6 +221,20 @@ READONLY_STAGE_SUCCESS = {
     "review": ("complete", REVIEW_COMPLETE_STAGE),
 }
 
+READONLY_STAGE_INPUT_ARTIFACTS = {
+    "research": ("task.md", "loop.md", "memory.md"),
+    "plan": ("task.md", "loop.md", "research.md", "memory.md"),
+    "review": (
+        "task.md",
+        "loop.md",
+        "research.md",
+        "plan.md",
+        "progress.md",
+        "verification.md",
+        "memory.md",
+    ),
+}
+
 SUBJECTIVE_TASK_MARKERS = (
     "better",
     "copy",
@@ -1388,6 +1402,23 @@ def usable_python_executable() -> str:
         "no usable Python executable found for isolated adapter execution; "
         "set LOOPFORGE_PYTHON to a real python.exe outside WindowsApps."
     )
+
+
+def loopforge_module_command(module: str, arguments: list[str]) -> list[str]:
+    """Run a packaged LoopForge module with an isolated Python runtime.
+
+    The Codex-bundled Python is deliberately usable even when it does not own
+    LoopForge's site-packages.  Bootstrap the installed or source package
+    explicitly so internal checks and the implementation wrapper use the same
+    runtime contract.
+    """
+    source_root = Path(__file__).resolve().parents[2]
+    bootstrap = (
+        "import runpy, sys; "
+        f"sys.path.insert(0, {str(source_root)!r}); "
+        f"runpy.run_module({module!r}, run_name='__main__')"
+    )
+    return [usable_python_executable(), "-c", bootstrap, *arguments]
 
 
 def native_artifact_state(run_dir: Path) -> dict[str, Any]:
@@ -4945,6 +4976,7 @@ def command_for_readonly_stage(
     adapter: str,
     adapter_args: list[str],
     workspace_dir: Path,
+    run_dir: Path | None = None,
 ) -> list[str]:
     if adapter == "local-adapter-fixture":
         return command_for_adapter(adapter, adapter_args)
@@ -4964,6 +4996,8 @@ def command_for_readonly_stage(
             args[1:1] = ["-s", "read-only"]
         if "-C" not in args and "--cd" not in args:
             args[1:1] = ["--cd", str(workspace_dir)]
+        if run_dir is not None and "--add-dir" not in args:
+            args[1:1] = ["--add-dir", str(run_dir)]
         if "--color" not in args:
             args[1:1] = ["--color", "never"]
         args = [value for value in args if value != "--json"]
@@ -5456,6 +5490,7 @@ def render_stage_prompt(
 ) -> str:
     artifact = f"{stage}.md"
     sections = REQUIRED_READONLY_STAGE_SECTIONS.get(stage, ())
+    input_artifacts = READONLY_STAGE_INPUT_ARTIFACTS.get(stage, ())
     agent = pack_agent_for_stage(run, stage)
     permission = pack_permission_for_agent(run, agent)
     lines = [
@@ -5476,6 +5511,11 @@ def render_stage_prompt(
         "## Objective",
         "",
         str(run.get("task") or "").strip(),
+        "",
+        "## Required Inputs",
+        "",
+        "Read every listed run artifact before producing the requested artifact.",
+        *[f"- {run_dir / name}" for name in input_artifacts],
         "",
         "## Required Artifact",
         "",
@@ -6231,6 +6271,7 @@ def execute_readonly_stage(
             adapter=adapter,
             adapter_args=adapter_args or [],
             workspace_dir=workspace_dir,
+            run_dir=status.run_dir,
         )
         if adapter == "local-adapter-fixture":
             child, stdout, stderr = execute_fixture_command(
@@ -6572,15 +6613,15 @@ def adapter_protocol_command(
     stdin_file: Path | None,
     result_output: Path | None,
 ) -> list[str]:
-    protocol = [
-        usable_python_executable(),
-        "-m",
+    protocol = loopforge_module_command(
         "loopforge.adapters.local_implementation_adapter",
-        "--expected-session",
-        str(expected_session_path),
-        "--workspace",
-        str(workspace_dir),
-    ]
+        [
+            "--expected-session",
+            str(expected_session_path),
+            "--workspace",
+            str(workspace_dir),
+        ],
+    )
     if stdin_file is not None:
         protocol.extend(["--stdin-file", str(stdin_file)])
     if result_output is not None:
@@ -7312,22 +7353,22 @@ def verify_run(
             return interrupted
         emit_operation_event(operation_callback, "check_started", "Generating complete patch.", current=1, total=4)
         generated = run_json_check(
-            [
-                usable_python_executable(),
-                "-m",
+            loopforge_module_command(
                 "loopforge.checks.generate_complete_patch",
-                "--repo",
-                str(workspace_dir),
-                "--base",
-                base_commit,
-                "--output",
-                str(patch_path),
-                "--policy",
-                str(default_diff_policy()),
-                "--force",
-                "--format",
-                "json",
-            ],
+                [
+                    "--repo",
+                    str(workspace_dir),
+                    "--base",
+                    base_commit,
+                    "--output",
+                    str(patch_path),
+                    "--policy",
+                    str(default_diff_policy()),
+                    "--force",
+                    "--format",
+                    "json",
+                ],
+            ),
             cwd=repository_root(),
         )
         if generated["returncode"] != 0 or generated["json"] is None:
@@ -7366,21 +7407,21 @@ def verify_run(
             return interrupted
         emit_operation_event(operation_callback, "check_started", "Enforcing diff policy.", current=2, total=4)
         diff_result = run_json_check(
-            [
-                usable_python_executable(),
-                "-m",
+            loopforge_module_command(
                 "loopforge.checks.diff_policy",
-                "--patch",
-                str(patch_path),
-                "--policy",
-                str(default_diff_policy()),
-                "--repo",
-                str(workspace_dir),
-                "--base",
-                str(base_commit),
-                "--format",
-                "json",
-            ],
+                [
+                    "--patch",
+                    str(patch_path),
+                    "--policy",
+                    str(default_diff_policy()),
+                    "--repo",
+                    str(workspace_dir),
+                    "--base",
+                    str(base_commit),
+                    "--format",
+                    "json",
+                ],
+            ),
             cwd=repository_root(),
         )
         if diff_result["returncode"] == 0 and diff_result["json"] is not None:
@@ -7416,23 +7457,23 @@ def verify_run(
             return interrupted
         emit_operation_event(operation_callback, "check_started", "Classifying patch risk.", current=3, total=4)
         risk_result = run_json_check(
-            [
-                usable_python_executable(),
-                "-m",
+            loopforge_module_command(
                 "loopforge.checks.classify_patch_risk",
-                "--patch",
-                str(patch_path),
-                "--diff-policy",
-                str(default_diff_policy()),
-                "--risk-policy",
-                str(risk_policy_path or default_risk_policy()),
-                "--repo",
-                str(workspace_dir),
-                "--base",
-                str(base_commit),
-                "--format",
-                "json",
-            ],
+                [
+                    "--patch",
+                    str(patch_path),
+                    "--diff-policy",
+                    str(default_diff_policy()),
+                    "--risk-policy",
+                    str(risk_policy_path or default_risk_policy()),
+                    "--repo",
+                    str(workspace_dir),
+                    "--base",
+                    str(base_commit),
+                    "--format",
+                    "json",
+                ],
+            ),
             cwd=repository_root(),
         )
         if risk_result["returncode"] == 0 and risk_result["json"] is not None:
