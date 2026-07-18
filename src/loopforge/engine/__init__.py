@@ -2017,7 +2017,6 @@ def prepare_run_workspace(
         "worktree",
         "add",
         "--detach",
-        "--relative-paths",
         str(workspace_path),
         base_commit,
     ]
@@ -2758,6 +2757,11 @@ def describe_next_step(run: dict[str, Any]) -> str:
             if statuses.get("implementation") != "complete":
                 return "Run the developer with `loopforge continue --adapter <adapter>`."
             if statuses.get("verification") != "complete":
+                if normalized.get("status") == VERIFICATION_FAILED:
+                    return (
+                        "Inspect verification.md, address the diagnostic with a bounded "
+                        "adapter attempt, then run `loopforge verify` again."
+                    )
                 return "Generate the patch and run checks with `loopforge verify`."
             if statuses.get("review") not in {"complete", "approved"}:
                 return "Run the read-only patch reviewer with `loopforge run`."
@@ -2779,7 +2783,10 @@ def describe_next_step(run: dict[str, Any]) -> str:
     if status == READY_FOR_VERIFICATION:
         return "Run `loopforge verify` to generate the patch and run pack checks."
     if status == VERIFICATION_FAILED:
-        return "Inspect verification.md, fix the diagnostic, then run `loopforge verify` again."
+        return (
+            "Inspect verification.md, address the diagnostic with a bounded adapter "
+            "attempt, then run `loopforge verify` again."
+        )
     if status == VERIFIED:
         return "Review the verified patch and decide whether to continue, commit, or hand off."
     return "Inspect the run artifacts and decide the next bounded action."
@@ -2976,16 +2983,37 @@ def workflow_stage_guidance(
         return state, "The approved plan is ready for implementation.", "implementation", action
 
     if statuses.get("verification") != "complete":
+        recovery_attempt = (
+            statuses.get("verification") == "blocked"
+            and run_status == VERIFICATION_FAILED
+        )
         action = guided_action(
-            "verify",
-            "Generate the patch and run deterministic checks",
-            "loopforge verify",
-            risk="verification",
-            requires_confirmation=profile == "strict",
-            why="Checks and policy evidence are required before review.",
+            "retry-attempt" if recovery_attempt else "verify",
+            (
+                f"Retry the developer with {adapter} to address verification diagnostics"
+                if recovery_attempt
+                else "Generate the patch and run deterministic checks"
+            ),
+            (
+                f"loopforge continue --adapter {adapter}"
+                if recovery_attempt
+                else "loopforge verify"
+            ),
+            risk="adapter-execution" if recovery_attempt else "verification",
+            requires_confirmation=(profile != "autonomous") if recovery_attempt else profile == "strict",
+            why=(
+                "A bounded follow-up attempt may address the recorded deterministic diagnostic."
+                if recovery_attempt
+                else "Checks and policy evidence are required before review."
+            ),
         )
         state = "verification_blocked" if statuses.get("verification") == "blocked" else "verification_pending"
-        return state, "Implementation is complete; verification is next.", "verification", action
+        summary = (
+            "Verification failed; inspect diagnostics and run a bounded correction attempt."
+            if recovery_attempt
+            else "Implementation is complete; verification is next."
+        )
+        return state, summary, "verification", action
 
     if statuses.get("review") not in {"complete", "approved"}:
         action = guided_action(
@@ -5203,6 +5231,7 @@ def implementation_base_commit(run: dict[str, Any]) -> str:
 def expected_session_for(run: dict[str, Any], adapter: str, workspace_dir: Path) -> dict[str, Any]:
     issue = run_issue_number(run)
     base_commit = implementation_base_commit(run)
+    recovery_authorized = str(run.get("status") or "") == VERIFICATION_FAILED
     seed = {
         "issue": issue,
         "base_commit": base_commit,
@@ -5210,6 +5239,7 @@ def expected_session_for(run: dict[str, Any], adapter: str, workspace_dir: Path)
         "task_id": run.get("task_id"),
         "adapter": adapter,
         "workspace": str(workspace_dir.resolve()),
+        "recovery_authorized": recovery_authorized,
     }
     session = {
         "issue": issue,
@@ -5217,6 +5247,7 @@ def expected_session_for(run: dict[str, Any], adapter: str, workspace_dir: Path)
         "base_commit": base_commit,
         "workspace": str(workspace_dir.resolve()),
         "runner_id": adapter,
+        "recovery_authorized": recovery_authorized,
         "preflight_sha256": session_hash(seed, "preflight"),
         "start_authorization_receipt_sha256": session_hash(seed, "start-authorization"),
     }
@@ -5595,6 +5626,166 @@ def approve_initial_task(
         message="LoopForge task approved; research is ready.",
         blockers=[],
         artifact_path=status.run_dir / "task.md",
+    )
+
+
+def complete_task_definition(
+    project_dir: Path,
+    *,
+    success_check: str,
+) -> StageResult:
+    """Add objective proof to the current task contract without replacing its run."""
+
+    status = current_status(project_dir)
+    if not status.initialized:
+        return StageResult(
+            project_dir=status.project_dir,
+            run_dir=None,
+            run=None,
+            stage="task_definition",
+            ok=False,
+            message="Initialize LoopForge before completing a task definition.",
+            blockers=[status.next_step],
+        )
+    if status.run is None or status.run_dir is None:
+        return StageResult(
+            project_dir=status.project_dir,
+            run_dir=status.run_dir,
+            run=None,
+            stage="task_definition",
+            ok=False,
+            message="No current run is ready for task completion.",
+            blockers=status.blockers or [status.next_step],
+        )
+
+    proof = success_check.strip()
+    if not proof:
+        return StageResult(
+            project_dir=status.project_dir,
+            run_dir=status.run_dir,
+            run=status.run,
+            stage="task_definition",
+            ok=False,
+            message="LoopForge task completion is blocked.",
+            blockers=["an objective success check is required."],
+            artifact_path=status.run_dir / "task.md",
+        )
+
+    run = normalize_run_workflow_state(status.run)
+    validation = run.get("task_validation", {})
+    if isinstance(validation, dict) and validation.get("status") == "valid":
+        return StageResult(
+            project_dir=status.project_dir,
+            run_dir=status.run_dir,
+            run=run,
+            stage="task_definition",
+            ok=False,
+            message="The current task definition is already complete.",
+            blockers=["approve the task before starting research."],
+            artifact_path=status.run_dir / "task.md",
+        )
+
+    task = str(run.get("task") or "").strip()
+    checks = normalize_unique_strings(
+        [
+            *normalize_nonempty_strings(
+                [str(value) for value in run.get("success_checks", [])]
+                if isinstance(run.get("success_checks"), list)
+                else []
+            ),
+            proof,
+        ]
+    )
+    profile = normalize_profile(run.get("profile"))
+    subjective = task_looks_subjective(task)
+    contract = status.loop_contract if isinstance(status.loop_contract, dict) else {}
+    rubric = str(contract.get("rubric") or "").strip()
+    task_validation = validate_task_definition(
+        task=task,
+        success_checks=checks,
+        profile=profile,
+        subjective=subjective,
+        subjective_rubric=rubric,
+    )
+    if task_validation["status"] != "valid":
+        return StageResult(
+            project_dir=status.project_dir,
+            run_dir=status.run_dir,
+            run=run,
+            stage="task_definition",
+            ok=False,
+            message="LoopForge task completion is blocked.",
+            blockers=[str(item) for item in task_validation["missing"]],
+            artifact_path=status.run_dir / "task.md",
+        )
+
+    pack_contract = run.get("pack_contract", {})
+    skills = (
+        normalize_nonempty_strings([str(value) for value in pack_contract.get("skills", [])])
+        if isinstance(pack_contract, dict) and isinstance(pack_contract.get("skills"), list)
+        else []
+    )
+    allowed_tools = (
+        normalize_nonempty_strings([str(value) for value in contract.get("allowed_tools", [])])
+        if isinstance(contract.get("allowed_tools"), list)
+        else list(DEFAULT_ALLOWED_TOOLS)
+    )
+    limits = run.get("limits", {})
+    max_attempts = limits.get("max_attempts", 3) if isinstance(limits, dict) else 3
+    timeout_seconds = limits.get("timeout_seconds", 1800) if isinstance(limits, dict) else 1800
+    if not isinstance(max_attempts, int) or max_attempts < 1:
+        max_attempts = 3
+    if not isinstance(timeout_seconds, int) or timeout_seconds < 1:
+        timeout_seconds = 1800
+    loop_status = loop_contract_status(
+        success_checks=checks,
+        profile=profile,
+        subjective=subjective,
+        subjective_rubric=rubric,
+    )
+    updated = apply_initial_task_approval(run, approved=False, source="none")
+    updated["success_checks"] = checks
+    updated["task_validation"] = task_validation
+    updated["status"] = loop_status
+    updated["loop_contract"] = {
+        **(run.get("loop_contract") if isinstance(run.get("loop_contract"), dict) else {}),
+        "path": str(status.run_dir / "loop.md"),
+        "version": 1,
+        "status": loop_status,
+        "subjective": subjective,
+        "requires_rubric": profile == "autonomous" and subjective,
+    }
+    updated["blockers"] = []
+    updated["updated_at"] = utc_now()
+    (status.run_dir / "task.md").write_text(f"# Task\n\n{task}\n", encoding="utf-8")
+    (status.run_dir / "loop.md").write_text(
+        render_loop_contract(
+            task=task,
+            task_id=str(run.get("task_id") or run.get("run_id") or ""),
+            project_dir=status.project_dir,
+            base_commit=str(run.get("base_commit") or "") or None,
+            profile=profile,
+            pack=str(run.get("pack") or DEFAULT_PACK),
+            skills=skills,
+            allowed_tools=allowed_tools,
+            success_checks=checks,
+            max_attempts=max_attempts,
+            timeout_seconds=timeout_seconds,
+            subjective=subjective,
+            subjective_rubric=rubric,
+        ),
+        encoding="utf-8",
+    )
+    persist_run_json(status.project_dir, status.run_json_path or (status.run_dir / "run.json"), updated)
+    return StageResult(
+        project_dir=status.project_dir,
+        run_dir=status.run_dir,
+        run=updated,
+        stage="task_definition",
+        ok=True,
+        message="LoopForge task contract is complete; explicit task approval is next.",
+        blockers=[],
+        artifact_path=status.run_dir / "loop.md",
     )
 
 
@@ -6044,6 +6235,7 @@ def execute_readonly_stage(
         if adapter == "local-adapter-fixture":
             child, stdout, stderr = execute_fixture_command(
                 command=command,
+                prompt=prompt.encode("utf-8"),
                 project_dir=workspace_dir,
                 timeout_seconds=attempt_timeout(run, status.loop_contract or {}),
             )
@@ -6219,7 +6411,13 @@ def synthetic_adapter_result(
     }
 
 
-def run_with_isolated_process(command: list[str], cwd: Path, timeout_seconds: int) -> dict[str, Any]:
+def run_with_isolated_process(
+    command: list[str],
+    cwd: Path,
+    timeout_seconds: int,
+    *,
+    prompt: bytes | None = None,
+) -> dict[str, Any]:
     isolated_process = isolated_process_module()
     policy = isolated_process.load_policy()
     bounded_timeout = min(float(timeout_seconds), float(policy["max_timeout_seconds"]))
@@ -6229,6 +6427,7 @@ def run_with_isolated_process(command: list[str], cwd: Path, timeout_seconds: in
         isolated_process.select_allowed_parent_environment(os.environ, policy),
         policy,
         timeout_seconds=bounded_timeout,
+        prompt=prompt,
     )
 
 
@@ -6254,6 +6453,7 @@ def run_streaming_process(
     *,
     output_callback: OperationCallback | None = None,
     cancel_event: threading.Event | None = None,
+    stream_output: bool = True,
 ) -> dict[str, Any]:
     isolated_process = isolated_process_module()
     policy = isolated_process.load_policy()
@@ -6291,7 +6491,7 @@ def run_streaming_process(
                         "adapter_output",
                         decode_output(chunk).strip() or "Adapter produced output.",
                     )
-                else:
+                elif stream_output:
                     binary_target = getattr(target, "buffer", None)
                     if binary_target is not None:
                         binary_target.write(chunk)
@@ -6392,11 +6592,17 @@ def adapter_protocol_command(
 def execute_fixture_command(
     *,
     command: list[str],
+    prompt: bytes,
     project_dir: Path,
     timeout_seconds: int,
 ) -> tuple[dict[str, Any], bytes, bytes]:
     resolved_command = resolve_child_executable(command)
-    child = run_with_isolated_process(resolved_command, project_dir, timeout_seconds)
+    child = run_with_isolated_process(
+        resolved_command,
+        project_dir,
+        timeout_seconds,
+        prompt=prompt,
+    )
     stdout = child["stdout"] if isinstance(child.get("stdout"), bytes) else b""
     stderr = child["stderr"] if isinstance(child.get("stderr"), bytes) else b""
     return child, stdout, stderr
@@ -6413,6 +6619,7 @@ def execute_adapter_command(
     timeout_seconds: int,
     operation_callback: OperationCallback | None = None,
     cancel_event: threading.Event | None = None,
+    stream_output: bool = True,
 ) -> tuple[dict[str, Any], bytes, bytes]:
     protocol_command = adapter_protocol_command(
         adapter=adapter,
@@ -6428,6 +6635,7 @@ def execute_adapter_command(
         min(timeout_seconds + 5, 600),
         output_callback=operation_callback,
         cancel_event=cancel_event,
+        stream_output=stream_output,
     )
     stdout = child["stdout"] if isinstance(child.get("stdout"), bytes) else b""
     stderr = child["stderr"] if isinstance(child.get("stderr"), bytes) else b""
@@ -6464,6 +6672,7 @@ def execute_attempt(
     adapter_args: list[str],
     operation_callback: OperationCallback | None = None,
     cancel_event: threading.Event | None = None,
+    stream_output: bool = True,
 ) -> dict[str, Any]:
     if adapter not in SUPPORTED_ADAPTERS:
         raise ValueError(f"unsupported adapter: {adapter}")
@@ -6528,6 +6737,7 @@ def execute_attempt(
         timeout_seconds=timeout_seconds,
         operation_callback=operation_callback,
         cancel_event=cancel_event,
+        stream_output=stream_output,
     )
     result = parse_adapter_result_file(result_path) or parse_adapter_result(stdout)
 
@@ -7393,6 +7603,7 @@ def continue_run(
     confirmed: bool = False,
     operation_callback: OperationCallback | None = None,
     cancel_event: threading.Event | None = None,
+    stream_output: bool = True,
 ) -> ContinueResult:
     status = current_status(project_dir)
     if not status.initialized:
@@ -7418,7 +7629,10 @@ def continue_run(
 
     contract = status.loop_contract or loop_contract_state(status.run_dir / "loop.md")
     run_status = str(status.run.get("status") or "")
-    blockers = [] if run_status == ADAPTER_BLOCKED else list(status.blockers)
+    # Failed deterministic checks are evidence for a bounded correction attempt,
+    # not permanent implementation gates.  Contract, approval, and attempt-limit
+    # checks below are still evaluated before an adapter can run.
+    blockers = [] if run_status in {ADAPTER_BLOCKED, VERIFICATION_FAILED} else list(status.blockers)
     for blocker in implementation_gate_blockers(status.run):
         append_unique(blockers, blocker)
     if contract["status"] != "valid":
@@ -7510,6 +7724,7 @@ def continue_run(
             adapter_args=adapter_args or [],
             operation_callback=operation_callback,
             cancel_event=cancel_event,
+            stream_output=stream_output,
         )
         updated_run = update_run_after_attempt(
             project_dir=status.project_dir,

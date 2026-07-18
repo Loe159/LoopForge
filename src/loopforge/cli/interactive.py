@@ -6,6 +6,7 @@ import argparse
 import importlib.util
 import json
 import os
+import re
 import shutil
 import shlex
 import subprocess
@@ -46,6 +47,7 @@ from loopforge.engine import (
     approve_plan,
     approve_review,
     approve_initial_task,
+    complete_task_definition,
     execute_readonly_stage,
     next_readonly_stage,
     prepare_draft_publication,
@@ -80,6 +82,7 @@ SUPPORTED_COMMANDS = {
     "branch": "Show or create a Git branch.",
     "clear": "Clear the visible terminal screen.",
     "commands": "List available interactive commands.",
+    "complete-task": "Add objective proof to the current task contract.",
     "compact": "Write a deterministic compact handoff for the current run.",
     "config": "Show or update LoopForge project configuration.",
     "context": "Show LoopForge project and run context.",
@@ -166,7 +169,7 @@ ALIAS_ARGUMENTS = {
 COMMAND_GROUPS = {
     "Projects": ("init", "cd", "dashboard", "pack", "config", "adapter"),
     "Runs": ("run", "new", "fork", "resume", "runs", "archive"),
-    "Stages": ("status", "next", "guide", "actions", "do", "plan", "continue", "verify", "review", "learn"),
+    "Stages": ("status", "next", "guide", "actions", "do", "complete-task", "plan", "continue", "verify", "review", "learn"),
     "Help": ("report",),
 }
 
@@ -191,6 +194,7 @@ def contextual_commands(project_dir: Path | None = None) -> dict[str, str]:
                 visible.update({"actions", "next", "guide", "plan", "review"})
                 for action in action_descriptors(current_guidance(project_dir)):
                     command = {
+                        "complete-task": "complete-task",
                         "run-readonly-stage": "continue",
                         "continue": "continue",
                         "retry-attempt": "continue",
@@ -349,7 +353,25 @@ class InteractiveShell:
 
     def split_args(self, raw: str) -> list[str] | None:
         try:
-            return shlex.split(raw)
+            if os.name != "nt":
+                return shlex.split(raw)
+            marker = "__LOOPFORGE_WINDOWS_BACKSLASH__"
+
+            def protect_quoted_path(match: re.Match[str]) -> str:
+                quote, path = match.group(1), match.group(2)
+                return f"{quote}{path.replace('\\', marker)}{quote}"
+
+            protected = re.sub(
+                r"(['\"])([A-Za-z]:\\.*?)(?:\1)",
+                protect_quoted_path,
+                raw,
+            )
+            protected = re.sub(
+                r"(?<!\S)([A-Za-z]:\\\S+)",
+                lambda match: match.group(1).replace("\\", marker),
+                protected,
+            )
+            return [value.replace(marker, "\\") for value in shlex.split(protected)]
         except ValueError as error:
             self.write(f"Could not parse arguments: {error}", error=True)
             return None
@@ -479,6 +501,9 @@ class InteractiveShell:
         if key == "collect-task":
             self.write("This action needs a real task. Use /run <task>.", error=True)
             return DispatchResult(2)
+        if key == "complete-task":
+            self.write("Add objective proof with /complete-task <success check>.", error=True)
+            return DispatchResult(2)
         if key == "run-readonly-stage":
             return self.execute_readonly_guided_stage()
         if key == "approve-task":
@@ -490,7 +515,11 @@ class InteractiveShell:
         if key == "prepare-draft":
             return self.execute_draft_preparation()
         if key == "continue":
-            return self.cmd_continue(f"--adapter {self.selected_adapter} --confirm")
+            return self._continue_with_adapter(
+                self.selected_adapter,
+                list(self.selected_adapter_args),
+                confirmed=True,
+            )
         if key == "verify":
             return self.cmd_verify("--confirm")
         if key == "adapter":
@@ -552,6 +581,35 @@ class InteractiveShell:
                 next_command="/status",
             )
         return DispatchResult(0 if result.ok else 1)
+
+    def complete_current_task_definition(self, success_check: str) -> DispatchResult:
+        """Complete the selected run's task contract through the engine facade."""
+
+        result = complete_task_definition(self.project_dir, success_check=success_check)
+        rows = [("status", result.message), ("artifact", result.artifact_path or "none")]
+        if result.ok:
+            render_success(
+                self.renderer,
+                "Task contract complete",
+                rows,
+                next_command="/do approve-task",
+            )
+        else:
+            render_blocked(
+                self.renderer,
+                "Task completion blocked",
+                rows,
+                blockers=result.blockers,
+                next_command="/status",
+            )
+        return DispatchResult(0 if result.ok else 1)
+
+    def cmd_complete_task(self, raw: str) -> DispatchResult:
+        success_check = raw.strip()
+        if not success_check:
+            self.write("usage: /complete-task <objective success check>", error=True)
+            return DispatchResult(2)
+        return self.complete_current_task_definition(success_check)
 
     def execute_approval(self, stage: str) -> DispatchResult:
         result = (
@@ -1027,11 +1085,20 @@ class InteractiveShell:
             profile = status.run.get("profile") if status.run is not None else None
             if profile == "strict":
                 confirmed = self.confirm_if_available("Strict profile requires confirmation.")
+        return self._continue_with_adapter(adapter, chosen_args, confirmed=confirmed)
+
+    def _continue_with_adapter(
+        self,
+        adapter: str | None,
+        adapter_args: list[str],
+        *,
+        confirmed: bool,
+    ) -> DispatchResult:
         with self.renderer.loading("Continuing LoopForge run..."):
             result = continue_run(
                 self.project_dir,
                 adapter=adapter,
-                adapter_args=chosen_args,
+                adapter_args=adapter_args,
                 confirmed=confirmed,
             )
         rows: list[tuple[str, object]] = []

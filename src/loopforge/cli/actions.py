@@ -25,7 +25,7 @@ class ActionDescriptor:
 # confirmation requirements always come from ``current_guidance``.
 ACTION_EXECUTORS = {
     "init": "initialize",
-    "complete-task": "collect-task",
+    "complete-task": "complete-task",
     "approve-task": "approve-task",
     "run-research": "run-readonly-stage",
     "run-plan": "run-readonly-stage",

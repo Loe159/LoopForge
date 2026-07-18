@@ -51,7 +51,9 @@ L'implementation utilise le chemin existant :
 1. le moteur crée `expected-session.json` et le prompt d'attempt ;
 2. `src/loopforge/adapters/local_implementation_adapter.py` exécute la commande fixture ;
 3. la politique autorise Python uniquement lorsque le `runner_id` vaut `local-adapter-fixture` ;
-4. le wrapper exige un workspace propre, un workspace correspondant à la session et une commande sans shell ;
+4. le wrapper exige un workspace propre, sauf pour une reprise explicitement attestee
+   apres `verification_failed`; il exige dans tous les cas un workspace correspondant
+   a la session et une commande sans shell ;
 5. le résultat est validé par le schéma existant puis enregistré sous l'attempt ;
 6. un changement attendu mène à `ready_for_verification`, l'absence de changement à `adapter_blocked`.
 

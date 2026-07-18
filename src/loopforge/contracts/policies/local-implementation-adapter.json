@@ -6,6 +6,7 @@
   "max_child_output_bytes": 32768,
   "max_summary_chars": 240,
   "require_clean_workspace_at_start": true,
+  "allow_dirty_workspace_for_authorized_recovery": true,
   "require_expected_session_workspace_match": true,
   "ignored_workspace_status_prefixes": [
     ".loopforge/"

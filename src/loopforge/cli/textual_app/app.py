@@ -67,7 +67,7 @@ class LoopForgeApp(App[None]):
 
     TITLE = "LoopForge"
     CSS_PATH = str(Path(__file__).with_name("styles.tcss"))
-    COMMANDS = App.COMMANDS | {LoopForgeActionProvider}
+    COMMANDS = {LoopForgeActionProvider}
     BINDINGS = [
         Binding("ctrl+k", "command_palette", "Actions", show=True),
         Binding("ctrl+p", "show_home", "Projects", show=True),
@@ -100,6 +100,7 @@ class LoopForgeApp(App[None]):
         self._load_on_mount = load_on_mount
         self._operation: OperationController | None = None
         self._operation_completion_handled = False
+        self._refreshing_after_operation = False
         self._screen = "home"
         self._selected_index = 0
         self._filter = ""
@@ -147,10 +148,13 @@ class LoopForgeApp(App[None]):
 
     @on(SnapshotPublished)
     def _on_snapshot_published(self, message: SnapshotPublished) -> None:
+        if self._refreshing_after_operation and "textual-load" in message.snapshot.reasons:
+            self._refreshing_after_operation = False
         self._render_snapshot(message.snapshot)
 
     @on(LoadFailed)
     def _on_load_failed(self, message: LoadFailed) -> None:
+        self._refreshing_after_operation = False
         self.push_screen(RecoverableErrorScreen(message.message))
 
     @work(thread=True, exclusive=True, group="project-load", exit_on_error=False)
@@ -288,10 +292,28 @@ class LoopForgeApp(App[None]):
             return
         self._run_shell_operation("Create run", lambda: self.shell.cmd_run(task.strip()))
 
+    def action_complete_task(self) -> None:
+        self.push_screen(
+            TextEntryScreen(
+                "Complete task contract",
+                "Add an objective success check for the current run.",
+                submit_label="Save proof",
+            ),
+            self._complete_task,
+        )
+
+    def _complete_task(self, success_check: str | None) -> None:
+        if success_check is None or not success_check.strip():
+            return
+        self._run_shell_operation(
+            "Complete task contract",
+            lambda: self.shell.complete_current_task_definition(success_check.strip()),
+        )
+
     def action_command(self) -> None:
         """Open the existing slash-command surface from the full-screen UI."""
 
-        if self._screen == "project":
+        if self._screen in {"project", "evidence"}:
             self.action_filter()
             return
         self.push_screen(
@@ -366,6 +388,9 @@ class LoopForgeApp(App[None]):
         if action.executor_key == "collect-task":
             self.action_new_run()
             return
+        if action.executor_key == "complete-task":
+            self.action_complete_task()
+            return
         if not action.requires_confirmation:
             self._execute_action(action)
             return
@@ -411,14 +436,19 @@ class LoopForgeApp(App[None]):
         if self._operation is None:
             return
         self.store.record_operation_events(self._operation)
-        self.store.flush()
         if self._operation.finished and not self._operation_completion_handled:
             self._operation_completion_handled = True
-            self._notice = self._snapshot.operation.message
+            self._notice = str(
+                getattr(self._operation.result, "message", self._operation.label)
+            )
             if bool(getattr(self._operation.result, "should_exit", False)):
                 self.exit()
                 return
+            self._refreshing_after_operation = True
+            self._render_snapshot(self._snapshot)
             self.load_selected_project()
+            return
+        self.store.flush()
 
     def action_cancel_or_exit(self) -> None:
         if self._operation is not None and not self._operation.finished:
@@ -490,6 +520,8 @@ class LoopForgeApp(App[None]):
                 body += "\n\nProject health\n" + "\n".join(f"× {item}" for item in snapshot.project.blockers)
             return project.name, body, "Enter open · / filter · n new · a archive · Esc projects"
         if self._screen == "run":
+            if self._refreshing_after_operation:
+                return "Run", "Refreshing run state…", "Waiting for the current action to finish refreshing"
             shell = snapshot.run.shell
             if shell is None or shell.run is None:
                 return "Run", "Loading run state…", "Esc runs"

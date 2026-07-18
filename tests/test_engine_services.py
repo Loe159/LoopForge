@@ -168,7 +168,7 @@ class GitStateServiceTests(unittest.TestCase):
 
 
 class RunWorkspaceTests(unittest.TestCase):
-    def test_worktree_creation_enables_long_paths_and_relative_git_links(self) -> None:
+    def test_worktree_creation_uses_portable_long_path_command(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             project = root / "project"
@@ -188,7 +188,39 @@ class RunWorkspaceTests(unittest.TestCase):
 
             command = run.call_args.args[0]
             self.assertEqual(command[:4], ["git", "-c", "core.longpaths=true", "-c"])
-            self.assertIn("--relative-paths", command)
+            self.assertEqual(command[5:8], ["worktree", "add", "--detach"])
+            self.assertNotIn("--relative-paths", command)
+
+    def test_public_create_run_creates_a_git_worktree_with_supported_git_options(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            project = root / "project"
+            project.mkdir()
+            subprocess.run(["git", "init"], cwd=project, check=True, capture_output=True, text=True)
+            (project / "README.md").write_text("# Project\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=project, check=True, capture_output=True, text=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=LoopForge Tests",
+                    "-c",
+                    "user.email=loopforge@example.invalid",
+                    "commit",
+                    "-m",
+                    "initial",
+                ],
+                cwd=project,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            initialize_project(project, home=root / "home")
+            result = create_run(project, "Create a portable workspace", success_checks=["workspace exists"])
+
+            self.assertEqual(result.run["workspace"]["mode"], "git-worktree")
+            self.assertTrue(Path(result.run["workspace"]["path"]).is_dir())
 
     def test_failed_worktree_creation_removes_partial_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

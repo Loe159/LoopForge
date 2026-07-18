@@ -291,6 +291,7 @@ class ContinueCommandHandler:
                 adapter=args.adapter,
                 adapter_args=adapter_args,
                 confirmed=api.confirmation_accepted(args.confirm),
+                stream_output=fmt != "json",
             )
         if fmt == "json":
             api.print_json_payload(

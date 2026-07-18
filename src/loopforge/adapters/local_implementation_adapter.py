@@ -26,6 +26,7 @@ EXPECTED_POLICY: dict[str, Any] = {
     "max_child_output_bytes": 32768,
     "max_summary_chars": 240,
     "require_clean_workspace_at_start": True,
+    "allow_dirty_workspace_for_authorized_recovery": True,
     "require_expected_session_workspace_match": True,
     "ignored_workspace_status_prefixes": [".loopforge/"],
     "allowed_command_basenames": [
@@ -397,11 +398,11 @@ def run_adapter(
         if initial_git_paths is None
         else None
     )
-    if (
-        policy["require_clean_workspace_at_start"]
-        and initial_git_paths is not None
-        and relevant_git_status_paths(initial_git_paths, policy)
-    ):
+    clean_start_required = policy["require_clean_workspace_at_start"] and not (
+        policy["allow_dirty_workspace_for_authorized_recovery"]
+        and session["recovery_authorized"]
+    )
+    if clean_start_required and initial_git_paths is not None and relevant_git_status_paths(initial_git_paths, policy):
         value = result_value(
             session,
             "failed",

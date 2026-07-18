@@ -28,5 +28,6 @@
   "require_existing_working_directory": true,
   "forbid_windows_app_execution_alias": true,
   "forbid_shell": true,
-  "forbid_stdin": true
+  "forbid_parent_stdin": true,
+  "allow_controlled_stdin": true
 }

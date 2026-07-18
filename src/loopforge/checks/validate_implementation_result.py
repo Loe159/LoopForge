@@ -54,6 +54,7 @@ SESSION_FIELDS = {
     "base_commit",
     "workspace",
     "runner_id",
+    "recovery_authorized",
     "preflight_sha256",
     "start_authorization_receipt_sha256",
 }
@@ -106,6 +107,8 @@ def validate_expected_session(value: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(value["workspace"], str) or not value["workspace"].strip():
         raise ValueError("workspace must be a non-empty string")
     require_runner_id(value["runner_id"], "runner_id")
+    if not isinstance(value["recovery_authorized"], bool):
+        raise ValueError("recovery_authorized must be a boolean")
     require_hex(value["preflight_sha256"], 64, "preflight_sha256")
     require_hex(
         value["start_authorization_receipt_sha256"],

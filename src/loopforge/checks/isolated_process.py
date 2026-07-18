@@ -46,7 +46,8 @@ EXPECTED_POLICY: dict[str, Any] = {
     "require_existing_working_directory": True,
     "forbid_windows_app_execution_alias": True,
     "forbid_shell": True,
-    "forbid_stdin": True,
+    "forbid_parent_stdin": True,
+    "allow_controlled_stdin": True,
 }
 
 
@@ -146,6 +147,7 @@ def run(
     parent_environment: Mapping[str, str],
     policy: dict[str, Any],
     timeout_seconds: float,
+    prompt: bytes | None = None,
     popen: Callable[..., subprocess.Popen[bytes]] = subprocess.Popen,
     clock: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
@@ -157,6 +159,13 @@ def run(
     ):
         raise ValueError("Child timeout exceeds the bounded isolation policy")
     exact_command = validate_command(command, cwd, policy)
+    if prompt is not None:
+        if not policy.get("allow_controlled_stdin"):
+            raise ValueError("Isolation policy does not allow controlled prompt stdin")
+        if not isinstance(prompt, bytes):
+            raise ValueError("Controlled prompt stdin must be bytes")
+        if len(prompt) > policy["max_captured_output_bytes"]:
+            raise ValueError("Controlled prompt stdin exceeds the bounded input limit")
     cwd = cwd.resolve()
     child_environment = build_child_environment(parent_environment, policy)
     memory_bound = policy["max_captured_output_bytes"] + (
@@ -168,7 +177,7 @@ def run(
             exact_command,
             cwd=cwd,
             env=child_environment,
-            stdin=subprocess.DEVNULL,
+            stdin=subprocess.PIPE if prompt is not None else subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             shell=False,
@@ -191,6 +200,20 @@ def run(
         }
     if process.stdout is None or process.stderr is None:
         raise ValueError("Child process pipes were not created")
+
+    def write_prompt() -> None:
+        if prompt is None or process.stdin is None:
+            return
+        try:
+            process.stdin.write(prompt)
+            process.stdin.flush()
+        except (OSError, ValueError):
+            pass
+        finally:
+            try:
+                process.stdin.close()
+            except (OSError, ValueError):
+                pass
 
     events: queue.Queue[tuple[str, bytes | None]] = queue.Queue(
         maxsize=policy["max_pending_capture_chunks"]
@@ -223,6 +246,9 @@ def run(
         threading.Thread(target=pump, args=("stdout", process.stdout), daemon=True),
         threading.Thread(target=pump, args=("stderr", process.stderr), daemon=True),
     ]
+    prompt_thread = threading.Thread(target=write_prompt, daemon=True) if prompt is not None else None
+    if prompt_thread is not None:
+        prompt_thread.start()
     for thread in threads:
         thread.start()
 
@@ -290,6 +316,8 @@ def run(
     process.stderr.close()
     for thread in threads:
         thread.join(timeout=policy["cleanup_timeout_seconds"])
+    if prompt_thread is not None:
+        prompt_thread.join(timeout=policy["cleanup_timeout_seconds"])
 
     capture_complete = (
         active_streams == 0
