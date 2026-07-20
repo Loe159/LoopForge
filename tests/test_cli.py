@@ -20,10 +20,12 @@ from loopforge.engine import (
     apply_initial_task_approval,
     apply_plan_approval,
     approve_review,
+    codex_workspace_preflight_blockers,
     command_for_attempt,
     command_for_readonly_stage,
     current_guidance,
     current_status,
+    execute_readonly_stage,
     loopforge_home,
     platform_cache_home,
     prepare_draft_publication,
@@ -4538,6 +4540,116 @@ class CliTests(unittest.TestCase):
         self.assertIn("workspace", readonly_command)
         self.assertIn("--add-dir", readonly_command)
         self.assertIn("run", readonly_command)
+
+    def test_codex_preflight_requires_git_before_readonly_or_implementation_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+            adapter_started = mock.Mock()
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                mock.patch("loopforge.engine.execute_readonly_adapter_command", side_effect=adapter_started),
+                mock.patch("loopforge.engine.execute_adapter_command", side_effect=adapter_started),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(
+                        [
+                            "run",
+                            "--task",
+                            "Preflight Codex in a temporary project",
+                            "--success-check",
+                            "Tests pass",
+                        ]
+                    ),
+                    0,
+                )
+            run_dir = self.approve_current_run_for_implementation(repo, loopforge_home)
+
+            error = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                mock.patch("loopforge.engine.execute_adapter_command", side_effect=adapter_started),
+                working_directory(repo),
+                contextlib.redirect_stderr(error),
+            ):
+                self.assertEqual(main(["continue", "--adapter", "codex", "--confirm"]), 1)
+
+            run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            self.assertEqual(run_json["attempt_count"], 0)
+            self.assertIn("Initialize Git in this temporary project", error.getvalue())
+            adapter_started.assert_not_called()
+
+            self.assertTrue(
+                codex_workspace_preflight_blockers("codex", repo),
+                "a non-Git temporary project must be rejected before Codex launches",
+            )
+            self.initialize_git_project(repo)
+            self.assertEqual(codex_workspace_preflight_blockers("codex", repo), [])
+
+    def test_codex_preflight_blocks_each_readonly_stage_before_adapter_execution(self) -> None:
+        for stage in ("research", "plan", "review"):
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as temp_dir:
+                workspace = Path(temp_dir)
+                repo = workspace / "project"
+                repo.mkdir()
+                loopforge_home = workspace / "loopforge-home"
+                adapter_started = mock.Mock()
+                with (
+                    mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                    working_directory(repo),
+                    contextlib.redirect_stdout(io.StringIO()),
+                ):
+                    self.assertEqual(main(["init"]), 0)
+                    self.assertEqual(
+                        main(
+                            [
+                                "run",
+                                "--task",
+                                f"Preflight {stage}",
+                                "--success-check",
+                                "Tests pass",
+                            ]
+                        ),
+                        0,
+                    )
+                run_dir = self.approve_current_run(repo, loopforge_home)
+                run_json_path = run_dir / "run.json"
+                run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+                if stage == "plan":
+                    run_json["stage_statuses"]["research"] = "complete"
+                    run_json["current_stage"] = "research_ready"
+                    (run_dir / "research.md").write_text(valid_research_markdown(), encoding="utf-8")
+                elif stage == "review":
+                    run_json["status"] = "verified"
+                    run_json["current_stage"] = "verification_ready"
+                    run_json["stage_statuses"].update(
+                        {
+                            "research": "complete",
+                            "plan": "approved",
+                            "implementation": "complete",
+                            "verification": "complete",
+                            "review": "pending",
+                        }
+                    )
+                    run_json.setdefault("verification", {})["status"] = "passed"
+                run_json_path.write_text(json.dumps(run_json), encoding="utf-8")
+
+                with mock.patch(
+                    "loopforge.engine.execute_readonly_adapter_command",
+                    side_effect=adapter_started,
+                ):
+                    result = execute_readonly_stage(repo, stage=stage, adapter="codex")
+
+                self.assertFalse(result.ok)
+                self.assertIn("Initialize Git in this temporary project", "\n".join(result.blockers))
+                self.assertFalse((run_dir / "artifacts" / "stages" / stage).exists())
+                adapter_started.assert_not_called()
 
     def test_plan_stage_prompt_embeds_approved_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

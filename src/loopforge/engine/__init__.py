@@ -2006,6 +2006,23 @@ def git_toplevel(project_dir: Path) -> Path | None:
         return None
 
 
+def codex_workspace_preflight_blockers(adapter: str, workspace_dir: Path) -> list[str]:
+    """Return the explicit Codex trust prerequisite for a workspace, if any."""
+
+    if adapter != "codex":
+        return []
+    try:
+        is_git_workspace = git_toplevel(workspace_dir) is not None
+    except (OSError, subprocess.SubprocessError):
+        is_git_workspace = False
+    if is_git_workspace:
+        return []
+    return [
+        "Codex requires a Git worktree. Initialize Git in this temporary project "
+        "before using Codex: `git init`."
+    ]
+
+
 def run_workspace_path(run: dict[str, Any], fallback_project_dir: Path) -> Path:
     workspace = run.get("workspace", {})
     if isinstance(workspace, dict):
@@ -6263,6 +6280,25 @@ def execute_readonly_stage(
             blockers=blockers,
         )
 
+    blockers = codex_workspace_preflight_blockers(adapter, workspace_dir)
+    if blockers:
+        updated = update_run_for_stage_blocker(
+            project_dir=status.project_dir,
+            run_json_path=run_json_path,
+            run=run,
+            stage=stage,
+            blockers=blockers,
+        )
+        return StageResult(
+            project_dir=status.project_dir,
+            run_dir=status.run_dir,
+            run=updated,
+            stage=stage,
+            ok=False,
+            message=f"LoopForge {stage} stage is blocked by the Codex preflight.",
+            blockers=blockers,
+        )
+
     stage_dir = status.run_dir / "artifacts" / "stages" / stage
     stage_dir.mkdir(parents=True, exist_ok=True)
     emit_operation_event(
@@ -7758,6 +7794,8 @@ def continue_run(
     workspace_dir = run_workspace_path(status.run, status.project_dir)
     if not workspace_dir.exists() or not workspace_dir.is_dir():
         append_unique(blockers, f"run workspace is not available: {workspace_dir}")
+    for blocker in codex_workspace_preflight_blockers(adapter or "", workspace_dir):
+        append_unique(blockers, blocker)
     if blockers:
         return ContinueResult(
             project_dir=status.project_dir,
