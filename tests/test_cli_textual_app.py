@@ -122,6 +122,60 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
             await pilot.press("escape")
             self.assertIsNone(app._operation)
 
+    async def test_pilot_selects_kilo_code_adapter_from_settings_and_action(self) -> None:
+        from loopforge.cli.actions import ActionDescriptor
+        from loopforge.cli.interactive import InteractiveShell
+        from loopforge.cli.textual_app import LoopForgeApp
+        from loopforge.cli.textual_app.screens import AdapterSelectionScreen
+        from loopforge.engine import current_status, initialize_project
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project = Path(temp_dir) / "project"
+            project.mkdir()
+            loopforge_home = Path(temp_dir) / "home"
+            with mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}):
+                initialize_project(project)
+                shell = InteractiveShell(project, output=io.StringIO(), error=io.StringIO())
+                app = LoopForgeApp(shell, load_on_mount=False)
+                async with app.run_test() as pilot:
+                    app.action_show_settings()
+                    await pilot.press("enter")
+                    await wait_for_condition(
+                        pilot,
+                        lambda: isinstance(app.screen, AdapterSelectionScreen),
+                        "the adapter picker from Settings",
+                    )
+                    await pilot.press("down", "down", "enter")
+                    await wait_for_condition(
+                        pilot,
+                        lambda: not isinstance(app.screen, AdapterSelectionScreen),
+                        "the adapter picker to close",
+                    )
+                    self.assertEqual(shell.selected_adapter, "kilo-code")
+                    self.assertIn("kilo-code", str(app.query_one("#screen-body").renderable))
+
+                    action = ActionDescriptor(
+                        "choose-adapter",
+                        "Choose a supported adapter",
+                        "Select the adapter used for future stages.",
+                        "low",
+                        False,
+                        True,
+                        "/adapter",
+                        "adapter",
+                    )
+                    app.request_action(action)
+                    await wait_for_condition(
+                        pilot,
+                        lambda: isinstance(app.screen, AdapterSelectionScreen),
+                        "the adapter picker from a guided action",
+                    )
+                    await pilot.press("escape")
+
+                self.assertEqual(current_status(project).config["default_adapter"], "kilo-code")
+                restarted = InteractiveShell(project, output=io.StringIO(), error=io.StringIO())
+                self.assertEqual(restarted.selected_adapter, "kilo-code")
+
     async def test_pilot_opens_slash_command_entry_and_uses_shell_dispatch(self) -> None:
         from loopforge.cli.interactive import InteractiveShell
         from loopforge.cli.textual_app import LoopForgeApp

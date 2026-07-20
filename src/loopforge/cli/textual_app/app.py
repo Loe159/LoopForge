@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Callable, Iterable
@@ -23,12 +24,14 @@ from loopforge.cli.presentation import FAMILY_PRESENTATION
 from loopforge.cli.state_store import StateStore
 from loopforge.cli.textual_app.messages import LoadFailed, SnapshotPublished
 from loopforge.cli.textual_app.screens import (
+    AdapterSelectionScreen,
     ConfirmationScreen,
     RecoverableErrorScreen,
     TextEntryScreen,
 )
 from loopforge.cli.textual_app.workers import load_project_snapshot
 from loopforge.cli.ui import TerminalRenderer
+from loopforge.engine import AGENT_COMMANDS, SUPPORTED_ADAPTERS, set_default_adapter
 
 if TYPE_CHECKING:
     from loopforge.cli.interactive import InteractiveShell
@@ -248,6 +251,34 @@ class LoopForgeApp(App[None]):
         self._selected_index = 0
         self._render_snapshot(self._snapshot)
 
+    def show_adapter_selector(self) -> None:
+        """Open the adapter control without routing through the slash shell."""
+
+        self.push_screen(
+            AdapterSelectionScreen(
+                SUPPORTED_ADAPTERS,
+                self.shell.selected_adapter,
+                _adapter_diagnostics(),
+                selected_args=tuple(self.shell.selected_adapter_args),
+            ),
+            self._select_adapter,
+        )
+
+    def _select_adapter(self, adapter: str | None) -> None:
+        if adapter is None:
+            return
+        result = set_default_adapter(self.shell.project_dir, adapter)
+        if not result.ok:
+            details = "; ".join(result.blockers) or result.message
+            self._notice = f"Adapter was not changed: {details}"
+            self._render_snapshot(self._snapshot)
+            return
+        self.shell.refresh_session_config()
+        diagnostic = _adapter_diagnostics().get(adapter, "diagnostic unavailable")
+        self._notice = f"Adapter set to {adapter}. {diagnostic}"
+        self._render_snapshot(self._snapshot)
+        self.load_selected_project(self.shell.project_dir)
+
     def action_go_back(self) -> None:
         if self._screen == "evidence" and self._evidence_preview:
             self._evidence_preview = ""
@@ -280,6 +311,9 @@ class LoopForgeApp(App[None]):
             items = self._visible_evidence()
             if items:
                 self._open_evidence_worker(items[self._selected_index])
+            return
+        if self._screen == "settings":
+            self.show_adapter_selector()
 
     def action_new_run(self) -> None:
         self.push_screen(
@@ -446,6 +480,9 @@ class LoopForgeApp(App[None]):
             )
 
     def request_action(self, action: ActionDescriptor) -> None:
+        if action.executor_key == "adapter":
+            self.show_adapter_selector()
+            return
         if action.executor_key == "collect-task":
             self.action_new_run()
             return
@@ -623,7 +660,12 @@ class LoopForgeApp(App[None]):
             ("Git", snapshot.project.branch),
             ("Snapshot", str(snapshot.revision)),
         ]
-        return "Settings and diagnostics", "\n".join(f"{key}: {value}" for key, value in values), "Esc run · Ctrl+P projects"
+        diagnostics = _adapter_diagnostics()
+        body = "\n".join(f"{key}: {value}" for key, value in values)
+        body += "\n\nAdapter diagnostics\n" + "\n".join(
+            f"{adapter}: {diagnostic}" for adapter, diagnostic in diagnostics.items()
+        )
+        return "Settings and diagnostics", body, "Enter adapter picker · Esc run · Ctrl+P projects"
 
     def _screen_items(self) -> tuple[object, ...]:
         if self._screen == "home":
@@ -712,3 +754,18 @@ def _operation_result(value: object, cancelled: bool) -> SimpleNamespace:
             else str(getattr(value, "message", "Action completed." if ok else "Action was blocked."))
         ),
     )
+
+
+def _adapter_diagnostics() -> dict[str, str]:
+    """Report executable availability without probing adapters or changing config."""
+
+    diagnostics: dict[str, str] = {}
+    for adapter in SUPPORTED_ADAPTERS:
+        command = AGENT_COMMANDS.get(adapter)
+        if command is None:
+            diagnostics[adapter] = "fixture adapter; configure its command through /adapter"
+        elif shutil.which(command):
+            diagnostics[adapter] = f"{command} available on PATH"
+        else:
+            diagnostics[adapter] = f"{command} not found on PATH; install it before running"
+    return diagnostics
