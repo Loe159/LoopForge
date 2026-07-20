@@ -13,6 +13,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Event
 from typing import TextIO
 
 try:
@@ -359,7 +360,7 @@ class InteractiveShell:
 
             def protect_quoted_path(match: re.Match[str]) -> str:
                 quote, path = match.group(1), match.group(2)
-                return f"{quote}{path.replace('\\', marker)}{quote}"
+                return quote + path.replace("\\", marker) + quote
 
             protected = re.sub(
                 r"(['\"])([A-Za-z]:\\.*?)(?:\1)",
@@ -492,7 +493,13 @@ class InteractiveShell:
                 return action
         return None
 
-    def execute_guided_action(self, action: ActionDescriptor) -> DispatchResult:
+    def execute_guided_action(
+        self,
+        action: ActionDescriptor,
+        *,
+        operation_callback=None,
+        cancel_event: Event | None = None,
+    ) -> DispatchResult:
         """Execute one engine-derived action through its shell adapter."""
 
         key = action.executor_key
@@ -505,7 +512,10 @@ class InteractiveShell:
             self.write("Add objective proof with /complete-task <success check>.", error=True)
             return DispatchResult(2)
         if key == "run-readonly-stage":
-            return self.execute_readonly_guided_stage()
+            return self.execute_readonly_guided_stage(
+                operation_callback=operation_callback,
+                cancel_event=cancel_event,
+            )
         if key == "approve-task":
             return self.execute_initial_task_approval()
         if key == "approve-plan":
@@ -519,9 +529,15 @@ class InteractiveShell:
                 self.selected_adapter,
                 list(self.selected_adapter_args),
                 confirmed=True,
+                operation_callback=operation_callback,
+                cancel_event=cancel_event,
             )
         if key == "verify":
-            return self.cmd_verify("--confirm")
+            return self.cmd_verify(
+                "--confirm",
+                operation_callback=operation_callback,
+                cancel_event=cancel_event,
+            )
         if key == "adapter":
             self.write("Choose an adapter with /adapter <name>.", error=True)
             return DispatchResult(2)
@@ -530,7 +546,12 @@ class InteractiveShell:
         self.write(f"Cannot execute guided action yet: {action.command_fallback}", error=True)
         return DispatchResult(2)
 
-    def execute_readonly_guided_stage(self) -> DispatchResult:
+    def execute_readonly_guided_stage(
+        self,
+        *,
+        operation_callback=None,
+        cancel_event: Event | None = None,
+    ) -> DispatchResult:
         status = current_status(self.project_dir)
         if status.run is None:
             self.write("No current run is ready for a read-only stage.", error=True)
@@ -545,6 +566,8 @@ class InteractiveShell:
                 stage=stage,
                 adapter=self.selected_adapter,
                 adapter_args=self.selected_adapter_args,
+                operation_callback=operation_callback,
+                cancel_event=cancel_event,
             )
         if result.ok:
             render_success(
@@ -1053,7 +1076,13 @@ class InteractiveShell:
         render_dashboard(self.renderer, result.snapshot, details=details)
         return DispatchResult(0)
 
-    def cmd_continue(self, raw: str) -> DispatchResult:
+    def cmd_continue(
+        self,
+        raw: str,
+        *,
+        operation_callback=None,
+        cancel_event: Event | None = None,
+    ) -> DispatchResult:
         parser = argparse.ArgumentParser(prog="/continue", add_help=False)
         parser.add_argument("--adapter", choices=SUPPORTED_ADAPTERS)
         parser.add_argument("--check", action="store_true")
@@ -1085,7 +1114,13 @@ class InteractiveShell:
             profile = status.run.get("profile") if status.run is not None else None
             if profile == "strict":
                 confirmed = self.confirm_if_available("Strict profile requires confirmation.")
-        return self._continue_with_adapter(adapter, chosen_args, confirmed=confirmed)
+        return self._continue_with_adapter(
+            adapter,
+            chosen_args,
+            confirmed=confirmed,
+            operation_callback=operation_callback,
+            cancel_event=cancel_event,
+        )
 
     def _continue_with_adapter(
         self,
@@ -1093,6 +1128,8 @@ class InteractiveShell:
         adapter_args: list[str],
         *,
         confirmed: bool,
+        operation_callback=None,
+        cancel_event: Event | None = None,
     ) -> DispatchResult:
         with self.renderer.loading("Continuing LoopForge run..."):
             result = continue_run(
@@ -1100,6 +1137,9 @@ class InteractiveShell:
                 adapter=adapter,
                 adapter_args=adapter_args,
                 confirmed=confirmed,
+                operation_callback=operation_callback,
+                cancel_event=cancel_event,
+                stream_output=operation_callback is None,
             )
         rows: list[tuple[str, object]] = []
         if result.attempt is not None:
@@ -1134,7 +1174,13 @@ class InteractiveShell:
             )
         return DispatchResult(0 if result.ok else 1)
 
-    def cmd_verify(self, raw: str = "") -> DispatchResult:
+    def cmd_verify(
+        self,
+        raw: str = "",
+        *,
+        operation_callback=None,
+        cancel_event: Event | None = None,
+    ) -> DispatchResult:
         parser = argparse.ArgumentParser(prog="/verify", add_help=False)
         parser.add_argument("--confirm", action="store_true")
         tokens = self.split_args(raw)
@@ -1151,7 +1197,12 @@ class InteractiveShell:
             if profile == "strict":
                 confirmed = self.confirm_if_available("Strict profile requires confirmation.")
         with self.renderer.loading("Generating patch and running verification..."):
-            result = verify_run(self.project_dir, confirmed=confirmed)
+            result = verify_run(
+                self.project_dir,
+                confirmed=confirmed,
+                operation_callback=operation_callback,
+                cancel_event=cancel_event,
+            )
         rows: list[tuple[str, object]] = [("status", "passed" if result.ok else "failed")]
         if result.verification is not None:
             patch = result.verification.get("patch", {})
@@ -1466,7 +1517,13 @@ class InteractiveShell:
         self.write(action.description)
         return DispatchResult(0)
 
-    def cmd_do(self, raw: str) -> DispatchResult:
+    def cmd_do(
+        self,
+        raw: str,
+        *,
+        operation_callback=None,
+        cancel_event: Event | None = None,
+    ) -> DispatchResult:
         action_id = raw.strip()
         if not action_id:
             self.write("usage: /do <action-id>", error=True)
@@ -1489,7 +1546,11 @@ class InteractiveShell:
             if answer.strip().lower() != "yes":
                 self.write("cancelled")
                 return DispatchResult(1)
-        return self.execute_guided_action(action)
+        return self.execute_guided_action(
+            action,
+            operation_callback=operation_callback,
+            cancel_event=cancel_event,
+        )
 
     def cmd_config(self, raw: str) -> DispatchResult:
         tokens = self.split_args(raw)

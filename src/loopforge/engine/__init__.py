@@ -6349,6 +6349,8 @@ def execute_readonly_stage(
     after_git = git_status_entries(workspace_dir)
     write_bytes(stage_dir / "adapter.stdout", stdout)
     write_bytes(stage_dir / "adapter.stderr", stderr)
+    emit_adapter_output(operation_callback, stage, "stdout", stdout)
+    emit_adapter_output(operation_callback, stage, "stderr", stderr)
     worktree_changes = readonly_worktree_changes(
         before_snapshot=before_snapshot,
         before_git=before_git,
@@ -6527,6 +6529,25 @@ def emit_operation_event(
         callback({"kind": kind, "message": message, **details})
 
 
+def emit_adapter_output(
+    callback: OperationCallback | None,
+    stage: str,
+    stream: str,
+    output: bytes,
+) -> None:
+    """Expose bounded adapter output through operation events, never terminal streams."""
+
+    if callback is None:
+        return
+    message = decode_output(output).strip()
+    if not message:
+        return
+    limit = 1200
+    if len(message) > limit:
+        message = message[: limit - 3] + "..."
+    emit_operation_event(callback, "adapter_output", f"{stage} {stream}: {message}")
+
+
 def run_streaming_process(
     command: list[str],
     cwd: Path,
@@ -6567,11 +6588,7 @@ def run_streaming_process(
                     break
                 buffer.extend(chunk)
                 if output_callback is not None:
-                    emit_operation_event(
-                        output_callback,
-                        "adapter_output",
-                        decode_output(chunk).strip() or "Adapter produced output.",
-                    )
+                    emit_adapter_output(output_callback, "adapter", "output", chunk)
                 elif stream_output:
                     binary_target = getattr(target, "buffer", None)
                     if binary_target is not None:

@@ -290,7 +290,12 @@ class LoopForgeApp(App[None]):
     def _create_run(self, task: str | None) -> None:
         if task is None or not task.strip():
             return
-        self._run_shell_operation("Create run", lambda: self.shell.cmd_run(task.strip()))
+        self._run_shell_operation(
+            "Create run",
+            lambda _emit, _cancelled: self._capture_shell_result(
+                lambda: self.shell.cmd_run(task.strip())
+            ),
+        )
 
     def action_complete_task(self) -> None:
         self.push_screen(
@@ -307,7 +312,9 @@ class LoopForgeApp(App[None]):
             return
         self._run_shell_operation(
             "Complete task contract",
-            lambda: self.shell.complete_current_task_definition(success_check.strip()),
+            lambda _emit, _cancelled: self._capture_shell_result(
+                lambda: self.shell.complete_current_task_definition(success_check.strip())
+            ),
         )
 
     def action_command(self) -> None:
@@ -332,24 +339,75 @@ class LoopForgeApp(App[None]):
         line = command.strip()
         if not line.startswith("/"):
             line = f"/{line}"
-        self._run_shell_operation("Run command", lambda: self._dispatch_slash_command(line))
+        self._run_shell_operation(
+            "Run command",
+            lambda emit, cancelled: self._dispatch_slash_command(
+                line,
+                operation_callback=emit,
+                cancel_event=cancelled,
+            ),
+        )
 
-    def _dispatch_slash_command(self, line: str) -> SimpleNamespace:
+    def _dispatch_slash_command(
+        self,
+        line: str,
+        *,
+        operation_callback=None,
+        cancel_event=None,
+    ) -> SimpleNamespace:
         """Route through the compatibility shell without writing over Textual's screen."""
+
+        command, args, implicit_run = self.shell.parse_line(line)
+        command, args = self.shell.canonical_command(command, args)
+        if implicit_run:
+            return self._capture_shell_result(lambda: self.shell.cmd_run(args))
+        if command == "continue":
+            return self._capture_shell_result(
+                lambda: self.shell.cmd_continue(
+                    args,
+                    operation_callback=operation_callback,
+                    cancel_event=cancel_event,
+                )
+            )
+        if command == "verify":
+            return self._capture_shell_result(
+                lambda: self.shell.cmd_verify(
+                    args,
+                    operation_callback=operation_callback,
+                    cancel_event=cancel_event,
+                )
+            )
+        if command == "do":
+            return self._capture_shell_result(
+                lambda: self.shell.cmd_do(
+                    args,
+                    operation_callback=operation_callback,
+                    cancel_event=cancel_event,
+                )
+            )
+        return self._capture_shell_result(lambda: self.shell.dispatch(line))
+
+    def _capture_shell_result(self, runner: Callable[[], object]) -> SimpleNamespace:
+        """Capture compatibility output so Textual remains the sole terminal writer."""
 
         captured = io.StringIO()
         original_output = self.shell.output
         original_error = self.shell.error
         original_renderer = self.shell.renderer
+        original_allow_confirmation = self.shell.allow_confirmation
         self.shell.output = captured
         self.shell.error = captured
         self.shell.renderer = TerminalRenderer(captured, mode="plain", theme=self.shell.theme)
+        # Textual owns confirmations through modal screens.  Never let a
+        # compatibility command open an ``input()`` prompt over its screen.
+        self.shell.allow_confirmation = False
         try:
-            result = self.shell.dispatch(line)
+            result = runner()
         finally:
             self.shell.output = original_output
             self.shell.error = original_error
             self.shell.renderer = original_renderer
+            self.shell.allow_confirmation = original_allow_confirmation
         output = captured.getvalue().strip()
         if len(output) > 1200:
             output = output[:1197] + "..."
@@ -382,7 +440,10 @@ class LoopForgeApp(App[None]):
 
     def _archive_confirmed(self, approved: bool) -> None:
         if approved:
-            self._run_shell_operation("Archive run", lambda: self.shell.cmd_archive())
+            self._run_shell_operation(
+                "Archive run",
+                lambda _emit, _cancelled: self._capture_shell_result(self.shell.cmd_archive),
+            )
 
     def request_action(self, action: ActionDescriptor) -> None:
         if action.executor_key == "collect-task":
@@ -416,16 +477,30 @@ class LoopForgeApp(App[None]):
         self.push_screen(ConfirmationScreen(title, lines), lambda approved: self._execute_action(action) if approved else None)
 
     def _execute_action(self, action: ActionDescriptor) -> None:
-        self._run_shell_operation(action.label, lambda: self.shell.execute_guided_action(action))
+        self._run_shell_operation(
+            action.label,
+            lambda emit, cancelled: self._capture_shell_result(
+                lambda: self.shell.execute_guided_action(
+                    action,
+                    operation_callback=emit,
+                    cancel_event=cancelled,
+                )
+            ),
+        )
 
-    def _run_shell_operation(self, label: str, runner: Callable[[], object]) -> None:
+    def _run_shell_operation(self, label: str, runner: Callable[[object, object], object]) -> None:
         if self._operation is not None and not self._operation.finished:
             self._notice = "A foreground operation is already running."
             self._render_snapshot(self._snapshot)
             return
         operation = OperationController(label)
         self.begin_operation(operation)
-        operation.start(lambda emit, cancelled: _operation_result(runner(), cancelled.is_set()))
+        operation.start(
+            lambda emit, cancelled: _operation_result(
+                runner(emit, cancelled),
+                cancelled.is_set(),
+            )
+        )
 
     def begin_operation(self, operation: OperationController) -> None:
         self._operation = operation
