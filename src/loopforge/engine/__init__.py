@@ -2006,7 +2006,12 @@ def git_toplevel(project_dir: Path) -> Path | None:
         return None
 
 
-def codex_workspace_preflight_blockers(adapter: str, workspace_dir: Path) -> list[str]:
+def codex_workspace_preflight_blockers(
+    adapter: str,
+    workspace_dir: Path,
+    *,
+    implementation: bool = False,
+) -> list[str]:
     """Return the explicit Codex trust prerequisite for a workspace, if any."""
 
     if adapter != "codex":
@@ -2015,12 +2020,20 @@ def codex_workspace_preflight_blockers(adapter: str, workspace_dir: Path) -> lis
         is_git_workspace = git_toplevel(workspace_dir) is not None
     except (OSError, subprocess.SubprocessError):
         is_git_workspace = False
-    if is_git_workspace:
-        return []
-    return [
-        "Codex requires a Git worktree. Initialize Git in this temporary project "
-        "before using Codex: `git init`."
-    ]
+    blockers: list[str] = []
+    if not is_git_workspace:
+        blockers.append(
+            "Codex requires a Git worktree. Initialize Git in this temporary project "
+            "before using Codex: `git init`."
+        )
+    if implementation:
+        try:
+            isolated = isolated_process_module()
+            policy = isolated.load_policy()
+            isolated.codex_windows_runtime_environment(os.environ, policy)
+        except ValueError as error:
+            blockers.append(f"Codex Windows sandbox runtime preflight failed: {error}")
+    return blockers
 
 
 def run_workspace_path(run: dict[str, Any], fallback_project_dir: Path) -> Path:
@@ -6619,13 +6632,18 @@ def run_streaming_process(
     output_callback: OperationCallback | None = None,
     cancel_event: threading.Event | None = None,
     stream_output: bool = True,
+    codex_windows_runtime: bool = False,
 ) -> dict[str, Any]:
     isolated_process = isolated_process_module()
     policy = isolated_process.load_policy()
     bounded_timeout = min(float(timeout_seconds), float(policy["max_timeout_seconds"]))
-    env = isolated_process.build_child_environment(
-        isolated_process.select_allowed_parent_environment(os.environ, policy),
-        policy,
+    env = (
+        isolated_process.build_codex_windows_child_environment(os.environ, policy)
+        if codex_windows_runtime
+        else isolated_process.build_child_environment(
+            isolated_process.select_allowed_parent_environment(os.environ, policy),
+            policy,
+        )
     )
     process = subprocess.Popen(
         command,
@@ -6732,6 +6750,7 @@ def adapter_protocol_command(
     workspace_dir: Path,
     stdin_file: Path | None,
     result_output: Path | None,
+    child_stderr_output: Path | None = None,
 ) -> list[str]:
     protocol = loopforge_module_command(
         "loopforge.adapters.local_implementation_adapter",
@@ -6746,6 +6765,8 @@ def adapter_protocol_command(
         protocol.extend(["--stdin-file", str(stdin_file)])
     if result_output is not None:
         protocol.extend(["--result-output", str(result_output)])
+    if child_stderr_output is not None:
+        protocol.extend(["--child-stderr-output", str(child_stderr_output)])
     protocol.extend(["--", *command])
     return protocol
 
@@ -6781,6 +6802,7 @@ def execute_adapter_command(
     operation_callback: OperationCallback | None = None,
     cancel_event: threading.Event | None = None,
     stream_output: bool = True,
+    child_stderr_output: Path | None = None,
 ) -> tuple[dict[str, Any], bytes, bytes]:
     protocol_command = adapter_protocol_command(
         adapter=adapter,
@@ -6789,6 +6811,7 @@ def execute_adapter_command(
         workspace_dir=workspace_dir,
         stdin_file=stdin_file,
         result_output=result_output,
+        child_stderr_output=child_stderr_output,
     )
     child = run_streaming_process(
         protocol_command,
@@ -6797,6 +6820,7 @@ def execute_adapter_command(
         output_callback=operation_callback,
         cancel_event=cancel_event,
         stream_output=stream_output,
+        codex_windows_runtime=adapter == "codex",
     )
     stdout = child["stdout"] if isinstance(child.get("stdout"), bytes) else b""
     stderr = child["stderr"] if isinstance(child.get("stderr"), bytes) else b""
@@ -6880,6 +6904,7 @@ def execute_attempt(
     timeout_seconds = attempt_timeout(run, contract)
 
     result_path = attempt_dir / "result.json"
+    child_stderr_path = attempt_dir / "adapter-child.stderr"
     protocol_command = adapter_protocol_command(
         adapter=adapter,
         command=command,
@@ -6887,6 +6912,7 @@ def execute_attempt(
         workspace_dir=workspace_dir,
         stdin_file=prompt_path,
         result_output=result_path,
+        child_stderr_output=child_stderr_path,
     )
     child, stdout, stderr = execute_adapter_command(
         adapter=adapter,
@@ -6895,6 +6921,7 @@ def execute_attempt(
         workspace_dir=workspace_dir,
         stdin_file=prompt_path,
         result_output=result_path,
+        child_stderr_output=child_stderr_path,
         timeout_seconds=timeout_seconds,
         operation_callback=operation_callback,
         cancel_event=cancel_event,
@@ -7013,6 +7040,11 @@ def execute_attempt(
         "prompt_path": relative_to_run(run_dir, prompt_path),
         "stdout_path": relative_to_run(run_dir, stdout_path),
         "stderr_path": relative_to_run(run_dir, stderr_path),
+        "child_stderr_path": (
+            relative_to_run(run_dir, child_stderr_path)
+            if child_stderr_path.exists()
+            else None
+        ),
         "result_path": relative_to_run(run_dir, result_path),
         "before_git_status": before_git,
         "after_git_status": after_git,
@@ -7821,7 +7853,11 @@ def continue_run(
     workspace_dir = run_workspace_path(status.run, status.project_dir)
     if not workspace_dir.exists() or not workspace_dir.is_dir():
         append_unique(blockers, f"run workspace is not available: {workspace_dir}")
-    for blocker in codex_workspace_preflight_blockers(adapter or "", workspace_dir):
+    for blocker in codex_workspace_preflight_blockers(
+        adapter or "",
+        workspace_dir,
+        implementation=adapter is not None,
+    ):
         append_unique(blockers, blocker)
     if blockers:
         return ContinueResult(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,6 +15,7 @@ from loopforge.contracts import policy_path
 from loopforge.checks import diff_policy, isolated_process
 from loopforge.engine import (
     create_run,
+    codex_workspace_preflight_blockers,
     current_status,
     initialize_project,
     list_runs,
@@ -424,6 +426,131 @@ class PackagedRuntimeLayoutTests(unittest.TestCase):
         )
 
         self.assertEqual(selected, {"PATH": "canonical"})
+
+    def test_codex_windows_runtime_environment_is_path_only_and_credential_safe(self) -> None:
+        policy = isolated_process.load_policy()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile = Path(temp_dir)
+            parent = {
+                "PATH": "safe-path",
+                "APPDATA": str(profile),
+                "LOCALAPPDATA": str(profile),
+                "USERPROFILE": str(profile),
+                "CODEX_API_KEY": "must-not-pass",
+                "HTTPS_PROXY": "must-not-pass",
+            }
+
+            child = isolated_process.build_codex_windows_child_environment(
+                parent,
+                policy,
+                windows=True,
+            )
+
+        self.assertEqual(child["APPDATA"], str(profile))
+        self.assertEqual(child["LOCALAPPDATA"], str(profile))
+        self.assertEqual(child["USERPROFILE"], str(profile))
+        self.assertEqual(child["PATH"], "safe-path")
+        self.assertNotIn("CODEX_API_KEY", child)
+        self.assertNotIn("HTTPS_PROXY", child)
+
+    def test_codex_windows_runtime_environment_rejects_missing_or_invalid_paths(self) -> None:
+        policy = isolated_process.load_policy()
+        with self.assertRaisesRegex(ValueError, "requires APPDATA"):
+            isolated_process.codex_windows_runtime_environment({}, policy, windows=True)
+        with self.assertRaisesRegex(ValueError, "existing absolute directory"):
+            isolated_process.codex_windows_runtime_environment(
+                {
+                    "APPDATA": "relative",
+                    "LOCALAPPDATA": "relative",
+                    "USERPROFILE": "relative",
+                },
+                policy,
+                windows=True,
+            )
+
+    def test_codex_windows_runtime_preflight_reports_the_environment_before_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            with (
+                mock.patch("loopforge.engine.git_toplevel", return_value=workspace),
+                mock.patch("loopforge.engine.isolated_process_module") as isolated,
+            ):
+                isolated.return_value.load_policy.return_value = {}
+                isolated.return_value.codex_windows_runtime_environment.side_effect = ValueError(
+                    "Codex Windows runtime requires APPDATA"
+                )
+                blockers = codex_workspace_preflight_blockers(
+                    "codex",
+                    workspace,
+                    implementation=True,
+                )
+
+        self.assertEqual(
+            blockers,
+            [
+                "Codex Windows sandbox runtime preflight failed: "
+                "Codex Windows runtime requires APPDATA"
+            ],
+        )
+        isolated.return_value.codex_windows_runtime_environment.assert_called_once()
+
+    def test_codex_windows_sandbox_helper_failure_is_classified(self) -> None:
+        stderr = (
+            b"ERROR codex_core::exec: exec error: windows sandbox:\n"
+            b"orchestrator_helper_launch_failed: setup refresh failed to launch helper"
+        )
+
+        self.assertEqual(
+            local_implementation_adapter.classify_codex_windows_sandbox_failure(stderr),
+            "codex_windows_sandbox_helper_launch_failed",
+        )
+        self.assertIn(
+            "sandbox helper failed to launch",
+            local_implementation_adapter.summary_for(
+                "failed",
+                subprocess.CompletedProcess(["codex"], 1, stderr=stderr),
+                False,
+                False,
+                local_implementation_adapter.load_policy(),
+                stderr=stderr,
+            ),
+        )
+
+    def test_adapter_retains_raw_child_stderr_as_evidence(self) -> None:
+        policy = local_implementation_adapter.load_policy()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            session_path = workspace / "expected-session.json"
+            child_stderr_path = workspace / "adapter-child.stderr"
+            session_path.write_text(
+                json.dumps(
+                    {
+                        "issue": 1,
+                        "risk": "low",
+                        "base_commit": "0" * 40,
+                        "workspace": str(workspace.resolve()),
+                        "runner_id": "local-adapter-fixture",
+                        "recovery_authorized": False,
+                        "preflight_sha256": "1" * 64,
+                        "start_authorization_receipt_sha256": "2" * 64,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            local_implementation_adapter.run_adapter(
+                session_path,
+                [
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stderr.write('full child stderr'); sys.exit(3)",
+                ],
+                workspace,
+                policy,
+                child_stderr_output=child_stderr_path,
+            )
+
+            self.assertEqual(child_stderr_path.read_bytes(), b"full child stderr")
 
     def test_kilo_code_is_allowlisted_and_receives_the_loopforge_prompt(self) -> None:
         policy = local_implementation_adapter.load_policy()
