@@ -5554,7 +5554,9 @@ def render_stage_prompt(
     lines = [
         f"# LoopForge {stage.title()} Stage",
         "",
-        "Produce only the requested portable Markdown artifact on stdout.",
+        "Produce exactly one complete portable Markdown artifact on stdout.",
+        "Start directly with YAML frontmatter. Do not use a fence, preface, or postscript.",
+        "Keep every required heading even when its only bounded conclusion is unknown.",
         "Do not modify the workspace. Read project files and run artifacts only.",
         "",
         "## Paths",
@@ -5631,6 +5633,20 @@ def validate_readonly_stage_artifact(stage: str, markdown: str) -> list[str]:
             f"{stage}.md is missing required sections: {', '.join(missing_sections)}."
         )
     return blockers
+
+
+def retain_rejected_readonly_artifact(*, stage_dir: Path, stage: str, content: bytes) -> Path:
+    """Keep each invalid read-only artifact candidate as inspectable evidence."""
+
+    rejected_dir = stage_dir / "rejected-artifacts"
+    rejected_dir.mkdir(parents=True, exist_ok=True)
+    index = 1
+    while True:
+        candidate_path = rejected_dir / f"{stage}-candidate-{index:03d}.md"
+        if not candidate_path.exists():
+            write_bytes(candidate_path, content)
+            return candidate_path
+        index += 1
 
 
 def readonly_worktree_changes(
@@ -6407,15 +6423,26 @@ def execute_readonly_stage(
             f"read-only {stage} stage changed the worktree: "
             + "; ".join(worktree_changes[:10])
         )
+    artifact_validation_blockers: list[str] = []
     try:
         artifact_text = stdout.decode("utf-8")
     except UnicodeDecodeError:
         artifact_text = ""
-        blockers.append(f"{stage}.md stdout must be valid UTF-8.")
+        artifact_validation_blockers.append(f"{stage}.md stdout must be valid UTF-8.")
     if not artifact_text:
-        blockers.append(f"{stage}.md stdout was empty.")
+        artifact_validation_blockers.append(f"{stage}.md stdout was empty.")
     if artifact_text:
-        blockers.extend(validate_readonly_stage_artifact(stage, artifact_text))
+        artifact_validation_blockers.extend(validate_readonly_stage_artifact(stage, artifact_text))
+    if artifact_validation_blockers:
+        rejected_artifact_path = retain_rejected_readonly_artifact(
+            stage_dir=stage_dir,
+            stage=stage,
+            content=stdout,
+        )
+        blockers.extend(artifact_validation_blockers)
+        blockers.append(
+            f"{stage}.md candidate was rejected; inspect {rejected_artifact_path}."
+        )
     if blockers:
         updated = update_run_for_stage_blocker(
             project_dir=status.project_dir,

@@ -27,6 +27,7 @@ from loopforge.engine import (
     current_status,
     execute_readonly_stage,
     loopforge_home,
+    next_readonly_stage,
     platform_cache_home,
     prepare_draft_publication,
     render_stage_prompt,
@@ -2220,6 +2221,96 @@ class CliTests(unittest.TestCase):
                 invalid_research,
             )
             self.assertIn("Research blocked", error.getvalue())
+
+    def test_readonly_research_retains_invalid_candidates_and_allows_retry(self) -> None:
+        partial_research = """---
+artifact_version: 1
+artifact: research
+issue: 1
+base_commit: 0000000000000000000000000000000000000000
+status: complete
+---
+
+# Scope
+
+Only this section is present.
+"""
+        candidates = (
+            ("empty stdout", b"", ("stdout was empty",)),
+            ("invalid Markdown", b"# Research\n\nFree-form response.\n", ("YAML frontmatter",)),
+            (
+                "partial headings",
+                partial_research.encode("utf-8"),
+                ("Current State", "Evidence", "Risks And Unknowns"),
+            ),
+        )
+        for name, candidate, expected_blockers in candidates:
+            with self.subTest(candidate=name), tempfile.TemporaryDirectory() as temp_dir:
+                workspace = Path(temp_dir)
+                repo = workspace / "project"
+                repo.mkdir()
+                self.initialize_git_project(repo)
+                loopforge_home = workspace / "home"
+                invalid_command = [
+                    fixture_python(),
+                    "-c",
+                    f"import sys; sys.stdout.buffer.write({candidate!r})",
+                ]
+                with (
+                    mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                    working_directory(repo),
+                    contextlib.redirect_stdout(io.StringIO()),
+                ):
+                    self.assertEqual(main(["init"]), 0)
+                    self.assertEqual(
+                        main(
+                            [
+                                "run",
+                                "--task",
+                                "Diagnose rejected researcher output",
+                                "--success-check",
+                                "Tests pass",
+                            ]
+                        ),
+                        0,
+                    )
+                    run_dir = self.approve_current_run(repo, loopforge_home)
+                    blocked = execute_readonly_stage(
+                        repo,
+                        stage="research",
+                        adapter="local-adapter-fixture",
+                        adapter_args=invalid_command,
+                    )
+
+                    rejected_path = (
+                        run_dir
+                        / "artifacts"
+                        / "stages"
+                        / "research"
+                        / "rejected-artifacts"
+                        / "research-candidate-001.md"
+                    )
+                    self.assertFalse(blocked.ok)
+                    self.assertEqual(rejected_path.read_bytes(), candidate)
+                    self.assertIn(str(rejected_path), "\n".join(blocked.blockers))
+                    for expected in expected_blockers:
+                        self.assertIn(expected, "\n".join(blocked.blockers))
+                    self.assertEqual(next_readonly_stage(blocked.run or {}), "research")
+
+                    recovered = execute_readonly_stage(
+                        repo,
+                        stage="research",
+                        adapter="local-adapter-fixture",
+                        adapter_args=[
+                            fixture_python(),
+                            "-c",
+                            f"import sys; sys.stdout.write({valid_research_markdown()!r})",
+                        ],
+                    )
+
+                self.assertTrue(recovered.ok)
+                self.assertEqual((run_dir / "research.md").read_text(encoding="utf-8"), valid_research_markdown())
+                self.assertEqual(rejected_path.read_bytes(), candidate)
 
     def test_run_no_input_does_not_execute_available_readonly_stage(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
