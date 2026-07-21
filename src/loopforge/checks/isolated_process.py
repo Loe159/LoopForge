@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import json
+import os
 import queue
+import shutil
 import subprocess
 import threading
 import time
@@ -31,6 +33,11 @@ EXPECTED_POLICY: dict[str, Any] = {
         "TEMP",
         "TMP",
         "WINDIR",
+    ],
+    "codex_windows_runtime_parent_variables": [
+        "APPDATA",
+        "LOCALAPPDATA",
+        "USERPROFILE",
     ],
     "fixed_child_environment": {
         "AGENT_RUNNER_ENVIRONMENT_MODE": "isolated",
@@ -113,9 +120,92 @@ def build_child_environment(
     return child
 
 
+def codex_windows_runtime_environment(
+    parent: Mapping[str, str],
+    policy: dict[str, Any],
+    *,
+    windows: bool | None = None,
+) -> dict[str, str]:
+    """Return the small, path-only Codex runtime extension on Windows.
+
+    These variables identify Windows profile/runtime directories; they do not
+    inherit credential values, proxy settings, or arbitrary parent variables.
+    Codex needs them to start its workspace sandbox helper.  Values must name
+    existing absolute directories so a malformed parent environment is blocked
+    before an adapter attempt begins.
+    """
+
+    if windows is None:
+        windows = os.name == "nt"
+    if not windows:
+        return {}
+    names = parent_name_index(parent)
+    runtime_names = policy.get("codex_windows_runtime_parent_variables", [])
+    if not isinstance(runtime_names, list) or runtime_names != [
+        "APPDATA",
+        "LOCALAPPDATA",
+        "USERPROFILE",
+    ]:
+        raise ValueError("Codex Windows runtime environment policy does not match")
+    runtime: dict[str, str] = {}
+    for name in runtime_names:
+        if name not in names:
+            raise ValueError(f"Codex Windows runtime requires {name}")
+        value = parent[names[name]]
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"Codex Windows runtime {name} must be a non-empty path")
+        path = Path(value)
+        if not path.is_absolute() or not path.is_dir():
+            raise ValueError(
+                f"Codex Windows runtime {name} must be an existing absolute directory"
+            )
+        runtime[name] = value
+    return runtime
+
+
+def build_codex_windows_child_environment(
+    parent: Mapping[str, str],
+    policy: dict[str, Any],
+    *,
+    windows: bool | None = None,
+) -> dict[str, str]:
+    """Build a normal isolated environment plus validated Codex runtime paths."""
+
+    child = build_child_environment(parent, policy)
+    child.update(codex_windows_runtime_environment(parent, policy, windows=windows))
+    return child
+
+
 def is_windows_app_execution_alias(path: Path) -> bool:
     normalized = str(path).replace("/", "\\").upper()
     return "\\APPDATA\\LOCAL\\MICROSOFT\\WINDOWSAPPS\\" in normalized
+
+
+def resolve_child_executable(command: Sequence[str]) -> list[str]:
+    """Resolve a command name to the executable selected by the current PATH.
+
+    Windows does not resolve ``kilo`` to the npm-installed ``kilo.cmd`` when
+    ``subprocess`` is invoked with ``shell=False``.  Resolve it before the
+    isolated process is started, preserving the no-shell execution boundary.
+    """
+
+    if not command:
+        raise ValueError("Child command must not be empty")
+    resolved = list(command)
+    executable = Path(resolved[0])
+    if not executable.is_absolute():
+        found = shutil.which(resolved[0])
+        if not found:
+            raise FileNotFoundError(f"agent executable not found: {resolved[0]}")
+        executable = Path(found)
+    try:
+        executable = executable.resolve(strict=True)
+    except OSError as error:
+        raise FileNotFoundError(f"agent executable not found: {resolved[0]}") from error
+    if not executable.is_file():
+        raise FileNotFoundError(f"agent executable is not a regular file: {resolved[0]}")
+    resolved[0] = str(executable)
+    return resolved
 
 
 def validate_command(command: Sequence[str], cwd: Path, policy: dict[str, Any]) -> list[str]:

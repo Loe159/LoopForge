@@ -20,6 +20,7 @@ from typing import Any, Callable
 from loopforge.adapters.kilo_code import (
     DEFAULT_IMPLEMENTATION_AGENT,
     DEFAULT_READONLY_AGENT,
+    command_without_windows_batch_launcher as kilo_command_without_windows_batch_launcher,
     command_with_prompt as kilo_command_with_prompt,
     headless_run_command as kilo_headless_run_command,
     is_kilo_run_command,
@@ -1470,8 +1471,9 @@ def markdown_sections(markdown: str) -> dict[str, list[str]]:
     sections: dict[str, list[str]] = {}
     current: str | None = None
     for line in markdown.splitlines():
-        if line.startswith("# "):
-            current = line[2:].strip()
+        heading = re.match(r"^#{1,6}[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$", line)
+        if heading:
+            current = heading.group(1).strip()
             sections[current] = []
             continue
         if current is not None:
@@ -2004,6 +2006,36 @@ def git_toplevel(project_dir: Path) -> Path | None:
         return Path(result.stdout.strip()).resolve()
     except OSError:
         return None
+
+
+def codex_workspace_preflight_blockers(
+    adapter: str,
+    workspace_dir: Path,
+    *,
+    implementation: bool = False,
+) -> list[str]:
+    """Return the explicit Codex trust prerequisite for a workspace, if any."""
+
+    if adapter != "codex":
+        return []
+    try:
+        is_git_workspace = git_toplevel(workspace_dir) is not None
+    except (OSError, subprocess.SubprocessError):
+        is_git_workspace = False
+    blockers: list[str] = []
+    if not is_git_workspace:
+        blockers.append(
+            "Codex requires a Git worktree. Initialize Git in this temporary project "
+            "before using Codex: `git init`."
+        )
+    if implementation:
+        try:
+            isolated = isolated_process_module()
+            policy = isolated.load_policy()
+            isolated.codex_windows_runtime_environment(os.environ, policy)
+        except ValueError as error:
+            blockers.append(f"Codex Windows sandbox runtime preflight failed: {error}")
+    return blockers
 
 
 def run_workspace_path(run: dict[str, Any], fallback_project_dir: Path) -> Path:
@@ -5032,21 +5064,8 @@ def command_for_readonly_stage(
 
 def resolve_child_executable(command: list[str]) -> list[str]:
     """Return a command whose executable is an absolute, non-symlink file."""
-    resolved = list(command)
-    executable = Path(resolved[0])
-    if not executable.is_absolute():
-        found = shutil.which(resolved[0])
-        if not found:
-            raise FileNotFoundError(f"agent executable not found: {resolved[0]}")
-        executable = Path(found)
-    try:
-        executable = executable.resolve(strict=True)
-    except OSError as error:
-        raise FileNotFoundError(f"agent executable not found: {resolved[0]}") from error
-    if not executable.is_file():
-        raise FileNotFoundError(f"agent executable is not a regular file: {resolved[0]}")
-    resolved[0] = str(executable)
-    return resolved
+
+    return isolated_process_module().resolve_child_executable(command)
 
 
 def execute_readonly_adapter_command(
@@ -5061,6 +5080,8 @@ def execute_readonly_adapter_command(
     prepared_command = (
         kilo_command_with_prompt(resolved, decode_output(prompt)) if kilo_prompted else resolved
     )
+    if kilo_prompted:
+        prepared_command = kilo_command_without_windows_batch_launcher(prepared_command)
     isolated = isolated_process_module()
     policy = isolated.load_policy()
     isolated.validate_command(prepared_command, project_dir, policy)
@@ -5537,7 +5558,9 @@ def render_stage_prompt(
     lines = [
         f"# LoopForge {stage.title()} Stage",
         "",
-        "Produce only the requested portable Markdown artifact on stdout.",
+        "Produce exactly one complete portable Markdown artifact on stdout.",
+        "Start directly with YAML frontmatter. Do not use a fence, preface, or postscript.",
+        "Keep every required heading even when its only bounded conclusion is unknown.",
         "Do not modify the workspace. Read project files and run artifacts only.",
         "",
         "## Paths",
@@ -5614,6 +5637,20 @@ def validate_readonly_stage_artifact(stage: str, markdown: str) -> list[str]:
             f"{stage}.md is missing required sections: {', '.join(missing_sections)}."
         )
     return blockers
+
+
+def retain_rejected_readonly_artifact(*, stage_dir: Path, stage: str, content: bytes) -> Path:
+    """Keep each invalid read-only artifact candidate as inspectable evidence."""
+
+    rejected_dir = stage_dir / "rejected-artifacts"
+    rejected_dir.mkdir(parents=True, exist_ok=True)
+    index = 1
+    while True:
+        candidate_path = rejected_dir / f"{stage}-candidate-{index:03d}.md"
+        if not candidate_path.exists():
+            write_bytes(candidate_path, content)
+            return candidate_path
+        index += 1
 
 
 def readonly_worktree_changes(
@@ -5906,6 +5943,13 @@ def approve_plan(
     plan_path = status.run_dir / "plan.md"
     if not plan_path.exists():
         blockers.append("plan approval requires plan.md in the run directory.")
+    elif not blockers:
+        try:
+            plan_text = plan_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            blockers.append(f"plan approval could not read plan.md: {error}")
+        else:
+            blockers.extend(validate_readonly_stage_artifact("plan", plan_text))
     if blockers:
         return StageResult(
             project_dir=status.project_dir,
@@ -6263,6 +6307,25 @@ def execute_readonly_stage(
             blockers=blockers,
         )
 
+    blockers = codex_workspace_preflight_blockers(adapter, workspace_dir)
+    if blockers:
+        updated = update_run_for_stage_blocker(
+            project_dir=status.project_dir,
+            run_json_path=run_json_path,
+            run=run,
+            stage=stage,
+            blockers=blockers,
+        )
+        return StageResult(
+            project_dir=status.project_dir,
+            run_dir=status.run_dir,
+            run=updated,
+            stage=stage,
+            ok=False,
+            message=f"LoopForge {stage} stage is blocked by the Codex preflight.",
+            blockers=blockers,
+        )
+
     stage_dir = status.run_dir / "artifacts" / "stages" / stage
     stage_dir.mkdir(parents=True, exist_ok=True)
     emit_operation_event(
@@ -6349,6 +6412,8 @@ def execute_readonly_stage(
     after_git = git_status_entries(workspace_dir)
     write_bytes(stage_dir / "adapter.stdout", stdout)
     write_bytes(stage_dir / "adapter.stderr", stderr)
+    emit_adapter_output(operation_callback, stage, "stdout", stdout)
+    emit_adapter_output(operation_callback, stage, "stderr", stderr)
     worktree_changes = readonly_worktree_changes(
         before_snapshot=before_snapshot,
         before_git=before_git,
@@ -6369,15 +6434,26 @@ def execute_readonly_stage(
             f"read-only {stage} stage changed the worktree: "
             + "; ".join(worktree_changes[:10])
         )
+    artifact_validation_blockers: list[str] = []
     try:
         artifact_text = stdout.decode("utf-8")
     except UnicodeDecodeError:
         artifact_text = ""
-        blockers.append(f"{stage}.md stdout must be valid UTF-8.")
+        artifact_validation_blockers.append(f"{stage}.md stdout must be valid UTF-8.")
     if not artifact_text:
-        blockers.append(f"{stage}.md stdout was empty.")
+        artifact_validation_blockers.append(f"{stage}.md stdout was empty.")
     if artifact_text:
-        blockers.extend(validate_readonly_stage_artifact(stage, artifact_text))
+        artifact_validation_blockers.extend(validate_readonly_stage_artifact(stage, artifact_text))
+    if artifact_validation_blockers:
+        rejected_artifact_path = retain_rejected_readonly_artifact(
+            stage_dir=stage_dir,
+            stage=stage,
+            content=stdout,
+        )
+        blockers.extend(artifact_validation_blockers)
+        blockers.append(
+            f"{stage}.md candidate was rejected; inspect {rejected_artifact_path}."
+        )
     if blockers:
         updated = update_run_for_stage_blocker(
             project_dir=status.project_dir,
@@ -6527,6 +6603,25 @@ def emit_operation_event(
         callback({"kind": kind, "message": message, **details})
 
 
+def emit_adapter_output(
+    callback: OperationCallback | None,
+    stage: str,
+    stream: str,
+    output: bytes,
+) -> None:
+    """Expose bounded adapter output through operation events, never terminal streams."""
+
+    if callback is None:
+        return
+    message = decode_output(output).strip()
+    if not message:
+        return
+    limit = 1200
+    if len(message) > limit:
+        message = message[: limit - 3] + "..."
+    emit_operation_event(callback, "adapter_output", f"{stage} {stream}: {message}")
+
+
 def run_streaming_process(
     command: list[str],
     cwd: Path,
@@ -6535,13 +6630,18 @@ def run_streaming_process(
     output_callback: OperationCallback | None = None,
     cancel_event: threading.Event | None = None,
     stream_output: bool = True,
+    codex_windows_runtime: bool = False,
 ) -> dict[str, Any]:
     isolated_process = isolated_process_module()
     policy = isolated_process.load_policy()
     bounded_timeout = min(float(timeout_seconds), float(policy["max_timeout_seconds"]))
-    env = isolated_process.build_child_environment(
-        isolated_process.select_allowed_parent_environment(os.environ, policy),
-        policy,
+    env = (
+        isolated_process.build_codex_windows_child_environment(os.environ, policy)
+        if codex_windows_runtime
+        else isolated_process.build_child_environment(
+            isolated_process.select_allowed_parent_environment(os.environ, policy),
+            policy,
+        )
     )
     process = subprocess.Popen(
         command,
@@ -6567,11 +6667,7 @@ def run_streaming_process(
                     break
                 buffer.extend(chunk)
                 if output_callback is not None:
-                    emit_operation_event(
-                        output_callback,
-                        "adapter_output",
-                        decode_output(chunk).strip() or "Adapter produced output.",
-                    )
+                    emit_adapter_output(output_callback, "adapter", "output", chunk)
                 elif stream_output:
                     binary_target = getattr(target, "buffer", None)
                     if binary_target is not None:
@@ -6652,6 +6748,7 @@ def adapter_protocol_command(
     workspace_dir: Path,
     stdin_file: Path | None,
     result_output: Path | None,
+    child_stderr_output: Path | None = None,
 ) -> list[str]:
     protocol = loopforge_module_command(
         "loopforge.adapters.local_implementation_adapter",
@@ -6666,6 +6763,8 @@ def adapter_protocol_command(
         protocol.extend(["--stdin-file", str(stdin_file)])
     if result_output is not None:
         protocol.extend(["--result-output", str(result_output)])
+    if child_stderr_output is not None:
+        protocol.extend(["--child-stderr-output", str(child_stderr_output)])
     protocol.extend(["--", *command])
     return protocol
 
@@ -6701,6 +6800,7 @@ def execute_adapter_command(
     operation_callback: OperationCallback | None = None,
     cancel_event: threading.Event | None = None,
     stream_output: bool = True,
+    child_stderr_output: Path | None = None,
 ) -> tuple[dict[str, Any], bytes, bytes]:
     protocol_command = adapter_protocol_command(
         adapter=adapter,
@@ -6709,6 +6809,7 @@ def execute_adapter_command(
         workspace_dir=workspace_dir,
         stdin_file=stdin_file,
         result_output=result_output,
+        child_stderr_output=child_stderr_output,
     )
     child = run_streaming_process(
         protocol_command,
@@ -6717,6 +6818,7 @@ def execute_adapter_command(
         output_callback=operation_callback,
         cancel_event=cancel_event,
         stream_output=stream_output,
+        codex_windows_runtime=adapter == "codex",
     )
     stdout = child["stdout"] if isinstance(child.get("stdout"), bytes) else b""
     stderr = child["stderr"] if isinstance(child.get("stderr"), bytes) else b""
@@ -6800,6 +6902,7 @@ def execute_attempt(
     timeout_seconds = attempt_timeout(run, contract)
 
     result_path = attempt_dir / "result.json"
+    child_stderr_path = attempt_dir / "adapter-child.stderr"
     protocol_command = adapter_protocol_command(
         adapter=adapter,
         command=command,
@@ -6807,6 +6910,7 @@ def execute_attempt(
         workspace_dir=workspace_dir,
         stdin_file=prompt_path,
         result_output=result_path,
+        child_stderr_output=child_stderr_path,
     )
     child, stdout, stderr = execute_adapter_command(
         adapter=adapter,
@@ -6815,6 +6919,7 @@ def execute_attempt(
         workspace_dir=workspace_dir,
         stdin_file=prompt_path,
         result_output=result_path,
+        child_stderr_output=child_stderr_path,
         timeout_seconds=timeout_seconds,
         operation_callback=operation_callback,
         cancel_event=cancel_event,
@@ -6933,6 +7038,11 @@ def execute_attempt(
         "prompt_path": relative_to_run(run_dir, prompt_path),
         "stdout_path": relative_to_run(run_dir, stdout_path),
         "stderr_path": relative_to_run(run_dir, stderr_path),
+        "child_stderr_path": (
+            relative_to_run(run_dir, child_stderr_path)
+            if child_stderr_path.exists()
+            else None
+        ),
         "result_path": relative_to_run(run_dir, result_path),
         "before_git_status": before_git,
         "after_git_status": after_git,
@@ -7741,6 +7851,12 @@ def continue_run(
     workspace_dir = run_workspace_path(status.run, status.project_dir)
     if not workspace_dir.exists() or not workspace_dir.is_dir():
         append_unique(blockers, f"run workspace is not available: {workspace_dir}")
+    for blocker in codex_workspace_preflight_blockers(
+        adapter or "",
+        workspace_dir,
+        implementation=adapter is not None,
+    ):
+        append_unique(blockers, blocker)
     if blockers:
         return ContinueResult(
             project_dir=status.project_dir,

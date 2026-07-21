@@ -11,6 +11,7 @@ import threading
 import unittest
 from unittest import mock
 
+from loopforge.engine import run_streaming_process
 from loopforge.cli.interactive import InteractiveShell, run_interactive
 from loopforge.cli.operations import ForegroundOperation
 from loopforge.cli.tui import run_fullscreen_console
@@ -67,6 +68,33 @@ class CliTuiTests(unittest.TestCase):
         self.assertTrue(any(event.kind == "check_started" for event in events))
         self.assertTrue(any(event.kind == "cancellation_requested" for event in events))
         self.assertTrue(any(event.kind == "cancelled" for event in events))
+
+    def test_tui_operation_streams_adapter_output_only_as_events(self) -> None:
+        operation = ForegroundOperation("Implementation")
+
+        def runner(emit, cancel_event):  # type: ignore[no-untyped-def]
+            result = run_streaming_process(
+                [sys.executable, "-c", "import sys; print('adapter stdout'); print('adapter stderr', file=sys.stderr)"],
+                Path.cwd(),
+                10,
+                output_callback=emit,
+                cancel_event=cancel_event,
+            )
+            return type("Result", (), {"ok": result["returncode"] == 0, "message": "Adapter finished."})()
+
+        terminal_stdout = io.StringIO()
+        terminal_stderr = io.StringIO()
+        with contextlib.redirect_stdout(terminal_stdout), contextlib.redirect_stderr(terminal_stderr):
+            operation.start(runner)
+            operation._thread.join(timeout=5)  # type: ignore[attr-defined]
+
+        self.assertTrue(operation.finished)
+        self.assertEqual(terminal_stdout.getvalue(), "")
+        self.assertEqual(terminal_stderr.getvalue(), "")
+        events = operation.collect_events()
+        adapter_messages = [event.message for event in events if event.kind == "adapter_output"]
+        self.assertTrue(any("adapter stdout" in message for message in adapter_messages))
+        self.assertTrue(any("adapter stderr" in message for message in adapter_messages))
 
 
 if __name__ == "__main__":

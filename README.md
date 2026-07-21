@@ -63,6 +63,11 @@ limited to a deterministic local draft artifact under the run directory.
 LoopForge does not push branches, open PRs, or publish to the network from this
 workflow.
 
+Codex stages require a Git worktree. For a temporary non-Git project,
+LoopForge blocks before launching Codex and directs the operator to run
+`git init`; it never initializes Git automatically or passes Codex's
+repository-check bypass.
+
 ## Packs
 
 A pack is a complete workflow capability, not only a detection rule. Its

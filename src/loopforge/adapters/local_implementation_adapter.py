@@ -12,7 +12,11 @@ import threading
 from pathlib import Path
 from typing import Any, Sequence
 
-from loopforge.adapters.kilo_code import command_with_prompt, is_kilo_command
+from loopforge.adapters.kilo_code import (
+    command_without_windows_batch_launcher,
+    command_with_prompt,
+    is_kilo_command,
+)
 from loopforge.checks import isolated_process, validate_implementation_result
 from loopforge.contracts import policy_path
 
@@ -209,6 +213,19 @@ def is_codex_json_stream(command: Sequence[str]) -> bool:
     return is_codex_command(command) and "--json" in command
 
 
+def classify_codex_windows_sandbox_failure(stderr: bytes) -> str | None:
+    """Recognize the Codex helper failure before it is reduced to no changes."""
+
+    message = stderr.decode("utf-8", errors="replace").lower()
+    if (
+        "windows sandbox" in message
+        and "orchestrator_helper_launch_failed" in message
+        and "helper" in message
+    ):
+        return "codex_windows_sandbox_helper_launch_failed"
+    return None
+
+
 def nested_value(value: object, names: set[str]) -> object | None:
     if isinstance(value, dict):
         for key, item in value.items():
@@ -334,9 +351,16 @@ def summary_for(
     policy: dict[str, Any],
     *,
     fixture: bool = False,
+    stderr: bytes = b"",
 ) -> str:
     command_name = "Fixture command" if fixture else "Implementation command"
-    if timed_out:
+    failure = classify_codex_windows_sandbox_failure(stderr)
+    if failure is not None:
+        text = (
+            "Codex Windows workspace sandbox helper failed to launch before "
+            "implementation; inspect the retained child stderr evidence."
+        )
+    elif timed_out:
         text = f"{command_name} timed out."
     elif completed is None:
         text = f"{command_name} was not run."
@@ -381,6 +405,7 @@ def run_adapter(
     workspace: Path,
     policy: dict[str, Any],
     stdin_file: Path | None = None,
+    child_stderr_output: Path | None = None,
     stream_output: bool = False,
 ) -> bytes:
     if not command:
@@ -411,13 +436,21 @@ def run_adapter(
         )
         return validate_implementation_result.canonical_result_bytes(value)
 
-    prepared_command = command_with_kilo_prompt(command, stdin_file)
+    resolved_command = isolated_process.resolve_child_executable(
+        command_with_kilo_prompt(command, stdin_file)
+    )
+    kilo_prepared = is_kilo_command(resolved_command)
+    prepared_command = (
+        command_without_windows_batch_launcher(resolved_command)
+        if kilo_prepared
+        else resolved_command
+    )
     completed: subprocess.CompletedProcess[bytes] | None = None
     timed_out = False
     try:
         stdin_handle = (
             stdin_file.open("rb")
-            if stdin_file is not None and not is_kilo_command(prepared_command)
+            if stdin_file is not None and not kilo_prepared
             else None
         )
         isolation_policy = isolated_process.load_policy()
@@ -428,12 +461,19 @@ def run_adapter(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             shell=False,
-            env=isolated_process.build_child_environment(
-                isolated_process.select_allowed_parent_environment(
+            env=(
+                isolated_process.build_codex_windows_child_environment(
                     os.environ,
                     isolation_policy,
-                ),
-                isolation_policy,
+                )
+                if is_codex_command(prepared_command)
+                else isolated_process.build_child_environment(
+                    isolated_process.select_allowed_parent_environment(
+                        os.environ,
+                        isolation_policy,
+                    ),
+                    isolation_policy,
+                )
             ),
         )
         stdout_buffer = bytearray()
@@ -515,6 +555,9 @@ def run_adapter(
             stderr=(error.stderr or b""),
         )
 
+    if child_stderr_output is not None:
+        child_stderr_output.parent.mkdir(parents=True, exist_ok=True)
+        child_stderr_output.write_bytes(completed.stderr or b"")
     output_size = len(completed.stdout or b"") + len(completed.stderr or b"")
     current_git_paths = git_status_paths(workspace)
     if current_git_paths is None:
@@ -528,16 +571,17 @@ def run_adapter(
     else:
         status = "blocked"
     summary = summary_for(
-    status,
-    completed,
-    timed_out,
-    changed,
-    policy,
-    fixture=(
-        stream_output
-        and session["runner_id"] in policy["fixture_runner_ids"]
-    ),
-)
+        status,
+        completed,
+        timed_out,
+        changed,
+        policy,
+        fixture=(
+            stream_output
+            and session["runner_id"] in policy["fixture_runner_ids"]
+        ),
+        stderr=completed.stderr or b"",
+    )
     if output_size > policy["max_child_output_bytes"]:
         summary = "Implementation command exceeded the adapter output limit."
     value = result_value(session, status, summary, changed)
@@ -550,6 +594,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workspace", type=Path, default=Path.cwd())
     parser.add_argument("--stdin-file", type=Path)
     parser.add_argument("--result-output", type=Path)
+    parser.add_argument("--child-stderr-output", type=Path)
     parser.add_argument("command", nargs=argparse.REMAINDER)
     return parser
 
@@ -572,6 +617,7 @@ def main() -> int:
             args.workspace,
             load_policy(),
             stdin_file=args.stdin_file,
+            child_stderr_output=args.child_stderr_output,
             stream_output=args.result_output is not None,
         )
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as error:

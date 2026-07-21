@@ -14,6 +14,11 @@
     "TMP",
     "WINDIR"
   ],
+  "codex_windows_runtime_parent_variables": [
+    "APPDATA",
+    "LOCALAPPDATA",
+    "USERPROFILE"
+  ],
   "fixed_child_environment": {
     "AGENT_RUNNER_ENVIRONMENT_MODE": "isolated",
     "PYTHONIOENCODING": "utf-8",

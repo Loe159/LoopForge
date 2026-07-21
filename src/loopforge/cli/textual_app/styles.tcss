@@ -54,7 +54,7 @@ Screen {
     margin: 1 0;
 }
 
-#confirmation-dialog, #entry-dialog {
+#confirmation-dialog, #entry-dialog, #adapter-dialog {
     width: 70%;
     max-width: 90;
     height: auto;
@@ -70,6 +70,14 @@ Screen {
 
 #confirmation-evidence, #entry-value {
     margin: 1 0;
+}
+
+#adapter-options, #adapter-args {
+    margin: 1 0;
+}
+
+#adapter-options {
+    height: 12;
 }
 
 .width-60 #main-content {

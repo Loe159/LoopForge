@@ -32,6 +32,13 @@ and compatibility launchers together. Do not weaken shell prohibition,
 timeouts, capture limits, secret checks, or network/publication fields without
 an explicit product decision.
 
+For a Codex implementation on Windows only, the isolation policy forwards the
+validated directory values `APPDATA`, `LOCALAPPDATA`, and `USERPROFILE` so the
+Codex workspace sandbox helper can start. They are runtime paths, not
+credentials. Do not add `HOME`, proxy variables, API keys, or arbitrary parent
+environment inheritance to this exception; keep the allow-list and its path
+validation in `checks/isolated_process.py` and its policy together.
+
 ## Packs and templates
 
 **Paths:** `src/loopforge/packs/`, `src/loopforge/templates/`, and project

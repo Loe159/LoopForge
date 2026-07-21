@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Sequence
 
@@ -12,7 +13,11 @@ DEFAULT_READONLY_AGENT = "ask"
 def is_kilo_command(command: Sequence[str]) -> bool:
     """Return whether *command* invokes the Kilo Code CLI."""
 
-    return bool(command) and Path(command[0]).name.lower() in {"kilo", "kilo.exe"}
+    return bool(command) and Path(command[0]).name.lower() in {
+        "kilo",
+        "kilo.exe",
+        "kilo.cmd",
+    }
 
 
 def is_kilo_run_command(command: Sequence[str]) -> bool:
@@ -50,3 +55,33 @@ def command_with_prompt(command: Sequence[str], prompt: str) -> list[str]:
     if not prompt.strip():
         raise ValueError("kilo-code prompt must not be empty")
     return [*prepared, prompt]
+
+
+def command_without_windows_batch_launcher(command: Sequence[str]) -> list[str]:
+    """Bypass ``kilo.cmd`` so multiline prompt arguments remain intact.
+
+    Python starts Windows batch launchers through ``cmd.exe`` even with
+    ``shell=False``. Newlines inside a positional argument are then truncated,
+    so Kilo receives only the first line of a LoopForge prompt. Invoke the
+    packaged JavaScript entry point with Node directly while preserving the
+    exact argument list and the no-shell boundary.
+    """
+
+    prepared = list(command)
+    if not prepared or Path(prepared[0]).name.lower() != "kilo.cmd":
+        return prepared
+    launcher = Path(prepared[0]).resolve(strict=True)
+    entrypoint = launcher.parent / "node_modules" / "@kilocode" / "cli" / "bin" / "kilo"
+    if not entrypoint.is_file():
+        raise FileNotFoundError(f"Kilo Code entry point not found: {entrypoint}")
+    node = launcher.with_name("node.exe")
+    if not node.is_file():
+        found = shutil.which("node.exe") or shutil.which("node")
+        if not found:
+            raise FileNotFoundError("Node.js executable not found for kilo.cmd")
+        node = Path(found)
+    return [
+        str(node.resolve(strict=True)),
+        str(entrypoint.resolve(strict=True)),
+        *prepared[1:],
+    ]
