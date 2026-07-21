@@ -29,6 +29,17 @@ async def wait_for_condition(pilot, predicate, description: str) -> None:  # typ
     "Textual is an installed runtime dependency",
 )
 class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_terminal_native_theme_tracks_the_shell_preference(self) -> None:
+        from loopforge.cli.textual_app import LoopForgeApp
+
+        shell = SimpleNamespace(project_dir=Path.cwd(), theme="light")
+        app = LoopForgeApp(shell, load_on_mount=False)
+        self.assertEqual(app.theme, "ansi-light")
+
+        shell.theme = "dark"
+        app._apply_shell_theme()
+        self.assertEqual(app.theme, "ansi-dark")
+
     async def open_current_run_with_pilot(self, app, pilot):  # type: ignore[no-untyped-def]
         """Reach the selected run using only the public keyboard route."""
 

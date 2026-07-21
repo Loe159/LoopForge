@@ -40,6 +40,23 @@ if TYPE_CHECKING:
 SCREENS = ("home", "project", "run", "evidence", "settings")
 
 
+TEXTUAL_THEME_BY_PREFERENCE = {
+    # The ANSI themes leave surface and panel colors at the terminal default.
+    # That lets the full-screen console inherit a black, blue, white, or custom
+    # terminal background instead of painting Textual's own backdrop over it.
+    "default": "ansi-dark",
+    "dark": "ansi-dark",
+    "light": "ansi-light",
+    "mono": "ansi-dark",
+}
+
+
+def textual_theme_name(preference: str) -> str:
+    """Return the terminal-native Textual theme for a LoopForge preference."""
+
+    return TEXTUAL_THEME_BY_PREFERENCE.get(preference, TEXTUAL_THEME_BY_PREFERENCE["default"])
+
+
 class LoopForgeActionProvider(Provider):
     """Expose the shared action descriptors in Textual's command palette."""
 
@@ -98,6 +115,7 @@ class LoopForgeApp(App[None]):
     ) -> None:
         super().__init__()
         self.shell = shell
+        self._apply_shell_theme()
         self.store = StateStore(shell.project_dir)
         self._snapshot = snapshot or self.store.snapshot
         self._load_on_mount = load_on_mount
@@ -606,6 +624,7 @@ class LoopForgeApp(App[None]):
         self._render_snapshot(self._snapshot)
 
     def _render_snapshot(self, snapshot: UiSnapshot) -> None:
+        self._apply_shell_theme()
         self._snapshot = snapshot
         title, body, help_text = self._screen_view(snapshot)
         self.query_one("#screen-title", Static).update(title)
@@ -613,6 +632,13 @@ class LoopForgeApp(App[None]):
         self.query_one("#screen-body", Static).update(body)
         self.query_one("#screen-notice", Static).update(self._notice or self._operation_text(snapshot))
         self.query_one("#screen-help", Static).update(help_text)
+
+    def _apply_shell_theme(self) -> None:
+        """Keep the TUI palette aligned with the shell's persisted theme."""
+
+        theme = textual_theme_name(str(getattr(self.shell, "theme", "default")))
+        if self.theme != theme:
+            self.theme = theme
 
     def _screen_view(self, snapshot: UiSnapshot) -> tuple[str, str, str]:
         if self._screen == "home":

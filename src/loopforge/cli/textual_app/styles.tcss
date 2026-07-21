@@ -5,6 +5,12 @@ Screen {
     color: $text;
 }
 
+/* Use the terminal-native ANSI surface for the complete chrome as well. */
+Header, Footer {
+    background: $surface;
+    color: $text;
+}
+
 #main-content {
     height: 1fr;
     padding: 1 2;

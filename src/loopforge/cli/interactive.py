@@ -360,7 +360,8 @@ class InteractiveShell:
 
             def protect_quoted_path(match: re.Match[str]) -> str:
                 quote, path = match.group(1), match.group(2)
-                return quote + path.replace("\\", marker) + quote
+                protected_path = path.replace("\\", marker)
+                return f"{quote}{protected_path}{quote}"
 
             protected = re.sub(
                 r"(['\"])([A-Za-z]:\\.*?)(?:\1)",
