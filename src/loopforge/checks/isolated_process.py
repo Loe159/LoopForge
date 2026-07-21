@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import shutil
 import subprocess
 import threading
 import time
@@ -178,6 +179,33 @@ def build_codex_windows_child_environment(
 def is_windows_app_execution_alias(path: Path) -> bool:
     normalized = str(path).replace("/", "\\").upper()
     return "\\APPDATA\\LOCAL\\MICROSOFT\\WINDOWSAPPS\\" in normalized
+
+
+def resolve_child_executable(command: Sequence[str]) -> list[str]:
+    """Resolve a command name to the executable selected by the current PATH.
+
+    Windows does not resolve ``kilo`` to the npm-installed ``kilo.cmd`` when
+    ``subprocess`` is invoked with ``shell=False``.  Resolve it before the
+    isolated process is started, preserving the no-shell execution boundary.
+    """
+
+    if not command:
+        raise ValueError("Child command must not be empty")
+    resolved = list(command)
+    executable = Path(resolved[0])
+    if not executable.is_absolute():
+        found = shutil.which(resolved[0])
+        if not found:
+            raise FileNotFoundError(f"agent executable not found: {resolved[0]}")
+        executable = Path(found)
+    try:
+        executable = executable.resolve(strict=True)
+    except OSError as error:
+        raise FileNotFoundError(f"agent executable not found: {resolved[0]}") from error
+    if not executable.is_file():
+        raise FileNotFoundError(f"agent executable is not a regular file: {resolved[0]}")
+    resolved[0] = str(executable)
+    return resolved
 
 
 def validate_command(command: Sequence[str], cwd: Path, policy: dict[str, Any]) -> list[str]:

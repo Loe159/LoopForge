@@ -427,6 +427,42 @@ class PackagedRuntimeLayoutTests(unittest.TestCase):
 
         self.assertEqual(selected, {"PATH": "canonical"})
 
+    def test_child_executable_resolution_uses_windows_command_launcher(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            launcher = Path(temp_dir) / "kilo.cmd"
+            launcher.write_text("@echo off\n", encoding="utf-8")
+            with mock.patch(
+                "loopforge.checks.isolated_process.shutil.which",
+                return_value=str(launcher),
+            ):
+                resolved = isolated_process.resolve_child_executable(["kilo", "run"])
+
+        self.assertEqual(resolved, [str(launcher.resolve()), "run"])
+
+    def test_kilo_command_detection_accepts_resolved_windows_launcher(self) -> None:
+        self.assertTrue(kilo_code.is_kilo_command([r"C:\\tools\\kilo.cmd", "run"]))
+
+    def test_kilo_windows_launcher_bypass_preserves_multiline_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            launcher = root / "kilo.cmd"
+            node = root / "node.exe"
+            entrypoint = root / "node_modules" / "@kilocode" / "cli" / "bin" / "kilo"
+            launcher.write_text("@echo off\n", encoding="utf-8")
+            node.write_bytes(b"node")
+            entrypoint.parent.mkdir(parents=True)
+            entrypoint.write_text("", encoding="utf-8")
+            prompt = "First line.\nSecond line: exact context."
+
+            command = kilo_code.command_without_windows_batch_launcher(
+                [str(launcher), "run", "--agent", "ask", prompt]
+            )
+
+        self.assertEqual(command[0], str(node.resolve()))
+        self.assertEqual(command[1], str(entrypoint.resolve()))
+        self.assertEqual(command[2:-1], ["run", "--agent", "ask"])
+        self.assertEqual(command[-1], prompt)
+
     def test_codex_windows_runtime_environment_is_path_only_and_credential_safe(self) -> None:
         policy = isolated_process.load_policy()
         with tempfile.TemporaryDirectory() as temp_dir:

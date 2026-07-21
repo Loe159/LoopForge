@@ -12,7 +12,11 @@ import threading
 from pathlib import Path
 from typing import Any, Sequence
 
-from loopforge.adapters.kilo_code import command_with_prompt, is_kilo_command
+from loopforge.adapters.kilo_code import (
+    command_without_windows_batch_launcher,
+    command_with_prompt,
+    is_kilo_command,
+)
 from loopforge.checks import isolated_process, validate_implementation_result
 from loopforge.contracts import policy_path
 
@@ -432,13 +436,21 @@ def run_adapter(
         )
         return validate_implementation_result.canonical_result_bytes(value)
 
-    prepared_command = command_with_kilo_prompt(command, stdin_file)
+    resolved_command = isolated_process.resolve_child_executable(
+        command_with_kilo_prompt(command, stdin_file)
+    )
+    kilo_prepared = is_kilo_command(resolved_command)
+    prepared_command = (
+        command_without_windows_batch_launcher(resolved_command)
+        if kilo_prepared
+        else resolved_command
+    )
     completed: subprocess.CompletedProcess[bytes] | None = None
     timed_out = False
     try:
         stdin_handle = (
             stdin_file.open("rb")
-            if stdin_file is not None and not is_kilo_command(prepared_command)
+            if stdin_file is not None and not kilo_prepared
             else None
         )
         isolation_policy = isolated_process.load_policy()

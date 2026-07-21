@@ -20,6 +20,7 @@ from typing import Any, Callable
 from loopforge.adapters.kilo_code import (
     DEFAULT_IMPLEMENTATION_AGENT,
     DEFAULT_READONLY_AGENT,
+    command_without_windows_batch_launcher as kilo_command_without_windows_batch_launcher,
     command_with_prompt as kilo_command_with_prompt,
     headless_run_command as kilo_headless_run_command,
     is_kilo_run_command,
@@ -5062,21 +5063,8 @@ def command_for_readonly_stage(
 
 def resolve_child_executable(command: list[str]) -> list[str]:
     """Return a command whose executable is an absolute, non-symlink file."""
-    resolved = list(command)
-    executable = Path(resolved[0])
-    if not executable.is_absolute():
-        found = shutil.which(resolved[0])
-        if not found:
-            raise FileNotFoundError(f"agent executable not found: {resolved[0]}")
-        executable = Path(found)
-    try:
-        executable = executable.resolve(strict=True)
-    except OSError as error:
-        raise FileNotFoundError(f"agent executable not found: {resolved[0]}") from error
-    if not executable.is_file():
-        raise FileNotFoundError(f"agent executable is not a regular file: {resolved[0]}")
-    resolved[0] = str(executable)
-    return resolved
+
+    return isolated_process_module().resolve_child_executable(command)
 
 
 def execute_readonly_adapter_command(
@@ -5091,6 +5079,8 @@ def execute_readonly_adapter_command(
     prepared_command = (
         kilo_command_with_prompt(resolved, decode_output(prompt)) if kilo_prompted else resolved
     )
+    if kilo_prompted:
+        prepared_command = kilo_command_without_windows_batch_launcher(prepared_command)
     isolated = isolated_process_module()
     policy = isolated.load_policy()
     isolated.validate_command(prepared_command, project_dir, policy)
