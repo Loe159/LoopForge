@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import sys
+import sysconfig
 import threading
 import time
 import uuid
@@ -648,6 +649,16 @@ class ConfigUpdateResult:
 
 
 @dataclass(frozen=True)
+class InstallationResult:
+    source_root: Path
+    ok: bool
+    message: str
+    diagnostics: dict[str, str]
+    blockers: list[str]
+    updated: bool
+
+
+@dataclass(frozen=True)
 class GuidedAction:
     id: str
     label: str
@@ -1281,6 +1292,194 @@ def render_run_memory_snapshot(project_dir: Path, run_id: str) -> str:
 
 def repository_root() -> Path:
     return Path(__file__).resolve().parents[3]
+
+
+def install_loopforge(
+    *, update: bool = False, source_root: Path | None = None
+) -> InstallationResult:
+    """Install LoopForge's editable command from its checked-out source tree.
+
+    ``update`` intentionally performs the requested ``git pull`` before
+    invoking pip. Every external command is argument-based and its output is
+    kept out of the result so an installer never echoes credentials from a
+    configured package index or Git remote.
+    """
+
+    root = (source_root or repository_root()).resolve()
+    diagnostics: dict[str, str] = {
+        "python": ".".join(str(value) for value in sys.version_info[:3]),
+        "source": (
+            "available" if (root / "pyproject.toml").is_file() else "missing pyproject.toml"
+        ),
+        "package": (
+            "available" if (root / "src" / "loopforge").is_dir() else "missing src/loopforge"
+        ),
+    }
+    blockers: list[str] = []
+    if sys.version_info < (3, 11):
+        blockers.append("LoopForge requires Python 3.11 or later.")
+    if diagnostics["source"] != "available":
+        blockers.append(f"LoopForge source metadata was not found at {root}.")
+    if diagnostics["package"] != "available":
+        blockers.append(
+            f"LoopForge package sources were not found at {root / 'src' / 'loopforge'}."
+        )
+
+    try:
+        pip = subprocess.run(
+            [sys.executable, "-m", "pip", "--version"],
+            cwd=root,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        pip = None
+    diagnostics["pip"] = (
+        "available" if pip is not None and pip.returncode == 0 else "unavailable"
+    )
+    if diagnostics["pip"] != "available":
+        blockers.append("pip is unavailable for the current Python interpreter.")
+
+    try:
+        git = subprocess.run(
+            ["git", "--version"],
+            cwd=root,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        git = None
+    diagnostics["git"] = (
+        "available" if git is not None and git.returncode == 0 else "unavailable"
+    )
+    if diagnostics["git"] != "available":
+        blockers.append("Git is unavailable; LoopForge needs it for workspaces and verification.")
+
+    if update:
+        try:
+            git_repository = subprocess.run(
+                ["git", "rev-parse", "--is-inside-work-tree"],
+                cwd=root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except OSError:
+            git_repository = None
+        diagnostics["git_repository"] = (
+            "available"
+            if git_repository is not None
+            and git_repository.returncode == 0
+            and git_repository.stdout.strip() == "true"
+            else "unavailable"
+        )
+        if diagnostics["git_repository"] != "available":
+            blockers.append("The LoopForge source directory is not an available Git work tree.")
+
+    if blockers:
+        return InstallationResult(
+            root,
+            False,
+            "LoopForge installation prerequisites are incomplete.",
+            diagnostics,
+            blockers,
+            False,
+        )
+
+    if update:
+        try:
+            pull = subprocess.run(
+                ["git", "pull"],
+                cwd=root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except OSError:
+            pull = None
+        diagnostics["git_pull"] = (
+            "updated" if pull is not None and pull.returncode == 0 else "failed"
+        )
+        if diagnostics["git_pull"] == "failed":
+            return InstallationResult(
+                root,
+                False,
+                "LoopForge update failed before installation.",
+                diagnostics,
+                ["`git pull` failed; no package installation was attempted."],
+                False,
+            )
+
+    try:
+        installation = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-e", "."],
+            cwd=root,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        installation = None
+    diagnostics["editable_install"] = (
+        "installed" if installation is not None and installation.returncode == 0 else "failed"
+    )
+    if diagnostics["editable_install"] == "failed":
+        return InstallationResult(
+            root,
+            False,
+            "LoopForge installation failed.",
+            diagnostics,
+            ["`python -m pip install -e .` failed."],
+            update,
+        )
+
+    try:
+        imports = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import loopforge, prompt_toolkit, rich, textual",
+            ],
+            cwd=root,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        imports = None
+    diagnostics["runtime_dependencies"] = (
+        "available" if imports is not None and imports.returncode == 0 else "failed"
+    )
+
+    scripts_dir = sysconfig.get_path("scripts")
+    command_name = "loopforge.exe" if os.name == "nt" else "loopforge"
+    command_path = Path(scripts_dir) / command_name if scripts_dir else None
+    diagnostics["command"] = (
+        str(command_path) if command_path and command_path.is_file() else "missing"
+    )
+    if diagnostics["runtime_dependencies"] != "available":
+        blockers.append("LoopForge or one of its runtime dependencies could not be imported.")
+    if diagnostics["command"] == "missing":
+        blockers.append("The installed LoopForge command entry point was not found.")
+    if blockers:
+        return InstallationResult(
+            root,
+            False,
+            "LoopForge was installed but its verification failed.",
+            diagnostics,
+            blockers,
+            update,
+        )
+    return InstallationResult(
+        root,
+        True,
+        "LoopForge is installed and ready to use.",
+        diagnostics,
+        [],
+        update,
+    )
 
 
 def local_implementation_adapter() -> Path:

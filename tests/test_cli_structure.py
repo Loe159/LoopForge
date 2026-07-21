@@ -99,6 +99,8 @@ class CliStructureTests(unittest.TestCase):
             {
                 (),
                 ("init",),
+                ("install",),
+                ("update",),
                 ("report",),
                 ("run",),
                 ("status",),

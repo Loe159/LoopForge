@@ -37,6 +37,7 @@ from loopforge.engine import (
     directory_file_sizes,
     discover_pack_contracts,
     initialize_project,
+    install_loopforge,
     list_runs,
     loopforge_home,
     resume_run,
@@ -136,6 +137,9 @@ SUPPORTED_COMMANDS = {
     "title": "Show or set a session title.",
     "tui": "Set the session renderer mode.",
     "usage": "Show local usage status without inventing unavailable values.",
+    "update": (
+        "Pull LoopForge updates, verify prerequisites, and reinstall the command."
+    ),
     "verify": "Generate a patch and run deterministic pack checks.",
     "vim": "Toggle vim-style editing mode for the session.",
     "why": "Explain why LoopForge recommends the next action.",
@@ -168,13 +172,13 @@ ALIAS_ARGUMENTS = {
 }
 
 COMMAND_GROUPS = {
-    "Projects": ("init", "cd", "dashboard", "pack", "config", "adapter"),
+    "Projects": ("init", "update", "cd", "dashboard", "pack", "config", "adapter"),
     "Runs": ("run", "new", "fork", "resume", "runs", "archive"),
     "Stages": ("status", "next", "guide", "actions", "do", "complete-task", "plan", "continue", "verify", "review", "learn"),
     "Help": ("report",),
 }
 
-ALWAYS_DISCOVERABLE = {"help", "commands", "clear", "exit", "report"}
+ALWAYS_DISCOVERABLE = {"help", "commands", "clear", "exit", "report", "update"}
 
 
 def contextual_commands(project_dir: Path | None = None) -> dict[str, str]:
@@ -2076,6 +2080,24 @@ class InteractiveShell:
                 lines.append(f"- {blocker}")
         self.write_panel("LoopForge doctor", lines)
         return DispatchResult(0)
+
+    def cmd_update(self, raw: str = "") -> DispatchResult:
+        if raw.strip():
+            self.write("usage: /update", error=True)
+            return DispatchResult(2)
+        result = install_loopforge(update=True)
+        rows = [("source", result.source_root), *result.diagnostics.items()]
+        if result.ok:
+            render_success(self.renderer, "LoopForge update", rows)
+        else:
+            render_blocked(
+                self.renderer,
+                "LoopForge update",
+                rows,
+                blockers=result.blockers,
+                next_command="/update",
+            )
+        return DispatchResult(0 if result.ok else 1)
 
     def cmd_debug_config(self, raw: str = "") -> DispatchResult:
         del raw

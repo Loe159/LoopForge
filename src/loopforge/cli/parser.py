@@ -81,6 +81,24 @@ class CliParserBuilder:
         )
         add_format_args(init_parser)
 
+        install_parser = subcommands.add_parser(
+            "install",
+            help="Verify prerequisites and install the editable LoopForge command.",
+            epilog="Example:\n  loopforge install",
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
+        topics[("install",)] = install_parser
+        add_format_args(install_parser)
+
+        update_parser = subcommands.add_parser(
+            "update",
+            help="Pull LoopForge updates, then verify and reinstall the command.",
+            epilog="Example:\n  loopforge update",
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
+        topics[("update",)] = update_parser
+        add_format_args(update_parser)
+
         report_parser = subcommands.add_parser(
             "report",
             help="Preview or submit a sanitized LoopForge product report on GitHub.",

@@ -46,6 +46,7 @@ from loopforge.engine import (
     execute_readonly_stage,
     initialize_project,
     index_diagnostics,
+    install_loopforge,
     learn_run,
     list_registered_projects,
     list_runs,

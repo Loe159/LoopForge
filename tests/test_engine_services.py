@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -18,6 +19,7 @@ from loopforge.engine import (
     codex_workspace_preflight_blockers,
     current_status,
     initialize_project,
+    install_loopforge,
     list_runs,
     list_registered_projects,
     list_runs_all_projects,
@@ -51,6 +53,52 @@ class JsonStoreTests(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 JsonStore().read_object(path)
+
+
+class InstallationTests(unittest.TestCase):
+    def test_update_pulls_before_installing_and_verifies_the_command(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "pyproject.toml").write_text(
+                "[project]\nname = 'loopforge'\n", encoding="utf-8"
+            )
+            (root / "src" / "loopforge").mkdir(parents=True)
+            scripts = root / "scripts"
+            scripts.mkdir()
+            command = scripts / ("loopforge.exe" if os.name == "nt" else "loopforge")
+            command.write_text("", encoding="utf-8")
+            completed = [
+                subprocess.CompletedProcess([], 0, stdout="pip 24\n", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout="git version 2.45\n", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout="true\n", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout="Already up to date.\n", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout="installed\n", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+            ]
+
+            with (
+                mock.patch("loopforge.engine.subprocess.run", side_effect=completed) as run,
+                mock.patch("loopforge.engine.sysconfig.get_path", return_value=str(scripts)),
+            ):
+                result = install_loopforge(update=True, source_root=root)
+
+            self.assertTrue(result.ok, result.blockers)
+            self.assertTrue(result.updated)
+            self.assertEqual(
+                [call.args[0] for call in run.call_args_list],
+                [
+                    [sys.executable, "-m", "pip", "--version"],
+                    ["git", "--version"],
+                    ["git", "rev-parse", "--is-inside-work-tree"],
+                    ["git", "pull"],
+                    [sys.executable, "-m", "pip", "install", "-e", "."],
+                    [
+                        sys.executable,
+                        "-c",
+                        "import loopforge, prompt_toolkit, rich, textual",
+                    ],
+                ],
+            )
 
 
 class GitStateServiceTests(unittest.TestCase):

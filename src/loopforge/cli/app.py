@@ -80,6 +80,49 @@ class DiscoveryCommandHandler:
         )
 
 
+class MaintenanceCommandHandler:
+    """Handle local installation and maintenance commands."""
+
+    commands = frozenset({"install", "update"})
+
+    def handle(self, args: Any, context: CliContext) -> int | None:
+        if args.command not in self.commands:
+            return None
+        api = context.api
+        update = args.command == "update"
+        command = f"loopforge {args.command}"
+        fmt = api.normalize_format(
+            api.output_format(args, context.options),
+            allowed=("text", "json"),
+            command=command,
+        )
+        result = api.install_loopforge(update=update)
+        payload = {
+            "ok": result.ok,
+            "message": result.message,
+            "source_root": str(result.source_root),
+            "diagnostics": result.diagnostics,
+            "blockers": result.blockers,
+            "updated": result.updated,
+        }
+        if fmt == "json":
+            api.print_json_payload(payload)
+        elif not context.options.quiet:
+            rows = [("source", result.source_root), *result.diagnostics.items()]
+            title = "LoopForge update" if update else "LoopForge install"
+            if result.ok:
+                api.render_success(context.renderer, title, rows)
+            else:
+                api.render_blocked(
+                    context.error_renderer(),
+                    title,
+                    rows,
+                    blockers=result.blockers,
+                    next_command=command,
+                )
+        return 0 if result.ok else 1
+
+
 class ReportCommandHandler:
     """Preview or explicitly submit product feedback to the LoopForge repository."""
 
@@ -597,6 +640,7 @@ class LoopForgeCli:
             handlers
             or (
                 DiscoveryCommandHandler(),
+                MaintenanceCommandHandler(),
                 ReportCommandHandler(),
                 ProjectCommandHandler(),
                 RunCommandHandler(),

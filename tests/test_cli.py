@@ -17,6 +17,7 @@ from unittest import mock
 
 from loopforge.cli import IssueReadResult, main, preparse_global_options
 from loopforge.engine import (
+    InstallationResult,
     apply_initial_task_approval,
     apply_plan_approval,
     approve_plan,
@@ -3949,6 +3950,71 @@ Only this section is present.
             self.assertIn("prompt_toolkit: missing", text)
             self.assertIn("rich: missing", text)
             self.assertEqual(tui_dependency_state()["prompt_toolkit"], True)
+
+    def test_install_command_renders_a_machine_readable_result(self) -> None:
+        output = io.StringIO()
+        result = InstallationResult(
+            source_root=Path("C:/LoopForge"),
+            ok=True,
+            message="LoopForge is installed and ready to use.",
+            diagnostics={
+                "editable_install": "installed",
+                "command": "C:/Python/Scripts/loopforge.exe",
+            },
+            blockers=[],
+            updated=False,
+        )
+        with (
+            mock.patch("loopforge.cli.install_loopforge", return_value=result),
+            contextlib.redirect_stdout(output),
+        ):
+            self.assertEqual(main(["install", "--format", "json"]), 0)
+
+        payload = json.loads(output.getvalue())
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["diagnostics"]["editable_install"], "installed")
+
+    def test_update_command_pulls_before_reinstalling(self) -> None:
+        output = io.StringIO()
+        result = InstallationResult(
+            source_root=Path("C:/LoopForge"),
+            ok=True,
+            message="LoopForge is installed and ready to use.",
+            diagnostics={"git_pull": "updated", "editable_install": "installed"},
+            blockers=[],
+            updated=True,
+        )
+        with (
+            mock.patch("loopforge.cli.install_loopforge", return_value=result) as install,
+            contextlib.redirect_stdout(output),
+        ):
+            self.assertEqual(main(["update", "--format", "json"]), 0)
+
+        install.assert_called_once_with(update=True)
+        payload = json.loads(output.getvalue())
+        self.assertTrue(payload["updated"])
+        self.assertEqual(payload["diagnostics"]["git_pull"], "updated")
+
+    def test_shell_update_uses_the_shared_installation_operation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = io.StringIO()
+            result = InstallationResult(
+                source_root=Path("C:/LoopForge"),
+                ok=True,
+                message="LoopForge is installed and ready to use.",
+                diagnostics={"git_pull": "updated", "editable_install": "installed"},
+                blockers=[],
+                updated=True,
+            )
+            with mock.patch(
+                "loopforge.cli.interactive.install_loopforge", return_value=result
+            ) as install:
+                shell = InteractiveShell(Path(temp_dir), output=output, error=io.StringIO())
+                dispatch = shell.dispatch("/update")
+
+            self.assertEqual(dispatch.exit_code, 0)
+            install.assert_called_once_with(update=True)
+            self.assertIn("LoopForge update", output.getvalue())
 
     def test_no_args_in_non_interactive_mode_prints_help(self) -> None:
         error = io.StringIO()
