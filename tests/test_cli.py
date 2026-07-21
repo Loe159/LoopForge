@@ -19,6 +19,7 @@ from loopforge.cli import IssueReadResult, main, preparse_global_options
 from loopforge.engine import (
     apply_initial_task_approval,
     apply_plan_approval,
+    approve_plan,
     approve_review,
     codex_workspace_preflight_blockers,
     command_for_attempt,
@@ -34,6 +35,7 @@ from loopforge.engine import (
     run_streaming_process,
     set_default_adapter,
     usable_python_executable,
+    validate_readonly_stage_artifact,
 )
 from loopforge.cli.interactive import (
     InteractiveShell,
@@ -1673,6 +1675,44 @@ class CliTests(unittest.TestCase):
             self.assertIn(str(run_dir / "task.md"), prompt)
             self.assertIn(str(run_dir / "research.md"), prompt)
             self.assertIn("Plan ready", output.getvalue())
+
+    def test_readonly_plan_validation_accepts_level_two_headings(self) -> None:
+        plan_with_level_two_headings = valid_plan_markdown().replace("\n# ", "\n## ")
+
+        self.assertEqual(validate_readonly_stage_artifact("plan", plan_with_level_two_headings), [])
+
+    def test_approve_plan_rejects_placeholder_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            self.initialize_git_project(repo)
+            loopforge_home = workspace / "home"
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(["run", "--task", "Reject an empty plan", "--success-check", "Tests pass"]),
+                    0,
+                )
+            run_dir = self.approve_current_run(repo, loopforge_home)
+            run_json_path = run_dir / "run.json"
+            run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+            run_json["stage_statuses"]["research"] = "complete"
+            run_json["stage_statuses"]["plan"] = "awaiting_approval"
+            run_json["current_stage"] = "plan_ready"
+            run_json_path.write_text(json.dumps(run_json), encoding="utf-8")
+
+            blocked = approve_plan(repo)
+
+            self.assertFalse(blocked.ok)
+            self.assertIn("plan.md must start with YAML frontmatter.", blocked.blockers)
+            persisted = json.loads(run_json_path.read_text(encoding="utf-8"))
+            self.assertEqual(persisted["stage_statuses"]["plan"], "awaiting_approval")
+            self.assertEqual(persisted["human_gates"]["plan_approval"]["status"], "pending")
 
     def test_run_cockpit_executes_review_with_fixture_adapter(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

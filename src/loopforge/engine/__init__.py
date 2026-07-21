@@ -1471,8 +1471,9 @@ def markdown_sections(markdown: str) -> dict[str, list[str]]:
     sections: dict[str, list[str]] = {}
     current: str | None = None
     for line in markdown.splitlines():
-        if line.startswith("# "):
-            current = line[2:].strip()
+        heading = re.match(r"^#{1,6}[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$", line)
+        if heading:
+            current = heading.group(1).strip()
             sections[current] = []
             continue
         if current is not None:
@@ -5942,6 +5943,13 @@ def approve_plan(
     plan_path = status.run_dir / "plan.md"
     if not plan_path.exists():
         blockers.append("plan approval requires plan.md in the run directory.")
+    elif not blockers:
+        try:
+            plan_text = plan_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            blockers.append(f"plan approval could not read plan.md: {error}")
+        else:
+            blockers.extend(validate_readonly_stage_artifact("plan", plan_text))
     if blockers:
         return StageResult(
             project_dir=status.project_dir,
