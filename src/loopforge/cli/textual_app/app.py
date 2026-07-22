@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Callable, Iterable
 
 from textual import on, work
 from textual.app import App, ComposeResult
+from textual.css.query import NoMatches
 from textual.binding import Binding
 from textual.command import DiscoveryHit, Hit, Hits, Provider
 from textual.containers import Container
@@ -121,6 +122,8 @@ class LoopForgeApp(App[None]):
         self._load_on_mount = load_on_mount
         self._operation: OperationController | None = None
         self._operation_completion_handled = False
+        self._operation_spinner_phase = 0
+        self._operation_run_label = "current run"
         self._refreshing_after_operation = False
         self._screen = "home"
         self._selected_index = 0
@@ -145,6 +148,9 @@ class LoopForgeApp(App[None]):
             yield Static(id="screen-title")
             yield Static(id="screen-state", classes="secondary")
             yield Static(id="screen-body")
+            with Container(id="operation-panel"):
+                yield Static(id="operation-status", markup=False)
+                yield Static(id="operation-log", classes="secondary", markup=False)
             yield Static(id="screen-notice", classes="secondary")
             yield Static(id="screen-help", classes="secondary")
         yield Footer()
@@ -158,6 +164,7 @@ class LoopForgeApp(App[None]):
 
     def on_resize(self, event: Resize) -> None:
         self._set_width_class(event.size.width)
+        self._render_operation_panel(self._snapshot)
 
     def on_unmount(self) -> None:
         if self._unsubscribe is not None:
@@ -545,7 +552,7 @@ class LoopForgeApp(App[None]):
 
     def _run_shell_operation(self, label: str, runner: Callable[[object, object], object]) -> None:
         if self._operation is not None and not self._operation.finished:
-            self._notice = "A foreground operation is already running."
+            self._notice = f"{self._operation.label} is already running; live status is shown below."
             self._render_snapshot(self._snapshot)
             return
         operation = OperationController(label)
@@ -558,27 +565,42 @@ class LoopForgeApp(App[None]):
         )
 
     def begin_operation(self, operation: OperationController) -> None:
+        self._operation_run_label = _snapshot_run_label(self._snapshot)
         self._operation = operation
         self._operation_completion_handled = False
-        self.store.set_operation(operation)
+        self._operation_spinner_phase = 0
+        self._snapshot = self.store.set_operation(operation)
 
     def _poll_operation(self) -> None:
-        if self._operation is None:
+        operation = self._operation
+        if operation is None:
             return
-        self.store.record_operation_events(self._operation)
-        if self._operation.finished and not self._operation_completion_handled:
+        if operation.finished and self._operation_completion_handled:
+            return
+        history = operation.collect_events()
+        has_new_events = history != self._snapshot.operation.events
+        if operation.finished:
+            # Let the project refresh publish the terminal snapshot together
+            # with the post-action run state. Publishing it here would pair a
+            # completed operation with the stale pre-action guidance.
+            self.store.record_operation_events(operation)
             self._operation_completion_handled = True
             self._notice = str(
-                getattr(self._operation.result, "message", self._operation.label)
+                getattr(operation.result, "message", operation.label)
             )
-            if bool(getattr(self._operation.result, "should_exit", False)):
+            if bool(getattr(operation.result, "should_exit", False)):
                 self.exit()
                 return
             self._refreshing_after_operation = True
             self._render_snapshot(self._snapshot)
             self.load_selected_project()
             return
-        self.store.flush()
+        if has_new_events:
+            self._snapshot = self.store.record_operation_events(operation)
+            self._snapshot = self.store.flush()
+            self._render_operation_panel(self._snapshot)
+        self._operation_spinner_phase = (self._operation_spinner_phase + 1) % 10
+        self._refresh_operation_status()
 
     def action_cancel_or_exit(self) -> None:
         if self._operation is not None and not self._operation.finished:
@@ -627,11 +649,63 @@ class LoopForgeApp(App[None]):
         self._apply_shell_theme()
         self._snapshot = snapshot
         title, body, help_text = self._screen_view(snapshot)
-        self.query_one("#screen-title", Static).update(title)
+        try:
+            title_widget = self.query_one("#screen-title", Static)
+        except NoMatches:
+            # A final timer tick can race Textual's screen teardown.
+            return
+        title_widget.update(title)
         self.query_one("#screen-state", Static).update(f"{self._screen.title()} · {self._state_label(snapshot)}")
         self.query_one("#screen-body", Static).update(body)
-        self.query_one("#screen-notice", Static).update(self._notice or self._operation_text(snapshot))
+        self._render_operation_panel(snapshot)
+        self.query_one("#screen-notice", Static).update(self._notice)
         self.query_one("#screen-help", Static).update(help_text)
+
+    def _render_operation_panel(self, snapshot: UiSnapshot) -> None:
+        """Render factual operation state while preserving literal adapter output."""
+
+        try:
+            panel = self.query_one("#operation-panel", Container)
+            status = self.query_one("#operation-status", Static)
+            log = self.query_one("#operation-log", Static)
+        except NoMatches:
+            return
+        operation = snapshot.operation
+        panel.display = operation.state != "empty"
+        if operation.state == "empty":
+            return
+        status.update(self._operation_status(snapshot))
+        log.update(_operation_log(operation.events))
+        # The bounded log must always leave the most recent adapter event visible.
+        log.scroll_end(animate=False, x_axis=False)
+
+    def _refresh_operation_status(self) -> None:
+        """Advance the spinner and elapsed time without repainting the screen."""
+
+        if self._snapshot.operation.state == "empty":
+            return
+        try:
+            self.query_one("#operation-status", Static).update(self._operation_status(self._snapshot))
+        except NoMatches:
+            return
+
+    def _operation_status(self, snapshot: UiSnapshot) -> str:
+        operation = snapshot.operation
+        running = operation.state == "loading" and not operation.finished
+        marker = (
+            "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[self._operation_spinner_phase]
+            if running
+            else _operation_marker(operation.state)
+        )
+        progress = operation.events[-1] if operation.events else None
+        suffix = (
+            f" · {progress.current}/{progress.total}"
+            if progress is not None and progress.current is not None and progress.total is not None
+            else ""
+        )
+        elapsed = self._operation.elapsed_seconds() if running and self._operation is not None else operation.elapsed_seconds
+        state = "Running" if running else operation.state.replace("_", " ").title()
+        return f"{marker} {state} · {operation.label} · {self._operation_run_label} · {_format_elapsed(elapsed)}{suffix}"
 
     def _apply_shell_theme(self) -> None:
         """Keep the TUI palette aligned with the shell's persisted theme."""
@@ -715,16 +789,6 @@ class LoopForgeApp(App[None]):
         state = getattr(snapshot, self._screen).state
         return f"{state} · revision {snapshot.revision}"
 
-    def _operation_text(self, snapshot: UiSnapshot) -> str:
-        operation = snapshot.operation
-        if operation.state == "empty":
-            return ""
-        progress = operation.events[-1] if operation.events else None
-        suffix = ""
-        if progress is not None and progress.current is not None and progress.total is not None:
-            suffix = f" {progress.current}/{progress.total}"
-        return f"{operation.label}{suffix} — {operation.message}"
-
     def _set_width_class(self, width: int) -> None:
         self.remove_class("width-60", "width-80", "width-120", "width-160")
         self.add_class(
@@ -780,6 +844,49 @@ def _operation_result(value: object, cancelled: bool) -> SimpleNamespace:
             else str(getattr(value, "message", "Action completed." if ok else "Action was blocked."))
         ),
     )
+
+
+def _snapshot_run_label(snapshot: UiSnapshot) -> str:
+    shell = snapshot.run.shell
+    if shell is not None and shell.run is not None:
+        return shell.run.short_id
+    if snapshot.selected_run_id:
+        return snapshot.selected_run_id[:16]
+    return "current run"
+
+
+def _operation_log(events: Iterable[object], *, limit: int = 8) -> str:
+    """Return the literal, multiline-safe tail in receipt order."""
+
+    rows: list[str] = []
+    for event in tuple(events)[-limit:]:
+        kind = str(getattr(event, "kind", "activity")).replace("_", " ")
+        message = str(getattr(event, "message", "Working…")).strip()
+        lines = message.splitlines() or ["Working…"]
+        rows.append(f"{_event_marker(kind)} {kind}: {lines[0]}")
+        rows.extend(f"  {line}" for line in lines[1:])
+    return "\n".join(rows) if rows else "Waiting for the first update…"
+
+
+def _event_marker(kind: str) -> str:
+    if kind in {"failed", "blocked", "cancelled"}:
+        return "×"
+    if kind in {"completed", "check finished", "artifact written"}:
+        return "✓"
+    if kind == "adapter output":
+        return "›"
+    return "·"
+
+
+def _operation_marker(state: str) -> str:
+    return {"ready": "✓", "failed": "×", "blocked": "×"}.get(state, "•")
+
+
+def _format_elapsed(seconds: float) -> str:
+    total = max(0, int(seconds))
+    minutes, remaining = divmod(total, 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours:02}:{minutes:02}:{remaining:02}"
 
 
 def _adapter_diagnostics() -> dict[str, str]:

@@ -338,4 +338,5 @@ def _operation_snapshot(
         operation.finished,
         operation.cancel_event.is_set(),
         message,
+        int(operation.elapsed_seconds()),
     )

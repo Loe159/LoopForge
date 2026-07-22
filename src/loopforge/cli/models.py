@@ -65,6 +65,7 @@ class OperationSnapshot:
     finished: bool = False
     cancelled: bool = False
     message: str = ""
+    elapsed_seconds: int = 0
 
 
 @dataclass(frozen=True)

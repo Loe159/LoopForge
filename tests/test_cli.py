@@ -27,6 +27,7 @@ from loopforge.engine import (
     command_for_readonly_stage,
     current_guidance,
     current_status,
+    execute_readonly_adapter_command,
     execute_readonly_stage,
     loopforge_home,
     next_readonly_stage,
@@ -2826,6 +2827,36 @@ Only this section is present.
         self.assertTrue(fake.terminated)
         self.assertTrue(result["interrupted"])
         self.assertEqual(result["returncode"], 130)
+
+    def test_readonly_adapter_streams_output_with_controlled_prompt_and_no_bytecode(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_dir = Path(temp_dir)
+            events: list[dict[str, object]] = []
+            command = [
+                sys.executable,
+                "-c",
+                (
+                    "import os, sys; "
+                    "print('bytecode=' + os.environ['PYTHONDONTWRITEBYTECODE']); "
+                    "print('prompt=' + sys.stdin.read()); "
+                    "print('reviewing patch', file=sys.stderr)"
+                ),
+            ]
+
+            child, stdout, stderr = execute_readonly_adapter_command(
+                command=command,
+                prompt=b"review input",
+                project_dir=project_dir,
+                timeout_seconds=10,
+                operation_callback=events.append,
+            )
+
+            self.assertTrue(child["completed"])
+            self.assertEqual(child["returncode"], 0)
+            self.assertIn(b"bytecode=1", stdout)
+            self.assertIn(b"prompt=review input", stdout)
+            self.assertIn(b"reviewing patch", stderr)
+            self.assertTrue(any(event["kind"] == "adapter_output" for event in events))
 
     def test_guidance_reports_not_initialized_and_cli_guide(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

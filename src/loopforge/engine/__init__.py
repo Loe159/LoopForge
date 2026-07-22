@@ -5273,7 +5273,16 @@ def execute_readonly_adapter_command(
     prompt: bytes,
     project_dir: Path,
     timeout_seconds: int,
+    operation_callback: OperationCallback | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> tuple[dict[str, Any], bytes, bytes]:
+    """Run a read-only adapter with bounded, observable output.
+
+    Read-only stages still use the same isolated environment and command
+    validation as before.  Unlike the historical ``subprocess.run`` path, the
+    adapter output is forwarded as factual operation events while it runs.
+    """
+
     resolved = resolve_child_executable(command)
     kilo_prompted = is_kilo_run_command(resolved)
     prepared_command = (
@@ -5284,47 +5293,19 @@ def execute_readonly_adapter_command(
     isolated = isolated_process_module()
     policy = isolated.load_policy()
     isolated.validate_command(prepared_command, project_dir, policy)
-    environment = isolated.build_child_environment(
-        isolated.select_allowed_parent_environment(os.environ, policy),
-        policy,
+    child = run_streaming_process(
+        prepared_command,
+        project_dir,
+        timeout_seconds,
+        output_callback=operation_callback,
+        cancel_event=cancel_event,
+        stream_output=operation_callback is None,
+        input_bytes=None if kilo_prompted else prompt,
+        codex_windows_runtime=Path(resolved[0]).stem.casefold() == "codex",
     )
-    bounded_timeout = min(float(timeout_seconds), float(policy["max_timeout_seconds"]))
-    try:
-        completed = subprocess.run(
-            prepared_command,
-            cwd=project_dir,
-            env=environment,
-            input=None if kilo_prompted else prompt,
-            capture_output=True,
-            timeout=bounded_timeout,
-            shell=False,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as error:
-        stdout = error.stdout if isinstance(error.stdout, bytes) else b""
-        stderr = error.stderr if isinstance(error.stderr, bytes) else b""
-        return (
-            {
-                "completed": False,
-                "returncode": None,
-                "timed_out": True,
-                "output_limit_exceeded": False,
-            },
-            stdout,
-            stderr,
-        )
-    output_limit = int(policy["max_captured_output_bytes"])
-    output_limit_exceeded = len(completed.stdout) + len(completed.stderr) > output_limit
-    return (
-        {
-            "completed": not output_limit_exceeded,
-            "returncode": completed.returncode,
-            "timed_out": False,
-            "output_limit_exceeded": output_limit_exceeded,
-        },
-        completed.stdout[:output_limit],
-        completed.stderr[:output_limit],
-    )
+    stdout = child["stdout"] if isinstance(child.get("stdout"), bytes) else b""
+    stderr = child["stderr"] if isinstance(child.get("stderr"), bytes) else b""
+    return child, stdout, stderr
 
 
 def command_for_attempt(
@@ -6600,6 +6581,8 @@ def execute_readonly_stage(
                 prompt=prompt.encode("utf-8"),
                 project_dir=workspace_dir,
                 timeout_seconds=attempt_timeout(run, status.loop_contract or {}),
+                operation_callback=operation_callback,
+                cancel_event=cancel_event,
             )
     except (OSError, RuntimeError, ValueError) as error:
         blockers = [f"read-only {stage} adapter execution could not start: {error}"]
@@ -6623,8 +6606,11 @@ def execute_readonly_stage(
     after_git = git_status_entries(workspace_dir)
     write_bytes(stage_dir / "adapter.stdout", stdout)
     write_bytes(stage_dir / "adapter.stderr", stderr)
-    emit_adapter_output(operation_callback, stage, "stdout", stdout)
-    emit_adapter_output(operation_callback, stage, "stderr", stderr)
+    if adapter == "local-adapter-fixture":
+        # Fixtures use the compatibility runner and only have output once they
+        # finish. Real adapters stream each chunk through the callback below.
+        emit_adapter_output(operation_callback, stage, "stdout", stdout)
+        emit_adapter_output(operation_callback, stage, "stderr", stderr)
     worktree_changes = readonly_worktree_changes(
         before_snapshot=before_snapshot,
         before_git=before_git,
@@ -6841,10 +6827,18 @@ def run_streaming_process(
     output_callback: OperationCallback | None = None,
     cancel_event: threading.Event | None = None,
     stream_output: bool = True,
+    input_bytes: bytes | None = None,
     codex_windows_runtime: bool = False,
 ) -> dict[str, Any]:
     isolated_process = isolated_process_module()
     policy = isolated_process.load_policy()
+    if input_bytes is not None:
+        if not bool(policy.get("allow_controlled_stdin")):
+            raise ValueError("Isolation policy does not allow controlled prompt stdin")
+        if not isinstance(input_bytes, bytes):
+            raise ValueError("Controlled prompt stdin must be bytes")
+        if len(input_bytes) > int(policy["max_captured_output_bytes"]):
+            raise ValueError("Controlled prompt stdin exceeds the bounded input limit")
     bounded_timeout = min(float(timeout_seconds), float(policy["max_timeout_seconds"]))
     env = (
         isolated_process.build_codex_windows_child_environment(os.environ, policy)
@@ -6858,6 +6852,7 @@ def run_streaming_process(
         command,
         cwd=cwd,
         env=env,
+        stdin=subprocess.PIPE if input_bytes is not None else subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         shell=False,
@@ -6870,7 +6865,7 @@ def run_streaming_process(
             return source.read1(4096)
         return source.read(1)
 
-    def pump(source, target, buffer: bytearray) -> None:  # type: ignore[no-untyped-def]
+    def pump(source, target, buffer: bytearray, stream: str) -> None:  # type: ignore[no-untyped-def]
         try:
             while True:
                 chunk = read_available(source)
@@ -6878,7 +6873,7 @@ def run_streaming_process(
                     break
                 buffer.extend(chunk)
                 if output_callback is not None:
-                    emit_adapter_output(output_callback, "adapter", "output", chunk)
+                    emit_adapter_output(output_callback, "adapter", stream, chunk)
                 elif stream_output:
                     binary_target = getattr(target, "buffer", None)
                     if binary_target is not None:
@@ -6892,16 +6887,31 @@ def run_streaming_process(
 
     stdout_thread = threading.Thread(
         target=pump,
-        args=(process.stdout, sys.stdout, stdout_buffer),
+        args=(process.stdout, sys.stdout, stdout_buffer, "stdout"),
         daemon=True,
     )
     stderr_thread = threading.Thread(
         target=pump,
-        args=(process.stderr, sys.stderr, stderr_buffer),
+        args=(process.stderr, sys.stderr, stderr_buffer, "stderr"),
         daemon=True,
     )
     stdout_thread.start()
     stderr_thread.start()
+    input_thread: threading.Thread | None = None
+    if input_bytes is not None:
+        def feed_input() -> None:
+            try:
+                if process.stdin is not None:
+                    process.stdin.write(input_bytes)
+                    process.stdin.flush()
+            except (BrokenPipeError, OSError):
+                pass
+            finally:
+                if process.stdin is not None:
+                    process.stdin.close()
+
+        input_thread = threading.Thread(target=feed_input, daemon=True)
+        input_thread.start()
     timed_out = False
     interrupted = False
     try:
@@ -6938,6 +6948,8 @@ def run_streaming_process(
             returncode = process.wait()
     stdout_thread.join(timeout=5)
     stderr_thread.join(timeout=5)
+    if input_thread is not None:
+        input_thread.join(timeout=5)
     if interrupted and cancel_event is None:
         raise KeyboardInterrupt
     return {

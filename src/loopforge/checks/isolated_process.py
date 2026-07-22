@@ -41,6 +41,7 @@ EXPECTED_POLICY: dict[str, Any] = {
     ],
     "fixed_child_environment": {
         "AGENT_RUNNER_ENVIRONMENT_MODE": "isolated",
+        "PYTHONDONTWRITEBYTECODE": "1",
         "PYTHONIOENCODING": "utf-8",
         "PYTHONUTF8": "1",
     },

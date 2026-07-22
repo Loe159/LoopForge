@@ -38,6 +38,26 @@ Header, Footer {
     color: $warning;
 }
 
+#operation-panel {
+    height: auto;
+    max-height: 10;
+    margin-top: 1;
+    border: round $accent;
+    padding: 0 1;
+    background: $panel;
+}
+
+#operation-status {
+    color: $accent;
+    text-style: bold;
+}
+
+#operation-log {
+    height: auto;
+    max-height: 7;
+    overflow-y: auto;
+}
+
 #screen-help {
     margin-top: 1;
 }
@@ -88,6 +108,15 @@ Header, Footer {
 
 .width-60 #main-content {
     padding: 0 1;
+}
+
+.width-60 #operation-panel {
+    max-height: 7;
+    padding: 0;
+}
+
+.width-60 #operation-log {
+    max-height: 4;
 }
 
 .width-60 Header, .width-60 Footer {

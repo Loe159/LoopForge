@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import unittest
 from contextlib import redirect_stdout
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -98,6 +99,67 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(operation.cancel_event.is_set())
             self.assertTrue(app.is_running)
 
+    async def test_pilot_shows_live_operation_details(self) -> None:
+        from loopforge.cli.operations import OperationController
+        from loopforge.cli.textual_app import LoopForgeApp
+
+        app = LoopForgeApp(SimpleNamespace(project_dir=Path.cwd()), load_on_mount=False)
+        operation = OperationController("Review patch")
+        source_run = "run-source-0123456789"
+        app._snapshot = replace(app.snapshot, selected_run_id=source_run)
+        for index in range(10):
+            operation.emit(
+                {
+                    "kind": "adapter_output",
+                    "message": f"[red]event {index}[/]\\nreview stderr: inspecting tests {index}",
+                }
+            )
+        async with app.run_test(size=(60, 24)) as pilot:
+            app.begin_operation(operation)
+            await pilot.pause(0.25)
+            status = str(app.query_one("#operation-status").render())
+            log_widget = app.query_one("#operation-log")
+            log = str(log_widget.render())
+            self.assertIn("Review patch", status)
+            self.assertIn(source_run[:16], status)
+            self.assertIn("[red]event 9[/]", log)
+            self.assertIn("review stderr: inspecting tests 9", log)
+            self.assertNotIn("[red]event 0[/]", log)
+            self.assertEqual(log_widget.scroll_y, log_widget.max_scroll_y)
+
+            await pilot.resize_terminal(80, 24)
+            await pilot.pause()
+            self.assertEqual(log_widget.scroll_y, log_widget.max_scroll_y)
+
+            spinner_phase = app._operation_spinner_phase
+            app._poll_operation()
+            self.assertNotEqual(app._operation_spinner_phase, spinner_phase)
+
+    async def test_pilot_freezes_completed_operation_elapsed_time(self) -> None:
+        from loopforge.cli.operations import OperationController
+        from loopforge.cli.textual_app import LoopForgeApp
+
+        app = LoopForgeApp(SimpleNamespace(project_dir=Path.cwd()), load_on_mount=False)
+        operation = OperationController("Verify run", started_at=100.0)
+        operation.result = SimpleNamespace(ok=True, message="Verification completed.")
+        operation.finished = True
+        async with app.run_test() as _pilot:
+            with (
+                mock.patch("loopforge.cli.operations.monotonic", return_value=105.0),
+                mock.patch.object(app, "load_selected_project") as refresh,
+            ):
+                app.begin_operation(operation)
+                app._poll_operation()
+                app._snapshot = app.store.flush()
+                elapsed = app.snapshot.operation.elapsed_seconds
+                spinner_phase = app._operation_spinner_phase
+                with mock.patch("loopforge.cli.operations.monotonic", return_value=120.0):
+                    app._poll_operation()
+
+            self.assertEqual(app.snapshot.operation.elapsed_seconds, elapsed)
+            self.assertEqual(app._operation_spinner_phase, spinner_phase)
+            refresh.assert_called_once_with()
+
     async def test_pilot_exits_the_textual_backend(self) -> None:
         from loopforge.cli.textual_app import LoopForgeApp
 
@@ -163,7 +225,7 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
                         "the adapter picker to close",
                     )
                     self.assertEqual(shell.selected_adapter, "kilo-code")
-                    self.assertIn("kilo-code", str(app.query_one("#screen-body").renderable))
+                    self.assertIn("kilo-code", str(app.query_one("#screen-body").render()))
 
                     action = ActionDescriptor(
                         "choose-adapter",
