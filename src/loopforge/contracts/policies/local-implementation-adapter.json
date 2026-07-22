@@ -3,7 +3,6 @@
   "purpose": "local_implementation_adapter",
   "mode": "agent-command-wrapper",
   "command_timeout_seconds": 540,
-  "max_child_output_bytes": 32768,
   "max_summary_chars": 240,
   "require_clean_workspace_at_start": true,
   "allow_dirty_workspace_for_authorized_recovery": true,

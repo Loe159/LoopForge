@@ -636,6 +636,47 @@ class PackagedRuntimeLayoutTests(unittest.TestCase):
 
             self.assertEqual(child_stderr_path.read_bytes(), b"full child stderr")
 
+    def test_adapter_allows_large_child_output_when_workspace_changes(self) -> None:
+        policy = local_implementation_adapter.load_policy()
+        self.assertNotIn("max_child_output_bytes", policy)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            session_path = workspace / "expected-session.json"
+            session_path.write_text(
+                json.dumps(
+                    {
+                        "issue": 1,
+                        "risk": "low",
+                        "base_commit": "0" * 40,
+                        "workspace": str(workspace.resolve()),
+                        "runner_id": "local-adapter-fixture",
+                        "recovery_authorized": False,
+                        "preflight_sha256": "1" * 64,
+                        "start_authorization_receipt_sha256": "2" * 64,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = local_implementation_adapter.run_adapter(
+                session_path,
+                [
+                    sys.executable,
+                    "-c",
+                    (
+                        "from pathlib import Path; import sys; "
+                        "sys.stdout.write('x' * 32769); "
+                        "Path('changed.txt').write_text('changed\\n', encoding='utf-8')"
+                    ),
+                ],
+                workspace,
+                policy,
+            )
+
+            payload = json.loads(result)
+            self.assertEqual(payload["status"], "completed")
+            self.assertTrue(payload["workspace_changed"])
+
     def test_kilo_code_is_allowlisted_and_receives_the_loopforge_prompt(self) -> None:
         policy = local_implementation_adapter.load_policy()
         self.assertIn("kilo", policy["allowed_command_basenames"])

@@ -5006,12 +5006,106 @@ Only this section is present.
             config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
             run_dir = Path(config["run_root"]) / config["current_run_id"]
             run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            second_session = json.loads(
+                (
+                    run_dir
+                    / "attempts"
+                    / "attempt-002"
+                    / "expected-session.json"
+                ).read_text(encoding="utf-8")
+            )
 
             self.assertEqual(run_json["status"], "ready_for_verification")
             self.assertEqual(run_json["attempt_count"], 2)
             self.assertEqual(run_json["attempts"][0]["status"], "blocked")
             self.assertEqual(run_json["attempts"][1]["status"], "completed")
+            self.assertFalse(second_session["recovery_authorized"])
             self.assertTrue((repo / "retried.txt").exists())
+
+    def test_continue_resumes_workspace_changed_by_failed_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(
+                        [
+                            "run",
+                            "--task",
+                            "Resume partially completed work",
+                            "--success-check",
+                            "partial file is completed",
+                        ]
+                    ),
+                    0,
+                )
+                self.approve_current_run_for_implementation(repo, loopforge_home)
+                self.assertEqual(
+                    main(
+                        [
+                            "continue",
+                            "--adapter",
+                            "local-adapter-fixture",
+                            "--",
+                            fixture_python(),
+                            "-c",
+                            (
+                                "from pathlib import Path; import sys; "
+                                "Path('partial.txt').write_text('first attempt\\n', encoding='utf-8'); "
+                                "sys.exit(3)"
+                            ),
+                        ]
+                    ),
+                    1,
+                )
+                self.assertEqual(
+                    main(
+                        [
+                            "continue",
+                            "--adapter",
+                            "local-adapter-fixture",
+                            "--",
+                            fixture_python(),
+                            "-c",
+                            (
+                                "from pathlib import Path; "
+                                "path = Path('partial.txt'); "
+                                "path.write_text(path.read_text(encoding='utf-8') + "
+                                "'second attempt\\n', encoding='utf-8')"
+                            ),
+                        ]
+                    ),
+                    0,
+                )
+
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_dir = Path(config["run_root"]) / config["current_run_id"]
+            run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            second_session = json.loads(
+                (
+                    run_dir
+                    / "attempts"
+                    / "attempt-002"
+                    / "expected-session.json"
+                ).read_text(encoding="utf-8")
+            )
+
+            self.assertEqual(run_json["status"], "ready_for_verification")
+            self.assertTrue(run_json["attempts"][0]["workspace_changed"])
+            self.assertTrue(second_session["recovery_authorized"])
+            self.assertEqual(
+                (repo / "partial.txt").read_text(encoding="utf-8"),
+                "first attempt\nsecond attempt\n",
+            )
 
     def test_verify_generates_patch_policy_risk_and_pack_checks(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -5523,10 +5523,22 @@ def implementation_base_commit(run: dict[str, Any]) -> str:
     return "0" * 40
 
 
+def implementation_recovery_authorized(run: dict[str, Any]) -> bool:
+    status = str(run.get("status") or "")
+    if status == VERIFICATION_FAILED:
+        return True
+    if status != ADAPTER_BLOCKED:
+        return False
+    return any(
+        attempt.get("workspace_changed") is True
+        for attempt in attempt_records(run)
+    )
+
+
 def expected_session_for(run: dict[str, Any], adapter: str, workspace_dir: Path) -> dict[str, Any]:
     issue = run_issue_number(run)
     base_commit = implementation_base_commit(run)
-    recovery_authorized = str(run.get("status") or "") == VERIFICATION_FAILED
+    recovery_authorized = implementation_recovery_authorized(run)
     seed = {
         "issue": issue,
         "base_commit": base_commit,

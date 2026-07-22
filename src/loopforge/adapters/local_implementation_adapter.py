@@ -27,7 +27,6 @@ EXPECTED_POLICY: dict[str, Any] = {
     "purpose": "local_implementation_adapter",
     "mode": "agent-command-wrapper",
     "command_timeout_seconds": 540,
-    "max_child_output_bytes": 32768,
     "max_summary_chars": 240,
     "require_clean_workspace_at_start": True,
     "allow_dirty_workspace_for_authorized_recovery": True,
@@ -558,13 +557,12 @@ def run_adapter(
     if child_stderr_output is not None:
         child_stderr_output.parent.mkdir(parents=True, exist_ok=True)
         child_stderr_output.write_bytes(completed.stderr or b"")
-    output_size = len(completed.stdout or b"") + len(completed.stderr or b"")
     current_git_paths = git_status_paths(workspace)
     if current_git_paths is None:
         changed = initial_snapshot != workspace_file_snapshot(workspace, policy)
     else:
         changed = bool(relevant_git_status_paths(current_git_paths, policy))
-    if timed_out or completed.returncode != 0 or output_size > policy["max_child_output_bytes"]:
+    if timed_out or completed.returncode != 0:
         status = "failed"
     elif changed:
         status = "completed"
@@ -582,8 +580,6 @@ def run_adapter(
         ),
         stderr=completed.stderr or b"",
     )
-    if output_size > policy["max_child_output_bytes"]:
-        summary = "Implementation command exceeded the adapter output limit."
     value = result_value(session, status, summary, changed)
     return validate_implementation_result.canonical_result_bytes(value)
 
