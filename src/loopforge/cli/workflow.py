@@ -7,6 +7,10 @@ from typing import Any
 from loopforge.cli.context import CliContext
 
 
+def _is_machine_mode(context: CliContext) -> bool:
+    return bool(context.options.json or context.options.quiet)
+
+
 class RunCommandHandler:
     """Create a run or advance the active cockpit by one eligible stage."""
 
@@ -25,6 +29,9 @@ class RunCommandHandler:
             allowed=("text", "json"),
             command="loopforge run",
         )
+        machine_mode = _is_machine_mode(context)
+        if machine_mode:
+            context.renderer.set_machine_mode(True)
         init_result = api.initialize_project(context.project_dir)
         active_status = api.current_status(context.project_dir)
         explicit_source = api.run_has_explicit_source(args)
@@ -282,6 +289,9 @@ class ContinueCommandHandler:
             allowed=("text", "json"),
             command="loopforge continue",
         )
+        machine_mode = _is_machine_mode(context)
+        if machine_mode:
+            context.renderer.set_machine_mode(True)
         adapter_args = args.adapter_args
         if adapter_args and adapter_args[0] == "--":
             adapter_args = adapter_args[1:]
@@ -334,6 +344,9 @@ class VerifyCommandHandler:
             allowed=("text", "json"),
             command="loopforge verify",
         )
+        machine_mode = _is_machine_mode(context)
+        if machine_mode:
+            context.renderer.set_machine_mode(True)
         with context.renderer.loading("Generating patch and running verification..."):
             result = api.verify_run(
                 context.project_dir,
@@ -379,6 +392,9 @@ class LearnCommandHandler:
             allowed=("text", "json"),
             command="loopforge learn",
         )
+        machine_mode = _is_machine_mode(context)
+        if machine_mode:
+            context.renderer.set_machine_mode(True)
         with context.renderer.loading("Updating LoopForge memory proposals..."):
             result = api.learn_run(
                 context.project_dir,

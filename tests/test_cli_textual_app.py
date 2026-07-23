@@ -462,3 +462,97 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
                 status = current_status(project)
                 self.assertEqual(status.run["human_gates"]["initial_task_approval"]["status"], "approved")
                 self.assertEqual(current_guidance(project).recommended_actions[0].id, "run-research")
+
+    async def test_archive_targets_highlighted_run_not_current(self) -> None:
+        from loopforge.cli import main
+        from loopforge.cli.interactive import InteractiveShell
+        from loopforge.cli.textual_app import LoopForgeApp
+        from loopforge.engine import current_status
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project = Path(temp_dir) / "project"
+            project.mkdir()
+            subprocess.run(["git", "init"], cwd=project, check=True, capture_output=True, text=True)
+            (project / "README.md").write_text("# Project\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=project, check=True, capture_output=True, text=True)
+            subprocess.run(
+                ["git", "-c", "user.name=LoopForge Tests", "-c", "user.email=loopforge@example.invalid", "commit", "-m", "initial"],
+                cwd=project,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            loopforge_home = Path(temp_dir) / "home"
+            with mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}):
+                previous_cwd = Path.cwd()
+                os.chdir(project)
+                try:
+                    with redirect_stdout(io.StringIO()):
+                        self.assertEqual(main(["init"]), 0)
+                        self.assertEqual(main(["run", "--task", "First run"]), 0)
+                        self.assertEqual(main(["run", "--task", "Second run"]), 0)
+                finally:
+                    os.chdir(previous_cwd)
+
+                shell = InteractiveShell(project, output=io.StringIO(), error=io.StringIO())
+                app = LoopForgeApp(shell, load_on_mount=False)
+                async with app.run_test() as pilot:
+                    app.select_project(project)
+                    await wait_for_condition(pilot, lambda: len(app.snapshot.project.runs) >= 2, "project runs")
+                    app._screen = "project"
+                    self.assertGreaterEqual(len(app.snapshot.project.runs), 2)
+                    status = current_status(project)
+                    assert status.config is not None
+                    current_id = status.config.get("current_run_id")
+                    runs = app._filtered_runs()
+                    non_current_index: int | None = None
+                    for i, row in enumerate(runs):
+                        value = dict(row) if hasattr(row, "items") else {}
+                        if str(value.get("run_id") or "") != current_id:
+                            non_current_index = i
+                            break
+                    self.assertIsNotNone(non_current_index, "Expected a non-current run in the list")
+                    app._selected_index = non_current_index
+                    highlighted_id = app._highlighted_run_id()
+
+                    await pilot.press("a")
+                    from loopforge.cli.textual_app.screens import ConfirmationScreen
+
+                    await wait_for_condition(
+                        pilot,
+                        lambda: isinstance(app.screen, ConfirmationScreen),
+                        "archive confirmation",
+                    )
+                    self.assertEqual(app.screen.title_text, "Archive run")
+                    self.assertIn(highlighted_id[:16], app.screen.lines[0])
+
+    async def test_cancellation_before_commit_no_effect(self) -> None:
+        from loopforge.cli.operations import OperationController
+        from loopforge.cli.textual_app import LoopForgeApp
+
+        app = LoopForgeApp(SimpleNamespace(project_dir=Path.cwd()), load_on_mount=False)
+        operation = OperationController("Cancel-me operation")
+        async with app.run_test() as _pilot:
+            app.begin_operation(operation)
+            self.assertFalse(operation.commit_started)
+            self.assertTrue(operation.is_cancellable)
+            operation.cancel()
+            self.assertTrue(operation.cancelled)
+            self.assertTrue(operation.cancel_event.is_set())
+
+    async def test_cancellation_after_commit_reports_real_result(self) -> None:
+        from loopforge.cli.operations import OperationController
+        from loopforge.cli.textual_app import LoopForgeApp
+        from loopforge.cli.textual_app.app import _operation_result
+
+        app = LoopForgeApp(SimpleNamespace(project_dir=Path.cwd()), load_on_mount=False)
+        operation = OperationController("Post-commit cancel")
+        async with app.run_test() as _pilot:
+            app.begin_operation(operation)
+            operation.commit_started = True
+            self.assertFalse(operation.is_cancellable)
+            operation.cancel()
+            self.assertFalse(operation.cancelled)
+            result = _operation_result(operation, SimpleNamespace(exit_code=0, message="Committed successfully."), operation.cancel_event.is_set())
+            self.assertTrue(result.ok)
+            self.assertEqual(result.message, "Committed successfully.")

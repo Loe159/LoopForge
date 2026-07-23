@@ -325,7 +325,7 @@ def _operation_snapshot(
         state = "loading"
     elif operation.error is not None:
         state = "failed"
-    elif operation.cancel_event.is_set() and not bool(getattr(operation.result, "ok", False)):
+    elif operation.cancelled and not bool(getattr(operation.result, "ok", False)):
         state = "blocked"
     else:
         state = "ready" if bool(getattr(operation.result, "ok", False)) else "blocked"
@@ -336,7 +336,7 @@ def _operation_snapshot(
         operation.label,
         events,
         operation.finished,
-        operation.cancel_event.is_set(),
+        operation.cancelled and operation.is_cancellable,
         message,
         int(operation.elapsed_seconds()),
     )

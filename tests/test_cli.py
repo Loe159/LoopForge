@@ -25,10 +25,12 @@ from loopforge.engine import (
     codex_workspace_preflight_blockers,
     command_for_attempt,
     command_for_readonly_stage,
+    create_run,
     current_guidance,
     current_status,
     execute_readonly_adapter_command,
     execute_readonly_stage,
+    initialize_project,
     loopforge_home,
     next_readonly_stage,
     platform_cache_home,
@@ -39,6 +41,8 @@ from loopforge.engine import (
     usable_python_executable,
     validate_readonly_stage_artifact,
 )
+from loopforge.engine.packs import PackRegistry
+from loopforge.engine.storage import JsonStore
 from loopforge.cli.interactive import (
     InteractiveShell,
     SlashCommandCompleter,
@@ -6137,12 +6141,287 @@ Only this section is present.
             self.assertIn("current run metadata not found", text)
             self.assertIn("Next", text)
 
+    def test_raw_blocks_outside_run_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(["run", "--task", "Create raw artifact"]),
+                    0,
+                )
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_dir = Path(config["run_root"]) / config["current_run_id"]
+            run_json_path = run_dir / "run.json"
+            run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+            run_json["attempts"] = [
+                {
+                    "id": "attempt-001",
+                    "number": 1,
+                    "status": "completed",
+                    "stdout_path": "../outside.txt",
+                }
+            ]
+            run_json["last_attempt"] = run_json["attempts"][0]
+            run_json["attempt_count"] = 1
+            run_json_path.write_text(json.dumps(run_json), encoding="utf-8")
+
+            output = io.StringIO()
+            error = io.StringIO()
+            shell = InteractiveShell(repo, output=output, error=error)
+            dispatch = shell.dispatch("/raw 1 stdout")
+
+            self.assertEqual(dispatch.exit_code, 1)
+            self.assertIn("path escape", error.getvalue())
+
+    def test_raw_allows_within_run_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(["run", "--task", "Create readable artifact"]),
+                    0,
+                )
+            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+            run_dir = Path(config["run_root"]) / config["current_run_id"]
+            (run_dir / "artifact.txt").write_text("valid artifact\n", encoding="utf-8")
+            run_json_path = run_dir / "run.json"
+            run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+            run_json["attempts"] = [
+                {
+                    "id": "attempt-001",
+                    "number": 1,
+                    "status": "completed",
+                    "stdout_path": "artifact.txt",
+                }
+            ]
+            run_json["last_attempt"] = run_json["attempts"][0]
+            run_json["attempt_count"] = 1
+            run_json_path.write_text(json.dumps(run_json), encoding="utf-8")
+
+            output = io.StringIO()
+            error = io.StringIO()
+            shell = InteractiveShell(repo, output=output, error=error)
+            dispatch = shell.dispatch("/raw 1 stdout")
+
+            self.assertEqual(dispatch.exit_code, 0)
+            self.assertIn("valid artifact", output.getvalue())
+            self.assertIn("Raw attempt-001 stdout", output.getvalue())
+
     def test_unknown_command_still_exits_with_parser_error(self) -> None:
         output = io.StringIO()
         with contextlib.redirect_stderr(output):
             self.assertEqual(main(["unknown"]), 2)
         self.assertIn("LF_USAGE", output.getvalue())
         self.assertIn("invalid choice", output.getvalue())
+
+    @mock.patch("sys.stdout.isatty", return_value=True)
+    def test_json_output_no_spinner_on_fake_tty(self, mock_isatty) -> None:
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(main(["--json", "status"]), 0)
+        text = output.getvalue()
+        self.assertTrue(text.startswith("{") or text.startswith("["))
+        payload = json.loads(text)
+        self.assertIsInstance(payload, dict)
+
+    def test_quiet_output_empty_stdout(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            home = repo / "home"
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["init", "--quiet"]), 0)
+            self.assertEqual(output.getvalue(), "")
+
+    def test_csv_output_no_color_codes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            home = workspace / "home"
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(main(["run", "--task", "CSV test"]), 0)
+                self.assertEqual(
+                    main(["runs", "--format", "csv", "--no-headers"]), 0
+                )
+            text = output.getvalue()
+            self.assertNotIn("\x1b[", text)
+            self.assertNotIn("│", text)
+
+    def test_progress_on_stderr_not_stdout(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            home = repo / "home"
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            progress_written = False
+
+            original_progress = TerminalRenderer.progress
+
+            def progress_spy(self, message, *, file=None):
+                nonlocal progress_written
+                progress_written = True
+                original_progress(self, message, file=file)
+
+            with mock.patch(
+                "loopforge.cli.ui.TerminalRenderer.progress", progress_spy
+            ):
+                with (
+                    mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(home)}),
+                    working_directory(repo),
+                    contextlib.redirect_stdout(stdout),
+                    contextlib.redirect_stderr(stderr),
+                ):
+                    self.assertEqual(main(["init"]), 0)
+
+            self.assertFalse(progress_written)
+
+    def test_machine_mode_disables_spinner(self) -> None:
+        renderer = TerminalRenderer(io.StringIO())
+        renderer.set_machine_mode(True)
+        spinner = renderer.loading("Some message")
+        self.assertIsNotNone(spinner)
+        with spinner:
+            pass
+
+    def test_trust_command_registers_hash_and_untrust_revokes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            repo = root / "repo"
+            repo.mkdir(parents=True)
+            pack_dir = repo / ".loopforge" / "packs" / "demo"
+            pack_dir.mkdir(parents=True)
+            (pack_dir / "pack.json").write_text(
+                json.dumps({"name": "demo", "skills": ["test-skill"]}),
+                encoding="utf-8",
+            )
+            (pack_dir / "checks.json").write_text(
+                json.dumps({
+                    "checks": [
+                        {"name": "unit", "command": ["python", "--version"], "timeout_seconds": 10}
+                    ]
+                }),
+                encoding="utf-8",
+            )
+            trust_home = root / "home"
+            os.environ["LOOPFORGE_HOME"] = str(trust_home)
+
+            shell = InteractiveShell(repo, output=io.StringIO(), error=io.StringIO())
+            result = shell.dispatch("/trust pack demo")
+            self.assertEqual(result.exit_code, 0)
+
+            from loopforge.engine.packs import pack_trust_store
+            store = pack_trust_store()
+            registry = PackRegistry(repo, bundled_root=root / "bundled", store=JsonStore())
+            checks_hash = registry.load_checks("demo")["content_hash"]
+            self.assertTrue(store.is_trusted(checks_hash))
+
+            untrust_result = shell.dispatch("/untrust pack demo")
+            self.assertEqual(untrust_result.exit_code, 0)
+            self.assertFalse(store.is_trusted(checks_hash))
+
+            os.environ.pop("LOOPFORGE_HOME", None)
+
+    def test_verify_blocked_for_untrusted_local_pack(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            repo = root / "repo"
+            repo.mkdir(parents=True)
+
+            os.environ["LOOPFORGE_HOME"] = str(root / "home")
+            initialize_project(repo, home=root / "home")
+            pack_dir = repo / ".loopforge" / "packs" / "demo"
+            pack_dir.mkdir(parents=True)
+            (pack_dir / "pack.json").write_text(
+                json.dumps({"name": "demo", "skills": ["test-skill"]}),
+                encoding="utf-8",
+            )
+            (pack_dir / "checks.json").write_text(
+                json.dumps({
+                    "checks": [
+                        {"name": "unit", "command": ["python", "--version"], "timeout_seconds": 10}
+                    ]
+                }),
+                encoding="utf-8",
+            )
+            with working_directory(repo):
+                run = create_run(
+                    repo,
+                    task="test untrusted pack",
+                    pack="demo",
+                    success_checks=["check"],
+                )
+                run_path = run.run_dir / "run.json"
+                run_data = json.loads(run_path.read_text(encoding="utf-8"))
+                run_data["status"] = "ready_for_verification"
+                run_data["current_stage"] = "verification_pending"
+                run_data["base_commit"] = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+                run_data["stage_statuses"]["verification"] = "pending"
+                run_path.write_text(json.dumps(run_data), encoding="utf-8")
+
+                from loopforge.engine import verify_run as engine_verify
+                result = engine_verify(repo, confirmed=True)
+
+                self.assertFalse(result.ok)
+                self.assertIn("not trusted", result.message.lower())
+
+            os.environ.pop("LOOPFORGE_HOME", None)
+
+    def test_bundled_pack_always_trusted_in_verify(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            repo = root / "repo"
+            repo.mkdir(parents=True)
+            os.environ["LOOPFORGE_HOME"] = str(root / "home")
+            initialize_project(repo, home=root / "home")
+
+            with working_directory(repo):
+                run = create_run(
+                    repo,
+                    task="test bundled pack",
+                    pack="generic-code",
+                    success_checks=["check"],
+                )
+                run_path = run.run_dir / "run.json"
+                run_data = json.loads(run_path.read_text(encoding="utf-8"))
+                run_data["status"] = "ready_for_verification"
+                run_data["current_stage"] = "verification_pending"
+                run_data["base_commit"] = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+                run_data["stage_statuses"]["verification"] = "pending"
+                run_path.write_text(json.dumps(run_data), encoding="utf-8")
+
+                result = current_status(repo)
+                self.assertIsNotNone(result.run)
+
+            os.environ.pop("LOOPFORGE_HOME", None)
 
 
 if __name__ == "__main__":

@@ -30,7 +30,7 @@ from loopforge.cli.textual_app.screens import (
     RecoverableErrorScreen,
     TextEntryScreen,
 )
-from loopforge.cli.textual_app.workers import load_project_snapshot
+from loopforge.cli.textual_app.workers import load_project_snapshot, _identity_stale
 from loopforge.cli.ui import TerminalRenderer
 from loopforge.engine import AGENT_COMMANDS, SUPPORTED_ADAPTERS, set_default_adapter
 
@@ -207,7 +207,10 @@ class LoopForgeApp(App[None]):
         try:
             from loopforge.engine import resume_run
 
+            identity = self.store.begin_load()
             result = resume_run(self.shell.project_dir, run_id)
+            if _identity_stale(self.store, identity):
+                return
             if not result.ok:
                 raise RuntimeError(result.message)
             self.store.select_run(run_id)
@@ -218,9 +221,12 @@ class LoopForgeApp(App[None]):
     @work(thread=True, exclusive=True, group="evidence-load", exit_on_error=False)
     def _load_evidence_worker(self, query: str = "") -> None:
         try:
+            identity = self.store.begin_load()
             status = self.store.status
             index = EvidenceIndex.build(status.run_dir if status is not None else None)
             self._evidence_index = index
+            if _identity_stale(self.store, identity):
+                return
             if not query.strip():
                 self.store.set_evidence(index.items, query="")
                 return
@@ -232,9 +238,12 @@ class LoopForgeApp(App[None]):
     @work(thread=True, exclusive=True, group="evidence-preview", exit_on_error=False)
     def _open_evidence_worker(self, item: EvidenceItem) -> None:
         try:
+            identity = self.store.begin_load()
             if self._evidence_index is None:
                 return
             preview = self._evidence_index.preview(item, query=self._snapshot.evidence.query)
+            if _identity_stale(self.store, identity):
+                return
             self.call_from_thread(self._set_evidence_preview, preview)
         except Exception as error:
             self.post_message(LoadFailed(str(error)))
@@ -494,15 +503,31 @@ class LoopForgeApp(App[None]):
     def action_archive(self) -> None:
         if self._screen != "project" and self._screen != "run":
             return
-        lines = ("Archive the selected run?", "The run remains available in history and can be inspected later.")
-        self.push_screen(ConfirmationScreen("Archive run", lines, approve_label="Archive"), self._archive_confirmed)
+        run_id = self._highlighted_run_id()
+        if not run_id:
+            self._notice = "Select a run to archive."
+            self._render_snapshot(self._snapshot)
+            return
+        lines = (f"Archive run {run_id[:16]}?", "The run remains available in history and can be inspected later.")
+        self.push_screen(ConfirmationScreen("Archive run", lines, approve_label="Archive"), lambda approved: self._archive_confirmed(approved, run_id))
 
-    def _archive_confirmed(self, approved: bool) -> None:
+    def _archive_confirmed(self, approved: bool, run_id: str) -> None:
         if approved:
             self._run_shell_operation(
                 "Archive run",
-                lambda _emit, _cancelled: self._capture_shell_result(self.shell.cmd_archive),
+                lambda _emit, _cancelled: self._capture_shell_result(
+                    lambda: self.shell.cmd_archive_run(run_id)
+                ),
             )
+
+    def _highlighted_run_id(self) -> str | None:
+        runs = self._filtered_runs()
+        if not runs:
+            return None
+        index = min(self._selected_index, len(runs) - 1)
+        row = runs[index]
+        value = dict(row) if hasattr(row, "items") else {}
+        return str(value.get("run_id") or "") or None
 
     def request_action(self, action: ActionDescriptor) -> None:
         if action.executor_key == "adapter":
@@ -522,6 +547,7 @@ class LoopForgeApp(App[None]):
     @work(thread=True, exclusive=True, group="confirmation", exit_on_error=False)
     def _load_confirmation(self, action: ActionDescriptor) -> None:
         try:
+            identity = self.store.begin_load()
             stages = {"approve-plan": "plan", "approve-review": "review"}
             stage = stages.get(action.id)
             status = self.store.status
@@ -531,12 +557,37 @@ class LoopForgeApp(App[None]):
             else:
                 title = f"{action.label}?"
                 lines = (action.description, "Permissions follow the selected pack and stage.", "This remains a local LoopForge action.")
+            if _identity_stale(self.store, identity):
+                return
             self.call_from_thread(self._show_confirmation, action, title, lines)
         except Exception as error:
             self.post_message(LoadFailed(str(error)))
 
     def _show_confirmation(self, action: ActionDescriptor, title: str, lines: tuple[str, ...]) -> None:
         self.push_screen(ConfirmationScreen(title, lines), lambda approved: self._execute_action(action) if approved else None)
+
+    def show_trust_confirmation(
+        self,
+        pack_name: str,
+        pack_hash: str,
+        commands: list[str],
+        on_approved: Callable[[], None],
+    ) -> None:
+        lines = (
+            f"Pack '{pack_name}' is not yet trusted.",
+            f"Hash: {pack_hash}",
+            "Commands: " + ", ".join(commands) if commands else "none",
+            "",
+            "Trust this pack to allow its checks to execute?",
+        )
+        self.push_screen(
+            ConfirmationScreen(
+                f"Trust pack '{pack_name}'?",
+                lines,
+                approve_label="Trust pack",
+            ),
+            lambda approved: on_approved() if approved else None,
+        )
 
     def _execute_action(self, action: ActionDescriptor) -> None:
         self._run_shell_operation(
@@ -559,6 +610,7 @@ class LoopForgeApp(App[None]):
         self.begin_operation(operation)
         operation.start(
             lambda emit, cancelled: _operation_result(
+                operation,
                 runner(emit, cancelled),
                 cancelled.is_set(),
             )
@@ -631,12 +683,15 @@ class LoopForgeApp(App[None]):
         try:
             import shutil
 
+            identity = self.store.begin_load()
             status = self.store.status
             if status is None or status.run_dir is None:
                 raise RuntimeError("No run is selected.")
             destination = status.run_dir / "artifacts" / "exports" / item.path.name
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(item.path, destination)
+            if _identity_stale(self.store, identity):
+                return
             self.call_from_thread(self._set_notice, f"Exported {destination.relative_to(status.run_dir)}")
         except Exception as error:
             self.post_message(LoadFailed(str(error)))
@@ -832,15 +887,16 @@ def _evidence_line(item: object) -> str:
     return f"{getattr(item, 'label', 'File')}  {getattr(item, 'relative_path', '')}"
 
 
-def _operation_result(value: object, cancelled: bool) -> SimpleNamespace:
+def _operation_result(operation: OperationController, value: object, cancelled: bool) -> SimpleNamespace:
     exit_code = getattr(value, "exit_code", 0)
-    ok = not cancelled and exit_code == 0
+    show_cancelled = operation.cancelled and operation.is_cancellable
+    ok = not show_cancelled and exit_code == 0
     return SimpleNamespace(
         ok=ok,
         should_exit=bool(getattr(value, "should_exit", False)),
         message=(
             "Operation cancelled."
-            if cancelled
+            if show_cancelled
             else str(getattr(value, "message", "Action completed." if ok else "Action was blocked."))
         ),
     )

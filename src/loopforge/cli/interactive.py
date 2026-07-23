@@ -27,6 +27,7 @@ from loopforge.engine import (
     DEFAULT_PROFILE,
     SUPPORTED_ADAPTERS,
     archive_current_run,
+    archive_run,
     compact_current_context,
     continue_run,
     create_run,
@@ -135,7 +136,9 @@ SUPPORTED_COMMANDS = {
     "tasks": "List recorded attempts and next action.",
     "theme": "Set the session theme.",
     "title": "Show or set a session title.",
+    "trust": "Trust a local pack by name and allow its checks to execute.",
     "tui": "Set the session renderer mode.",
+    "untrust": "Revoke trust for a previously trusted local pack.",
     "usage": "Show local usage status without inventing unavailable values.",
     "update": (
         "Pull LoopForge updates, verify prerequisites, and reinstall the command."
@@ -178,7 +181,7 @@ COMMAND_GROUPS = {
     "Help": ("report",),
 }
 
-ALWAYS_DISCOVERABLE = {"help", "commands", "clear", "exit", "report", "update"}
+ALWAYS_DISCOVERABLE = {"help", "commands", "clear", "exit", "report", "trust", "untrust", "update"}
 
 
 def contextual_commands(project_dir: Path | None = None) -> dict[str, str]:
@@ -1754,6 +1757,15 @@ class InteractiveShell:
             status = current_status(self.project_dir)
             if status.run_dir is not None:
                 path = status.run_dir / path
+                from loopforge.engine.path_resolvers import resolve_artifact
+                try:
+                    resolve_artifact(status.run_dir, str(path.relative_to(status.run_dir)))
+                except ValueError:
+                    self.write(
+                        f"raw artifact path escape detected: {path}",
+                        error=True,
+                    )
+                    return DispatchResult(1)
         if not path.exists():
             self.write(f"raw artifact not found: {path}", error=True)
             return DispatchResult(1)
@@ -2055,6 +2067,14 @@ class InteractiveShell:
                 self.write(f"- {blocker}", error=not result.ok)
         return DispatchResult(0 if result.ok else 1)
 
+    def cmd_archive_run(self, run_id: str) -> DispatchResult:
+        result = archive_run(self.project_dir, run_id)
+        self.write(result.message, error=not result.ok)
+        if result.blockers:
+            for blocker in result.blockers:
+                self.write(f"- {blocker}", error=not result.ok)
+        return DispatchResult(0 if result.ok else 1)
+
     def cmd_doctor(self, raw: str = "") -> DispatchResult:
         del raw
         deps = tui_dependency_state()
@@ -2080,6 +2100,84 @@ class InteractiveShell:
                 lines.append(f"- {blocker}")
         self.write_panel("LoopForge doctor", lines)
         return DispatchResult(0)
+
+    def _resolve_pack_registry(self):
+        from loopforge.engine import _pack_registry
+
+        return _pack_registry(self.project_dir)
+
+    def cmd_trust(self, raw: str) -> DispatchResult:
+        tokens = self.split_args(raw)
+        if tokens is None:
+            return DispatchResult(2)
+        if len(tokens) < 2 or tokens[0] != "pack":
+            self.write("usage: /trust pack <pack_name>", error=True)
+            return DispatchResult(2)
+        pack_name = tokens[1]
+        try:
+            registry = self._resolve_pack_registry()
+            contract = registry.load_contract(pack_name)
+            checks = registry.load_checks(pack_name)
+            pack_hash = checks.get("content_hash") or contract.get("contract_hash", "")
+            if not pack_hash:
+                self.write(f"Could not compute a hash for pack '{pack_name}'.", error=True)
+                return DispatchResult(1)
+            from loopforge.engine.packs import pack_trust_store
+
+            store = pack_trust_store()
+            store.trust(
+                pack_hash,
+                pack_name,
+                [item.get("name", "unknown") for item in checks.get("checks", [])],
+            )
+            render_success(
+                self.renderer,
+                f"Pack '{pack_name}' trusted",
+                [
+                    ("pack", pack_name),
+                    ("hash", pack_hash[:12]),
+                    ("checks", len(checks.get("checks", []))),
+                ],
+                next_command="/verify",
+            )
+            return DispatchResult(0)
+        except (OSError, ValueError) as error:
+            self.write(f"Could not trust pack '{pack_name}': {error}", error=True)
+            return DispatchResult(1)
+
+    def cmd_untrust(self, raw: str) -> DispatchResult:
+        tokens = self.split_args(raw)
+        if tokens is None:
+            return DispatchResult(2)
+        if len(tokens) < 2 or tokens[0] != "pack":
+            self.write("usage: /untrust pack <pack_name>", error=True)
+            return DispatchResult(2)
+        pack_name = tokens[1]
+        try:
+            registry = self._resolve_pack_registry()
+            checks = registry.load_checks(pack_name)
+            contract = registry.load_contract(pack_name)
+            pack_hash = checks.get("content_hash") or contract.get("contract_hash", "")
+            if not pack_hash:
+                self.write(f"Could not compute a hash for pack '{pack_name}'.", error=True)
+                return DispatchResult(1)
+            from loopforge.engine.packs import pack_trust_store
+
+            store = pack_trust_store()
+            store.untrust(pack_hash)
+            render_success(
+                self.renderer,
+                f"Pack '{pack_name}' untrusted",
+                [
+                    ("pack", pack_name),
+                    ("hash", pack_hash[:12]),
+                ],
+                next_command="/verify",
+            )
+            return DispatchResult(0)
+        except (OSError, ValueError) as error:
+            self.write(f"Could not untrust pack '{pack_name}': {error}", error=True)
+            return DispatchResult(1)
 
     def cmd_update(self, raw: str = "") -> DispatchResult:
         if raw.strip():

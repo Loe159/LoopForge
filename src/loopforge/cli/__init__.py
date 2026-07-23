@@ -429,8 +429,22 @@ def print_profile_policy(profile: object, *, file=None) -> None:
         print(line, file=file)
 
 
-def print_json_payload(payload: object) -> None:
-    print(json.dumps(payload, indent=2, sort_keys=True))
+def print_json_payload(payload: object, *, file=None) -> None:
+    target = file if file is not None else sys.stdout
+    json.dump(payload, target, indent=2, sort_keys=True)
+    target.write("\n")
+    target.flush()
+
+
+def print_csv_payload(rows: list[dict[str, object]], columns: list[str], *, file=None) -> None:
+    target = file if file is not None else sys.stdout
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=columns, extrasaction="ignore")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow(row)
+    target.write(buffer.getvalue())
+    target.flush()
 
 
 def preparse_global_options(argv: Sequence[str]) -> tuple[CliOptions, list[str]]:

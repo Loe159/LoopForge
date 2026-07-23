@@ -11,6 +11,7 @@ from typing import Any
 
 from loopforge.engine.storage import DEFAULT_JSON_STORE
 from loopforge.engine.git_state import DEFAULT_GIT_STATE_SERVICE
+from loopforge.engine.path_resolvers import validate_identifier, resolve_confined
 
 PROJECTS_DIRECTORY = "projects"
 REGISTRY_FILE = "registry.json"
@@ -41,11 +42,15 @@ def path_project_id(project_dir: Path) -> str:
 
 
 def storage_root(home: Path, project_id: str) -> Path:
+    validate_identifier(project_id, "project")
     return home / PROJECTS_DIRECTORY / project_id
 
 
 def registry_path(home: Path) -> Path:
-    return home / PROJECTS_DIRECTORY / REGISTRY_FILE
+    try:
+        return resolve_confined(home, PROJECTS_DIRECTORY, REGISTRY_FILE)
+    except (ValueError, OSError):
+        return home / PROJECTS_DIRECTORY / REGISTRY_FILE
 
 
 def empty_registry() -> dict[str, Any]:
@@ -98,6 +103,7 @@ def register_project(
     project_id = str(config.get("project_id") or "").strip()
     if not project_id:
         raise ValueError("project config has no project_id")
+    validate_identifier(project_id, "project")
     registry = load_registry(home)
     projects = registry["projects"]
     assert isinstance(projects, dict)
@@ -153,6 +159,7 @@ def regenerate_project_identity(project_dir: Path, config: dict[str, Any], home:
 
 
 def migration_target(home: Path, project_id: str) -> Path:
+    validate_identifier(project_id, "project")
     return storage_root(home, project_id) / "runs"
 
 

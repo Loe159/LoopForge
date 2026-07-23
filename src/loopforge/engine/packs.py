@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from loopforge.engine.storage import JsonStore
+from loopforge.engine.storage import DEFAULT_JSON_STORE, JsonStore
 
 
 class PackRegistry:
@@ -250,6 +252,12 @@ class PackRegistry:
             raise ValueError(f"{path} must contain {object_key} as {expected.__name__}")
         return {"source": str(path), "version": version, object_key: contribution}
 
+    @staticmethod
+    def _compute_content_hash(data: dict[str, Any] | list[Any]) -> str:
+        return hashlib.sha256(
+            json.dumps(data, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()
+
     def _hydrate_contract(self, contract: dict[str, Any]) -> dict[str, Any]:
         hydrated = dict(contract)
         skill_definition_files: list[str] = []
@@ -375,6 +383,7 @@ class PackRegistry:
             "workflow": workflow_data["source"],
         }
         hydrated.pop("_declared", None)
+        hydrated["contract_hash"] = self._compute_content_hash(hydrated)
         return hydrated
 
     def _resolve_contract(self, pack: str, stack: tuple[str, ...]) -> dict[str, Any]:
@@ -534,8 +543,10 @@ class PackRegistry:
                         "timeout_seconds": timeout,
                     }
                 )
-            return {"source": str(path), "checks": normalized}
-        return {"source": None, "checks": []}
+            result = {"source": str(path), "checks": normalized}
+            result["content_hash"] = PackRegistry._compute_content_hash(normalized)
+            return result
+        return {"source": None, "checks": [], "content_hash": ""}
 
     def protected_path_paths(self, pack: str) -> list[Path]:
         return self.file_candidates(pack, "protected-paths.json")
@@ -565,3 +576,49 @@ class PackRegistry:
             "high_path_patterns": [],
             "medium_path_patterns": [],
         }
+
+
+class PackTrustStore:
+    """Persistent store of approved pack hashes."""
+
+    def __init__(self, store: JsonStore, home: Path):
+        self._store = store
+        self._path = home / "trusted_packs.json"
+
+    def _read(self) -> dict[str, Any]:
+        if not self._path.exists():
+            return {"version": 1, "packs": {}}
+        try:
+            return self._store.read_object(self._path)
+        except (OSError, ValueError):
+            return {"version": 1, "packs": {}}
+
+    def _write(self, data: dict[str, Any]) -> None:
+        self._store.write_object(self._path, data)
+
+    def is_trusted(self, pack_hash: str) -> bool:
+        data = self._read()
+        return pack_hash in data.get("packs", {})
+
+    def trust(self, pack_hash: str, pack_name: str, commands: list[str]) -> None:
+        data = self._read()
+        data.setdefault("packs", {})[pack_hash] = {
+            "name": pack_name,
+            "commands": commands,
+            "trusted_at": datetime.now(timezone.utc).isoformat(),
+        }
+        self._write(data)
+
+    def untrust(self, pack_hash: str) -> None:
+        data = self._read()
+        data.get("packs", {}).pop(pack_hash, None)
+        self._write(data)
+
+    def list_trusted(self) -> dict[str, dict[str, Any]]:
+        return dict(self._read().get("packs", {}))
+
+
+def pack_trust_store(home: Path | None = None) -> PackTrustStore:
+    from loopforge.engine import loopforge_home
+
+    return PackTrustStore(DEFAULT_JSON_STORE, loopforge_home(home=home))

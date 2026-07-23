@@ -45,9 +45,16 @@ class OperationController:
     result: Any = None
     error: BaseException | None = None
     finished: bool = False
+    cancelled: bool = False
+    commit_started: bool = False
     _thread: Thread | None = field(default=None, init=False, repr=False)
     _history: list[OperationEvent] = field(default_factory=list, init=False, repr=False)
     history_limit: int = 40
+
+    @property
+    def is_cancellable(self) -> bool:
+        """True only before a persistent commit has started."""
+        return not self.commit_started
 
     def start(self, runner: OperationRunner) -> None:
         """Start ``runner`` once; it receives an event bridge and cancel token."""
@@ -96,8 +103,16 @@ class OperationController:
         )
 
     def cancel(self) -> None:
-        """Request cooperative cancellation; the active child process is stopped."""
+        """Request cooperative cancellation.
 
+        Before ``commit_started`` is True, cancellation is honoured and
+        ``cancelled`` is set to True.  After the commit point has started
+        the persistent mutation must complete and ``cancelled`` stays
+        False.
+        """
+
+        if self.is_cancellable:
+            self.cancelled = True
         if not self.cancel_event.is_set():
             self.cancel_event.set()
             self.emit({"kind": "cancellation_requested", "message": "Cancellation requested…"})

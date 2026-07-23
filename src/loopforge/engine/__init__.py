@@ -33,6 +33,11 @@ from loopforge.engine.storage import DEFAULT_JSON_STORE
 from loopforge.engine import projects as project_registry
 from loopforge.engine import indexes as run_indexes
 from loopforge.engine.git_state import DEFAULT_GIT_STATE_SERVICE
+from loopforge.engine.path_resolvers import (
+    resolve_confined,
+    resolve_run_dir,
+    validate_identifier,
+)
 
 CONFIG_DIR = ".loopforge"
 CONFIG_FILE = "config.json"
@@ -678,6 +683,67 @@ class GuidanceResult:
     recommended_actions: list[GuidedAction]
     blocked_reasons: list[str]
     evidence: list[str]
+
+
+@dataclass(frozen=True)
+class ActionScope:
+    project_id: str
+    project_path: Path
+    run_id: str | None
+    revision: int | None = None
+    snapshot: str | None = None
+
+    def validate(self) -> None:
+        from loopforge.engine.path_resolvers import validate_identifier as _validate
+
+        _validate(self.project_id, "project")
+        if self.run_id is not None:
+            _validate(self.run_id, "run")
+        if not self.project_path.is_dir():
+            raise ValueError(f"Project path does not exist: {self.project_path}")
+
+    def revalidate(self, store: Any) -> ActionScope | None:
+        reloaded = _load_config_scope(self.project_path)
+        if reloaded is None:
+            return ActionScope(
+                project_id=self.project_id,
+                project_path=self.project_path,
+                run_id=self.run_id,
+                revision=(self.revision or 0) + 1,
+                snapshot="config_missing",
+            )
+        if reloaded.project_id != self.project_id:
+            return ActionScope(
+                project_id=reloaded.project_id,
+                project_path=reloaded.project_path,
+                run_id=reloaded.run_id,
+                revision=(self.revision or 0) + 1,
+                snapshot="project_changed",
+            )
+        if reloaded.run_id != self.run_id:
+            return ActionScope(
+                project_id=reloaded.project_id,
+                project_path=reloaded.project_path,
+                run_id=reloaded.run_id,
+                revision=(self.revision or 0) + 1,
+                snapshot="run_changed",
+            )
+        return None
+
+
+def _load_config_scope(project_dir: Path) -> ActionScope | None:
+    config_path = project_config_path(project_dir)
+    if not config_path.exists():
+        return None
+    try:
+        config = normalize_config(project_dir, read_json(config_path))[0]
+    except (OSError, ValueError):
+        return None
+    return ActionScope(
+        project_id=str(config.get("project_id") or ""),
+        project_path=project_dir.resolve(),
+        run_id=str(config.get("current_run_id") or "") or None,
+    )
 
 
 def utc_now() -> str:
@@ -1327,6 +1393,7 @@ def install_loopforge(
             f"LoopForge package sources were not found at {root / 'src' / 'loopforge'}."
         )
 
+    # Exempt: installation/bootstrap infrastructure, not check execution
     try:
         pip = subprocess.run(
             [sys.executable, "-m", "pip", "--version"],
@@ -1913,13 +1980,26 @@ def normalize_config(
     normalized_profile = normalize_profile(config.get("profile", profile))
     if config.get("profile") != normalized_profile:
         config["profile"] = normalized_profile
+    home_root = loopforge_home(home=home)
     if "run_root" not in config:
         config["run_root"] = str(
             project_registry.storage_root(
-                loopforge_home(home=home), str(config["project_id"])
+                home_root, str(config["project_id"])
             )
             / "runs"
         )
+    elif home is not None:
+        raw = str(config["run_root"])
+        resolved = Path(raw).expanduser().resolve()
+        home_resolved = home_root.resolve()
+        try:
+            resolved.relative_to(home_resolved)
+        except ValueError:
+            raise ValueError(
+                f"Run root {raw} is outside the LoopForge home directory "
+                f"({home_root}). Use `loopforge doctor` to migrate legacy "
+                f"external run roots."
+            )
     if "updated_at" not in config:
         config["updated_at"] = now
 
@@ -1958,12 +2038,10 @@ def initialize_project(
             else None
         )
         if previous_run_root is not None and previous_run_root != target_root:
-            if previous_run_root.exists() and not target_root.exists():
-                shutil.copytree(previous_run_root, target_root)
+            if not target_root.exists():
                 migrated_run_root = previous_run_root
-            if not previous_run_root.exists() or target_root.exists():
-                config["run_root"] = str(target_root)
-                repaired = True
+            config["run_root"] = str(target_root)
+            repaired = True
         if repaired:
             write_json_atomic(config_path, config)
         registration = project_registry.register_project(project_dir, config, home_root)
@@ -2126,6 +2204,63 @@ def set_default_adapter(
     return update_project_config(project_dir, updates)
 
 
+def archive_run(project_dir: Path, run_id: str) -> ConfigUpdateResult:
+    validate_identifier(run_id, "run")
+
+    status = current_status(project_dir)
+    if not status.initialized or status.config is None:
+        return ConfigUpdateResult(
+            project_dir=status.project_dir,
+            config_path=status.config_path,
+            config=None,
+            ok=False,
+            message="LoopForge archive failed.",
+            blockers=[status.next_step],
+        )
+    config_project_id = str(status.config.get("project_id") or "")
+    scope = ActionScope(
+        project_id=config_project_id,
+        project_path=project_dir.resolve(),
+        run_id=run_id,
+    )
+    scope.validate()
+    run_root = Path(str(status.config["run_root"])).expanduser()
+    run_dir = resolve_run_dir(run_root, run_id)
+    run_json_path = run_dir / "run.json"
+    if not run_json_path.exists():
+        return ConfigUpdateResult(
+            project_dir=status.project_dir,
+            config_path=status.config_path,
+            config=status.config,
+            ok=False,
+            message="LoopForge archive failed.",
+            blockers=[f"run metadata not found: {run_json_path}"],
+        )
+    run = read_json(run_json_path)
+    actual_id = str(run.get("run_id") or "")
+    if actual_id != run_id:
+        return ConfigUpdateResult(
+            project_dir=status.project_dir,
+            config_path=status.config_path,
+            config=status.config,
+            ok=False,
+            message="LoopForge archive failed.",
+            blockers=[f"run id mismatch: run.json contains {actual_id}"],
+        )
+    updated_run = dict(run)
+    updated_run["archived"] = True
+    updated_run["archived_at"] = utc_now()
+    persist_run_json(status.project_dir, run_json_path, updated_run)
+    return ConfigUpdateResult(
+        project_dir=status.project_dir,
+        config_path=status.config_path,
+        config=status.config,
+        ok=True,
+        message=f"LoopForge archived run: {run_id}",
+        blockers=[],
+    )
+
+
 def archive_current_run(project_dir: Path) -> ConfigUpdateResult:
     status = current_status(project_dir)
     if not status.initialized or status.config is None:
@@ -2146,48 +2281,43 @@ def archive_current_run(project_dir: Path) -> ConfigUpdateResult:
             message="LoopForge archive failed.",
             blockers=[status.next_step],
         )
-    updated_run = dict(status.run)
-    updated_run["archived"] = True
-    updated_run["archived_at"] = utc_now()
-    persist_run_json(status.project_dir, status.run_json_path or (status.run_dir / "run.json"), updated_run)
-    return ConfigUpdateResult(
-        project_dir=status.project_dir,
-        config_path=status.config_path,
-        config=status.config,
-        ok=True,
-        message=f"LoopForge archived run: {updated_run.get('run_id')}",
-        blockers=[],
-    )
+    run_id = str(status.run.get("run_id") or "")
+    if not run_id:
+        return ConfigUpdateResult(
+            project_dir=status.project_dir,
+            config_path=status.config_path,
+            config=status.config,
+            ok=False,
+            message="LoopForge archive failed.",
+            blockers=["current run has no id"],
+        )
+    return archive_run(project_dir, run_id)
 
 
 def detect_git_base_commit(project_dir: Path) -> str | None:
-    result = subprocess.run(
+    from loopforge.engine.process_runner import ProcessRunner
+    runner = ProcessRunner(output_limit_bytes=10000, timeout=10)
+    receipt = runner.run(
         ["git", "rev-parse", "HEAD"],
         cwd=project_dir,
-        capture_output=True,
-        text=True,
-        timeout=10,
-        check=False,
     )
-    if result.returncode != 0:
+    if not receipt.completed:
         return None
-    commit = result.stdout.strip()
+    commit = receipt.stdout.strip()
     return commit or None
 
 
 def git_toplevel(project_dir: Path) -> Path | None:
-    result = subprocess.run(
+    from loopforge.engine.process_runner import ProcessRunner
+    runner = ProcessRunner(output_limit_bytes=10000, timeout=10)
+    receipt = runner.run(
         ["git", "rev-parse", "--show-toplevel"],
         cwd=project_dir,
-        capture_output=True,
-        text=True,
-        timeout=10,
-        check=False,
     )
-    if result.returncode != 0:
+    if not receipt.completed:
         return None
     try:
-        return Path(result.stdout.strip()).resolve()
+        return Path(receipt.stdout.strip()).resolve()
     except OSError:
         return None
 
@@ -2222,12 +2352,21 @@ def codex_workspace_preflight_blockers(
     return blockers
 
 
-def run_workspace_path(run: dict[str, Any], fallback_project_dir: Path) -> Path:
+def run_workspace_path(
+    run: dict[str, Any],
+    fallback_project_dir: Path,
+    run_dir: Path | None = None,
+) -> Path:
     workspace = run.get("workspace", {})
     if isinstance(workspace, dict):
         raw_path = workspace.get("path")
         if isinstance(raw_path, str) and raw_path.strip():
-            return Path(raw_path).expanduser().resolve()
+            candidate = Path(raw_path).expanduser().resolve()
+            if run_dir is not None:
+                return resolve_confined(run_dir, candidate.name)
+            return candidate
+    if run_dir is not None:
+        return resolve_confined(run_dir, fallback_project_dir.name)
     return fallback_project_dir.resolve()
 
 
@@ -2281,6 +2420,10 @@ def prepare_run_workspace(
         str(workspace_path),
         base_commit,
     ]
+    # Exempt from ProcessRunner: worktree creation is one-shot repository infrastructure
+    # with fixed timeouts (60s/30s) and capture_output. These are setup operations, not
+    # repeated command execution, and must not be cancelled mid-flight (partial worktrees
+    # cause repository corruption).
     result = subprocess.run(
         command,
         cwd=project_dir,
@@ -4707,6 +4850,7 @@ def resume_run(project_dir: Path, run_id: str) -> ResumeRunResult:
             message="LoopForge resume failed.",
             blockers=["run id must not be empty"],
         )
+    validate_identifier(run_id, "run")
 
     status = current_status(project_dir)
     if not status.initialized or status.config is None:
@@ -4720,7 +4864,7 @@ def resume_run(project_dir: Path, run_id: str) -> ResumeRunResult:
         )
 
     run_root = Path(str(status.config["run_root"])).expanduser()
-    run_dir = run_root / run_id.strip()
+    run_dir = resolve_run_dir(run_root, run_id.strip())
     run_json_path = run_dir / "run.json"
     if not run_json_path.exists():
         return ResumeRunResult(
@@ -4925,15 +5069,18 @@ def create_run(
     config = normalize_config(project_dir, read_json(config_path))[0]
     project_memory = ensure_project_memory(project_dir)
     run_root = Path(str(config["run_root"])).expanduser()
+    project_id = str(config.get("project_id") or "")
+    if project_id:
+        validate_identifier(project_id, "project")
     run_id = new_run_id()
-    run_dir = run_root / run_id
+    run_dir = resolve_run_dir(run_root, run_id)
     while run_dir.exists():
         run_id = new_run_id()
-        run_dir = run_root / run_id
+        run_dir = resolve_run_dir(run_root, run_id)
 
-    attempts_dir = run_dir / "attempts"
-    artifacts_dir = run_dir / "artifacts"
-    metrics_dir = run_dir / "metrics"
+    attempts_dir = resolve_confined(run_dir, "attempts")
+    artifacts_dir = resolve_confined(run_dir, "artifacts")
+    metrics_dir = resolve_confined(run_dir, "metrics")
     for directory in (attempts_dir, artifacts_dir, metrics_dir):
         directory.mkdir(parents=True, exist_ok=False)
 
@@ -5612,17 +5759,15 @@ def workspace_snapshot_changes(
 
 
 def git_status_entries(project_dir: Path) -> list[str] | None:
-    result = subprocess.run(
+    from loopforge.engine.process_runner import ProcessRunner
+    runner = ProcessRunner(output_limit_bytes=50000, timeout=10)
+    receipt = runner.run(
         ["git", "status", "--porcelain=v1", "--untracked-files=all"],
         cwd=project_dir,
-        capture_output=True,
-        text=True,
-        timeout=10,
-        check=False,
     )
-    if result.returncode != 0:
+    if not receipt.completed:
         return None
-    return [line for line in result.stdout.splitlines() if line.strip()]
+    return [line for line in receipt.stdout.splitlines() if line.strip()]
 
 
 def pack_workflow_stage(run: dict[str, Any], stage: str) -> dict[str, Any] | None:
@@ -6829,10 +6974,15 @@ def run_streaming_process(
     *,
     output_callback: OperationCallback | None = None,
     cancel_event: threading.Event | None = None,
-    stream_output: bool = True,
+    stream_output: bool = False,
     input_bytes: bytes | None = None,
     codex_windows_runtime: bool = False,
 ) -> dict[str, Any]:
+    # Exempt from ProcessRunner: this is the primary adapter execution path
+    # which requires live streaming (output_callback, streaming to
+    # stderr/stdout). ProcessRunner is for bounded non-interactive subprocess
+    # checks and Git queries. The low-level isolation policy is still enforced
+    # via isolated_process.
     isolated_process = isolated_process_module()
     policy = isolated_process.load_policy()
     if input_bytes is not None:
@@ -7355,6 +7505,10 @@ def run_pack_check(
     run_dir: Path,
     patch_path: Path | None,
 ) -> dict[str, Any]:
+    # Exempt from ProcessRunner: pack checks are user-defined scripts
+    # that run in the full project environment (os.environ) with
+    # variable expansion. Migration would require environment
+    # normalization and pack-contract schema updates.
     command = [
         expand_check_value(
             part,
@@ -7425,6 +7579,10 @@ def run_pack_check(
 
 
 def run_json_check(command: list[str], cwd: Path, timeout: int = 60) -> dict[str, Any]:
+    # Exempt from ProcessRunner: json-checks are lightweight JSON-output
+    # subprocesses (e.g. diff stats, linting) with built-in stdout parsing.
+    # Timeout and capture are handled inline; migration would add overhead
+    # without isolation benefit since the full parent environment is passed.
     completed = subprocess.run(
         command,
         cwd=cwd,
@@ -7881,6 +8039,43 @@ def verify_run(
         pack_config = load_pack_checks(status.project_dir, str(run.get("pack") or DEFAULT_PACK))
         pack_checks_source = pack_config.get("source")
         pack_checks = pack_config["checks"]
+        pack_hash = pack_config.get("content_hash", "")
+        if pack_hash and pack_checks_source is not None:
+            registry = _pack_registry(status.project_dir)
+            bundled_root = str(registry.bundled_packs_path())
+            pack_is_bundled = pack_checks_source.startswith(bundled_root)
+            if not pack_is_bundled:
+                from loopforge.engine.packs import pack_trust_store as _pts
+                trust_store = _pts(home=None)
+                if not trust_store.is_trusted(pack_hash):
+                    pack_name = str(run.get("pack") or DEFAULT_PACK)
+                    commands_list = [check.get("command", []) for check in pack_checks]
+                    blocker_msg = (
+                        f"Pack '{pack_name}' is not trusted. "
+                        f"Run `loopforge trust pack {pack_name}` or use interactive mode."
+                    )
+                    updated_run = normalize_run_workflow_state(run)
+                    updated_run["updated_at"] = utc_now()
+                    updated_run["status"] = VERIFICATION_FAILED
+                    updated_run["blockers"] = [blocker_msg]
+                    updated_run["current_stage"] = "verification_blocked"
+                    updated_run["stage_statuses"]["verification"] = "blocked"
+                    persist_run_json(status.project_dir, status.run_json_path, updated_run)
+                    emit_operation_event(
+                        operation_callback,
+                        "blocked",
+                        blocker_msg,
+                        status="blocked",
+                    )
+                    return VerifyResult(
+                        project_dir=status.project_dir,
+                        run_dir=status.run_dir,
+                        run=updated_run,
+                        ok=False,
+                        message=f"Pack '{pack_name}' is not trusted. Run `loopforge trust pack {pack_name}` or use interactive mode.",
+                        blockers=[blocker_msg],
+                        verification=verification_state(updated_run),
+                    )
         for index, check in enumerate(pack_checks, start=1):
             interrupted = cancelled_result()
             if interrupted is not None:

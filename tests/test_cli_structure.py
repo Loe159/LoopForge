@@ -225,6 +225,53 @@ class CliStructureTests(unittest.TestCase):
         self.assertEqual(raised.exception.exit_code, 2)
         self.assertIn("value must be non-negative", raised.exception.detail)
 
+    def test_json_payload_pure_stdout(self) -> None:
+        import io, json
+        from loopforge.cli import print_json_payload
+
+        output = io.StringIO()
+        with mock.patch("sys.stdout", output):
+            print_json_payload({"ok": True, "value": 42})
+
+        text = output.getvalue()
+        self.assertIsInstance(json.loads(text), dict)
+        payload = json.loads(text)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["value"], 42)
+
+    def test_csv_payload_no_extraneous_output(self) -> None:
+        import io
+        from loopforge.cli import print_csv_payload
+
+        output = io.StringIO()
+        with mock.patch("sys.stdout", output):
+            print_csv_payload(
+                [{"col_a": "1", "col_b": "2"}, {"col_a": "3", "col_b": "4"}],
+                ["col_a", "col_b"],
+            )
+
+        text = output.getvalue()
+        self.assertIn("col_a,col_b", text)
+        self.assertIn("1,2", text)
+        self.assertIn("3,4", text)
+        self.assertNotIn("\x1b[", text)
+
+    def test_workflow_helpers_detect_machine_mode(self) -> None:
+        from loopforge.cli.workflow import _is_machine_mode
+        from loopforge.cli.models import CliOptions
+
+        json_opts = CliOptions(json=True, quiet=False)
+        quiet_opts = CliOptions(json=False, quiet=True)
+        normal_opts = CliOptions(json=False, quiet=False)
+
+        context_json = mock.Mock(options=json_opts)
+        context_quiet = mock.Mock(options=quiet_opts)
+        context_normal = mock.Mock(options=normal_opts)
+
+        self.assertTrue(_is_machine_mode(context_json))
+        self.assertTrue(_is_machine_mode(context_quiet))
+        self.assertFalse(_is_machine_mode(context_normal))
+
 
 if __name__ == "__main__":
     unittest.main()

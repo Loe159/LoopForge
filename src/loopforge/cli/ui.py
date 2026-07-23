@@ -50,6 +50,7 @@ class TerminalRenderer:
         self.rich_available = importlib.util.find_spec("rich") is not None
         self.console = None
         self.use_rich = False
+        self._machine_mode = False
         self.set_mode(mode)
 
     def set_mode(self, mode: str) -> None:
@@ -82,6 +83,15 @@ class TerminalRenderer:
         else:
             self.console = None
 
+    def set_machine_mode(self, enabled: bool = True) -> None:
+        self._machine_mode = enabled
+
+    def progress(self, message: str, *, file=None) -> None:
+        import sys as _sys
+
+        target = file if file is not None else _sys.stderr
+        print(message, file=target, flush=True)
+
     def print(self, message: str = "", *, style: str | None = None) -> None:
         if self.use_rich and self.console is not None:
             self.console.print(message, style=self.style(style))
@@ -89,6 +99,11 @@ class TerminalRenderer:
         print(message, file=self.output)
 
     def panel(self, title: str, lines: list[str]) -> None:
+        if self._machine_mode:
+            print(title, file=self.output)
+            for line in lines:
+                print(line, file=self.output)
+            return
         if self.use_rich and self.console is not None:
             from rich.panel import Panel
 
@@ -101,6 +116,11 @@ class TerminalRenderer:
             print(line, file=self.output)
 
     def section(self, title: str, lines: list[str]) -> None:
+        if self._machine_mode:
+            print(title, file=self.output)
+            for line in lines:
+                print(line, file=self.output)
+            return
         if self.use_rich and self.console is not None:
             from rich.rule import Rule
 
@@ -129,6 +149,8 @@ class TerminalRenderer:
             print(" | ".join(row), file=self.output)
 
     def loading(self, message: str):
+        if self._machine_mode:
+            return nullcontext()
         if self.use_rich and self.console is not None:
             return self.console.status(message, spinner="dots", spinner_style=self.style("action"))
         return nullcontext()

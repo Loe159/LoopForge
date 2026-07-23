@@ -9,7 +9,15 @@ from __future__ import annotations
 from pathlib import Path
 
 from loopforge.cli.models import UiSnapshot
-from loopforge.cli.state_store import StateStore
+from loopforge.cli.state_store import LoadIdentity, StateStore
+
+
+def _capture_identity(store: StateStore) -> LoadIdentity:
+    return store.begin_load()
+
+
+def _identity_stale(store: StateStore, identity: LoadIdentity) -> bool:
+    return not store.accepts(identity)
 
 
 def load_project_snapshot(store: StateStore, project: Path | None = None) -> UiSnapshot:

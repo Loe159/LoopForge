@@ -15,6 +15,9 @@ from loopforge.adapters import kilo_code
 from loopforge.contracts import policy_path
 from loopforge.checks import diff_policy, isolated_process
 from loopforge.engine import (
+    ActionScope,
+    archive_run,
+    archive_current_run,
     create_run,
     codex_workspace_preflight_blockers,
     current_status,
@@ -30,7 +33,7 @@ from loopforge.engine import (
     write_json_atomic,
 )
 from loopforge.engine.metrics import MetricsService
-from loopforge.engine.packs import PackRegistry
+from loopforge.engine.packs import PackRegistry, PackTrustStore, pack_trust_store
 from loopforge.engine.storage import JsonStore
 from loopforge.engine.git_state import GitStateService
 
@@ -360,7 +363,7 @@ class ProjectRegistryTests(unittest.TestCase):
             self.assertEqual(migrated.migrated_run_root, legacy_root)
             new_root = Path(migrated.config["run_root"])
             self.assertTrue((legacy_run / "run.json").exists())
-            self.assertTrue((new_root / "legacy-run" / "run.json").exists())
+            self.assertFalse((new_root / "legacy-run" / "run.json").exists())
 
     def test_duplicate_identity_requires_explicit_clone_resolution(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -869,6 +872,116 @@ class PackRegistryTests(unittest.TestCase):
             )
 
 
+class PackTrustStoreTests(unittest.TestCase):
+    def _make_store(self) -> tuple[PackTrustStore, Path]:
+        tmp_dir = Path(tempfile.mkdtemp())
+        home = tmp_dir / "LoopForge"
+        home.mkdir(parents=True)
+        return PackTrustStore(JsonStore(), home), tmp_dir
+
+    def test_trust_and_is_trusted(self) -> None:
+        store, tmp_dir = self._make_store()
+        self.assertFalse(store.is_trusted("abc123"))
+        store.trust("abc123", "test-pack", ["check1", "check2"])
+        self.assertTrue(store.is_trusted("abc123"))
+        self.assertFalse(store.is_trusted("xyz789"))
+
+    def test_untrust_revokes(self) -> None:
+        store, tmp_dir = self._make_store()
+        store.trust("abc123", "test-pack", ["check1"])
+        self.assertTrue(store.is_trusted("abc123"))
+        store.untrust("abc123")
+        self.assertFalse(store.is_trusted("abc123"))
+
+    def test_list_trusted_returns_all(self) -> None:
+        store, tmp_dir = self._make_store()
+        store.trust("abc123", "pack-a", ["c1"])
+        store.trust("xyz789", "pack-b", ["c2"])
+        trusted = store.list_trusted()
+        self.assertEqual(len(trusted), 2)
+        self.assertIn("abc123", trusted)
+        self.assertIn("xyz789", trusted)
+        self.assertEqual(trusted["abc123"]["name"], "pack-a")
+        self.assertIn("trusted_at", trusted["abc123"])
+
+    def test_persistence_across_store_instances(self) -> None:
+        store, tmp_dir = self._make_store()
+        path = tmp_dir / "LoopForge" / "trusted_packs.json"
+        store.trust("persist-hash", "persist-pack", ["c"])
+        new_store = PackTrustStore(JsonStore(), tmp_dir / "LoopForge")
+        self.assertTrue(new_store.is_trusted("persist-hash"))
+
+    def test_corrupt_file_returns_empty(self) -> None:
+        tmp_dir = Path(tempfile.mkdtemp())
+        home = tmp_dir / "LoopForge"
+        home.mkdir(parents=True)
+        (home / "trusted_packs.json").write_text("{not valid json", encoding="utf-8")
+        store = PackTrustStore(JsonStore(), home)
+        self.assertFalse(store.is_trusted("anything"))
+
+    def test_load_checks_returns_content_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            project_dir = root / "project"
+            pack_dir = project_dir / ".loopforge" / "packs" / "demo"
+            pack_dir.mkdir(parents=True)
+            (pack_dir / "checks.json").write_text(
+                json.dumps({
+                    "checks": [
+                        {"name": "unit", "command": ["python", "-m", "unittest"], "timeout_seconds": 10}
+                    ]
+                }),
+                encoding="utf-8",
+            )
+            registry = PackRegistry(project_dir, bundled_root=root / "bundled", store=JsonStore())
+            result = registry.load_checks("demo")
+            self.assertIn("content_hash", result)
+            self.assertEqual(len(result["content_hash"]), 64)
+
+    def test_content_hash_changes_after_pack_modified(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            project_dir = root / "project"
+            pack_dir = project_dir / ".loopforge" / "packs" / "demo"
+            pack_dir.mkdir(parents=True)
+            checks_path = pack_dir / "checks.json"
+            checks_path.write_text(
+                json.dumps({
+                    "checks": [
+                        {"name": "unit", "command": ["python", "-m", "unittest"], "timeout_seconds": 10}
+                    ]
+                }),
+                encoding="utf-8",
+            )
+            registry = PackRegistry(project_dir, bundled_root=root / "bundled", store=JsonStore())
+            hash1 = registry.load_checks("demo")["content_hash"]
+            checks_path.write_text(
+                json.dumps({
+                    "checks": [
+                        {"name": "lint", "command": ["ruff"], "timeout_seconds": 30}
+                    ]
+                }),
+                encoding="utf-8",
+            )
+            hash2 = registry.load_checks("demo")["content_hash"]
+            self.assertNotEqual(hash1, hash2)
+
+    def test_load_contract_returns_contract_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            project_dir = root / "project"
+            pack_dir = project_dir / ".loopforge" / "packs" / "demo"
+            pack_dir.mkdir(parents=True)
+            (pack_dir / "pack.json").write_text(
+                json.dumps({"name": "demo", "skills": ["test-skill"]}),
+                encoding="utf-8",
+            )
+            registry = PackRegistry(project_dir, bundled_root=root / "bundled", store=JsonStore())
+            contract = registry.load_contract("demo")
+            self.assertIn("contract_hash", contract)
+            self.assertEqual(len(contract["contract_hash"]), 64)
+
+
 class MetricsServiceTests(unittest.TestCase):
     def test_summary_keeps_unknown_values_out_of_averages(self) -> None:
         service = MetricsService(JsonStore())
@@ -913,6 +1026,80 @@ class StatusReadTests(unittest.TestCase):
 
             self.assertEqual(status.memory["durable_status"], "missing")
             self.assertFalse(memory_path.exists())
+
+
+class ArchiveRunTests(unittest.TestCase):
+    def test_archive_run_with_explicit_id(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            project = root / "project"
+            project.mkdir()
+            initialize_project(project, home=root / "home")
+            created = create_run(project, "Archive me explicitly", success_checks=["tests pass"])
+            run_id = created.run["run_id"]
+            self.assertNotIn("archived", created.run)
+
+            result = archive_run(project, run_id)
+
+            self.assertTrue(result.ok, result.blockers)
+            self.assertIn(run_id, result.message)
+            status = current_status(project)
+            self.assertIsNotNone(status.run)
+            assert status.run is not None
+            self.assertTrue(status.run.get("archived", False))
+            self.assertIn("archived_at", status.run)
+
+    def test_archive_run_wrong_project_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            project_a = root / "project-a"
+            project_b = root / "project-b"
+            project_a.mkdir()
+            project_b.mkdir()
+            initialize_project(project_a, home=root / "home-a")
+            initialize_project(project_b, home=root / "home-b")
+            created = create_run(project_a, "Only in A", success_checks=["tests pass"])
+            run_id = created.run["run_id"]
+
+            result = archive_run(project_b, run_id)
+
+            self.assertFalse(result.ok)
+            self.assertIn("run metadata not found", str(result.blockers))
+
+    def test_archive_current_run_wraps_archive_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            project = root / "project"
+            project.mkdir()
+            initialize_project(project, home=root / "home")
+            created = create_run(project, "Archive current", success_checks=["tests pass"])
+
+            result = archive_current_run(project)
+
+            self.assertTrue(result.ok, result.blockers)
+            status = current_status(project)
+            assert status.run is not None
+            self.assertTrue(status.run.get("archived", False))
+
+    def test_action_scope_revalidate_detects_change(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            project = root / "project"
+            project.mkdir()
+            init = initialize_project(project, home=root / "home")
+            scope = ActionScope(
+                project_id=init.config["project_id"],
+                project_path=project.resolve(),
+                run_id="wrong-run-id",
+                revision=1,
+            )
+
+            changed = scope.revalidate(None)
+
+            self.assertIsNotNone(changed)
+            assert changed is not None
+            self.assertEqual(changed.revision, 2)
+            self.assertNotEqual(changed.run_id, "wrong-run-id")
 
 
 if __name__ == "__main__":
