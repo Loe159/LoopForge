@@ -1,0 +1,292 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="65fb2086-5692-4b17-a5d6-22cf138bb88e" name="Changes" comment="">
+      <change afterPath="$PROJECT_DIR$/docs/regression-matrix.md" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/docs/support-matrix.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/CONTRIBUTING.md" beforeDir="false" afterPath="$PROJECT_DIR$/CONTRIBUTING.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/docs/agent/06-build-test-run.md" beforeDir="false" afterPath="$PROJECT_DIR$/docs/agent/06-build-test-run.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/loopforge/engine/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/loopforge/engine/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_cli.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_cli.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_cli_textual_app.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_cli_textual_app.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_engine_services.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_engine_services.py" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="EmbeddingIndexingInfo">
+    <option name="fileBasedEmbeddingIndicesEnabled" value="true" />
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+    <option name="UPDATE_TYPE" value="REBASE" />
+  </component>
+  <component name="GitHubPullRequestSearchHistory"><![CDATA[{
+  "lastFilter": {
+    "state": "OPEN",
+    "assignee": "Loe159"
+  }
+}]]></component>
+  <component name="GithubPullRequestsUISettings"><![CDATA[{
+  "selectedUrlAndAccountId": {
+    "url": "https://github.com/Loe159/LoopForge.git",
+    "accountId": "d23617f6-c4ae-4a01-b17c-e24b8140a3d8"
+  }
+}]]></component>
+  <component name="McpProjectServerCommands">
+    <commands />
+    <urls />
+  </component>
+  <component name="NextEditCompletionFeaturesState">
+    <decayedCancelled>
+      <entry key="MS100" value="1.2072450653276305" />
+      <entry key="MS500" value="3.4857157801623337" />
+      <entry key="S2" value="10.25427813781436" />
+      <entry key="S5" value="20.719195871313765" />
+      <entry key="S10" value="29.47593187816917" />
+      <entry key="S30" value="38.77408257012875" />
+      <entry key="S60" value="41.730480754297545" />
+      <entry key="M2" value="43.323900374717226" />
+      <entry key="M5" value="44.31942998062103" />
+      <entry key="M10" value="44.78644351543687" />
+      <entry key="M15" value="46.25940068904568" />
+      <entry key="M30" value="62.35008935944377" />
+      <entry key="H1" value="107.96791428462771" />
+      <entry key="H2" value="189.25339832937954" />
+      <entry key="H4" value="311.90407982316725" />
+      <entry key="D1" value="749.9856761331935" />
+      <entry key="W1" value="988.6689754690481" />
+    </decayedCancelled>
+    <decayedSelected>
+      <entry key="MS100" value="0.0" />
+      <entry key="MS500" value="0.0" />
+      <entry key="S2" value="0.0" />
+      <entry key="S5" value="0.0" />
+      <entry key="S10" value="0.0" />
+      <entry key="S30" value="5.182386376697951E-245" />
+      <entry key="S60" value="7.198879690071039E-123" />
+      <entry key="M2" value="8.486489207634681E-62" />
+      <entry key="M5" value="3.8562048732478855E-25" />
+      <entry key="M10" value="7.238718403320522E-13" />
+      <entry key="M15" value="9.538649953444958E-9" />
+      <entry key="M30" value="1.332257695070086E-4" />
+      <entry key="H1" value="0.016166986867944967" />
+      <entry key="H2" value="0.17959834412052816" />
+      <entry key="H4" value="0.613485158193583" />
+      <entry key="D1" value="2.131615968144526" />
+      <entry key="W1" value="2.8480352713787167" />
+    </decayedSelected>
+    <decayedShown>
+      <entry key="MS100" value="1.182006433816267" />
+      <entry key="MS500" value="3.466688591628987" />
+      <entry key="S2" value="10.235649667719857" />
+      <entry key="S5" value="20.704203388735824" />
+      <entry key="S10" value="29.465465578096346" />
+      <entry key="S30" value="38.76956525242351" />
+      <entry key="S60" value="41.72806004952168" />
+      <entry key="M2" value="43.32264646504757" />
+      <entry key="M5" value="44.31891754583461" />
+      <entry key="M10" value="44.78618476038679" />
+      <entry key="M15" value="46.2592229057802" />
+      <entry key="M30" value="62.350104043162055" />
+      <entry key="H1" value="107.98393346788149" />
+      <entry key="H2" value="189.4326370150117" />
+      <entry key="H4" value="312.51703020955927" />
+      <entry key="D1" value="752.1170400854156" />
+      <entry key="W1" value="991.5169663757042" />
+    </decayedShown>
+  </component>
+  <component name="ProjectColorInfo"><![CDATA[{
+  "associatedIndex": 4,
+  "fromUser": false
+}]]></component>
+  <component name="ProjectId" id="3GrUaQLrYzMB5Qh0L4ZzDM5qsgs" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "Git.Working.Tree.Tab.closed.by.user": "closed",
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "Python.test_cli.executor": "Run",
+    "RunOnceActivity.MCP Project settings loaded": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "RunOnceActivity.restore.workspace.module": "true",
+    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
+    "codeWithMe.voiceChat.enabledByDefault": "false",
+    "git-widget-placeholder": "master",
+    "kotlin-language-version-configured": "true",
+    "node.js.detected.package.eslint": "true",
+    "node.js.detected.package.tslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "node.js.selected.package.tslint": "(autodetect)",
+    "nodejs_package_manager_path": "npm"
+  }
+}]]></component>
+  <component name="RunManager">
+    <configuration default="true" type="KotlinStandaloneScriptRunConfigurationType">
+      <module name="LoopForge" />
+      <option name="filePath" />
+      <method v="2" />
+    </configuration>
+    <configuration name="test_cli" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+      <module name="LoopForge" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="SDK_NAME" value="Python 3.14" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/tests" />
+      <option name="IS_MODULE_SDK" value="false" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="DEBUG_JUST_MY_CODE" value="false" />
+      <option name="RUN_TOOL" value="" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/tests/test_cli.py" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
+    <configuration default="true" type="Tox" factoryName="Tox">
+      <module name="LoopForge" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="" />
+      <option name="IS_MODULE_SDK" value="false" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="DEBUG_JUST_MY_CODE" value="false" />
+      <option name="RUN_TOOL" value="" />
+      <method v="2" />
+    </configuration>
+    <configuration default="true" type="ccruntests" factoryName="Run Study Tests">
+      <module name="LoopForge" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="" />
+      <option name="IS_MODULE_SDK" value="false" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="DEBUG_JUST_MY_CODE" value="false" />
+      <option name="RUN_TOOL" value="" />
+      <option name="SCRIPT_NAME" value="" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <option name="studyTest" value="" />
+      <method v="2" />
+    </configuration>
+    <configuration default="true" type="com.dev.idea.plugins.tomcat" factoryName="DevTomcatLocal" httpPort="8080" shutdownPort="8005" httpsPort="8443" httpsEnabled="false" jmxPort="1099" jmxEnabled="false" ajpPort="8009" ajpEnabled="false" contextPath="/" serverMode="Local" catalinaBase="" vmOptions="" passParentEnvs="true" browserUrl="" afterLaunchEnabled="true" withJsDebugger="false" browser="System Default" hotDeploymentEnabled="true" updateClassesAndResources="true" preserveSessions="false" onUpdate="update_classes_and_resources" onFrameDeactivation="do_nothing" showUpdateDialog="true" showFrameDeactivationDialog="true" updateOnSave="false" activateToolWindow="true" jreSelection="Project default" allowMultipleInstances="false" storeAsProjectFile="false" debugPort="5005" debugTransport="Socket" useModuleClasspath="false" managerUrl="http://localhost:8080/manager" remoteUsername="admin" remotePassword="" useRemoteCredentials="false" docBase="" logsSeeded="true">
+      <log_file checked="false" alias="Tomcat Catalina Out" path="$USER_HOME$/AppData/Local/JetBrains/IntelliJIdea2026.1/devtomcat/LoopForge_c1f47b03_6dad3a9c/Tomcat_95a65164/logs/catalina.out" />
+      <log_file alias="Tomcat Catalina Log" path="$USER_HOME$/AppData/Local/JetBrains/IntelliJIdea2026.1/devtomcat/LoopForge_c1f47b03_6dad3a9c/Tomcat_95a65164/logs/catalina.2026-07-23.log" />
+      <log_file alias="Tomcat Localhost Log" path="$USER_HOME$/AppData/Local/JetBrains/IntelliJIdea2026.1/devtomcat/LoopForge_c1f47b03_6dad3a9c/Tomcat_95a65164/logs/localhost.2026-07-23.log" />
+      <log_file checked="false" alias="Tomcat Access Log" path="$USER_HOME$/AppData/Local/JetBrains/IntelliJIdea2026.1/devtomcat/LoopForge_c1f47b03_6dad3a9c/Tomcat_95a65164/logs/localhost_access_log.2026-07-23.txt" />
+      <log_file checked="false" alias="Tomcat Manager Log" path="$USER_HOME$/AppData/Local/JetBrains/IntelliJIdea2026.1/devtomcat/LoopForge_c1f47b03_6dad3a9c/Tomcat_95a65164/logs/manager.2026-07-23.log" />
+      <log_file checked="false" alias="Tomcat Host Manager Log" path="$USER_HOME$/AppData/Local/JetBrains/IntelliJIdea2026.1/devtomcat/LoopForge_c1f47b03_6dad3a9c/Tomcat_95a65164/logs/host-manager.2026-07-23.log" />
+      <RunnerSettings RunnerId="Run" useDefaultStartup="true" startupScript="" useDefaultShutdown="true" shutdownScript="" passParentEnvs="true" debugHost="localhost" debugPort_runner="5005" />
+      <tomcatInfo name="Tomcat" version="10.1.44.0" path="D:\tools\pnv-eclipse\binaries\apache-tomcat-10.1.44" id="2feee8f6-c3f1-4a1e-babf-c75b0f3cb4b7" />
+      <method v="2">
+        <option name="DevTomcat.BuildArtifacts" />
+      </method>
+    </configuration>
+    <recent_temporary>
+      <list>
+        <item itemvalue="Python.test_cli" />
+      </list>
+    </recent_temporary>
+  </component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-jdk-30f59d01ecdd-37e91769500f-intellij.indexing.shared.core-IU-261.25134.95" />
+        <option value="bundled-js-predefined-d6986cc7102b-31caf2ab9e3c-JavaScript-IU-261.25134.95" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="65fb2086-5692-4b17-a5d6-22cf138bb88e" name="Changes" comment="" />
+      <created>1784729244719</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1784729244719</updated>
+    </task>
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="RECENT_FILTERS">
+      <map>
+        <entry key="Branch">
+          <value>
+            <list>
+              <RecentGroup>
+                <option name="FILTER_VALUES">
+                  <option value="origin/master" />
+                </option>
+              </RecentGroup>
+              <RecentGroup>
+                <option name="FILTER_VALUES">
+                  <option value="master" />
+                </option>
+              </RecentGroup>
+              <RecentGroup>
+                <option name="FILTER_VALUES">
+                  <option value="HEAD" />
+                </option>
+              </RecentGroup>
+            </list>
+          </value>
+        </entry>
+      </map>
+    </option>
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State>
+              <option name="FILTERS">
+                <map>
+                  <entry key="branch">
+                    <value>
+                      <list>
+                        <option value="origin/master" />
+                      </list>
+                    </value>
+                  </entry>
+                </map>
+              </option>
+            </State>
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
+</project>

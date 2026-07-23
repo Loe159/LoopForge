@@ -1,0 +1,61 @@
+Attempt blocked
+attempt  attempt-001
+adapter  local-adapter-fixture
+changed  no
+status   blocked
+reason   attempt attempt-001 with adapter local-adapter-fixture reported blocked: Fixture comman...
+
+Blockers
+- attempt attempt-001 with adapter local-adapter-fixture reported blocked: Fixture command completed without workspace changes.
+
+Next
+loopforge continue --adapter codex
+fixture stderr
+Executing <Task pending name='Task-2' coro=<TextualFoundationTests.test_pilot_approves_initial_task_after_confirmation() running at D:\tools\intellij\modules\tools\LoopForge\tests\test_cli_textual_app.py:442> wait_for=<Future pending cb=[Task.task_wakeup()] created at C:\Users\pnv_llg.ASP\AppData\Local\Python\pythoncore-3.14-64\Lib\asyncio\base_events.py:459> cb=[_run_until_complete_cb() at C:\Users\pnv_llg.ASP\AppData\Local\Python\pythoncore-3.14-64\Lib\asyncio\base_events.py:181] created at C:\Users\pnv_llg.ASP\AppData\Local\Python\pythoncore-3.14-64\Lib\asyncio\runners.py:109> took 1.012 seconds
+Executing <Task pending name="run_test LoopForgeApp(title='LoopForge', classes={'-theme-ansi-dark', '-dark-mode'}, pseudo_classes={'ansi', 'focus', 'dark'})" coro=<App.run_test.<locals>.run_app() running at C:\Users\pnv_llg.ASP\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\textual\app.py:2191> created at C:\Users\pnv_llg.ASP\AppData\Local\Python\pythoncore-3.14-64\Lib\asyncio\tasks.py:395> took 0.124 seconds
+Executing <Task pending name='Task-79' coro=<TextualFoundationTests.test_pilot_completes_existing_task_contract_from_current_guidance() running at D:\tools\intellij\modules\tools\LoopForge\tests\test_cli_textual_app.py:354> wait_for=<Future pending cb=[Task.task_wakeup()] created at C:\Users\pnv_llg.ASP\AppData\Local\Python\pythoncore-3.14-64\Lib\asyncio\base_events.py:459> cb=[_run_until_complete_cb() at C:\Users\pnv_llg.ASP\AppData\Local\Python\pythoncore-3.14-64\Lib\asyncio\base_events.py:181] created at C:\Users\pnv_llg.ASP\AppData\Local\Python\pythoncore-3.14-64\Lib\asyncio\runners.py:109> took 0.716 seconds
+======================================================================
+ERROR: test_pilot_approves_initial_task_after_confirmation (tests.test_cli_textual_app.TextualFoundationTests.test_pilot_approves_initial_task_after_confirmation)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\pnv_llg.ASP\AppData\Local\Python\pythoncore-3.14-64\Lib\shutil.py", line 701, in _rmtree_unsafe
+    os.unlink(fullname)
+    ~~~~~~~~~^^^^^^^^^^
+PermissionError: [WinError 32] Le processus ne peut pas accéder au fichier car ce fichier est utilisé par un autre processus: 'C:\\Users\\pnv_llg.ASP\\AppData\\Local\\Temp\\tmp8sr4q_ik\\home\\projects\\project-6f75b3a0ecc145ca88822f97a7de71a6\\runs\\index.json'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\pnv_llg.ASP\AppData\Local\Python\pythoncore-3.14-64\Lib\asyncio\runners.py", line 127, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Users\pnv_llg.ASP\AppData\Local\Python\pythoncore-3.14-64\Lib\asyncio\base_events.py", line 719, in run_until_complete
+    return future.result()
+           ~~~~~~~~~~~~~^^
+  File "D:\tools\intellij\modules\tools\LoopForge\tests\test_cli_textual_app.py", line 413, in test_pilot_approves_initial_task_after_confirmation
+    with tempfile.TemporaryDirectory() as temp_dir:
+         ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\pnv_llg.ASP\AppData\Local\Python\pythoncore-3.14-64\Lib\tempfile.py", line 971, in __exit__
+    self.cleanup()
+    ~~~~~~~~~~~~^^
+  File "C:\Users\pnv_llg.ASP\AppData\Local\Python\pythoncore-3.14-64\Lib\tempfile.py", line 975, in cleanup
+    self._rmtree(self.name, ignore_errors=self._ignore_cleanup_errors)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\pnv_llg.ASP\AppData\Local\Python\pythoncore-3.14-64\Lib\tempfile.py", line 955, in _rmtree
+    _shutil.rmtree(name, onexc=onexc)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\pnv_llg.ASP\AppData\Local\Python\pythoncore-3.14-64\Lib\shutil.py", line 852, in rmtree
+    _rmtree_impl(path, dir_fd, onexc)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\pnv_llg.ASP\AppData\Local\Python\pythoncore-3.14-64\Lib\shutil.py", line 705, in _rmtree_unsafe
+    onexc(os.unlink, fullname, err)
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\pnv_llg.ASP\AppData\Local\Python\pythoncore-3.14-64\Lib\tempfile.py", line 930, in onexc
+    _os.unlink(path)
+    ~~~~~~~~~~^^^^^^
+PermissionError: [WinError 32] Le processus ne peut pas accéder au fichier car ce fichier est utilisé par un autre processus: 'C:\\Users\\pnv_llg.ASP\\AppData\\Local\\Temp\\tmp8sr4q_ik\\home\\projects\\project-6f75b3a0ecc145ca88822f97a7de71a6\\runs\\index.json'
+
+----------------------------------------------------------------------
+Ran 234 tests in 122.435s
+
+FAILED (errors=1)

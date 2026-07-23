@@ -56,7 +56,7 @@ class JsonStoreTests(unittest.TestCase):
 
 
 class InstallationTests(unittest.TestCase):
-    def test_update_pulls_before_installing_and_verifies_the_command(self) -> None:
+    def test_update_uses_pip_upgrade_without_git_pull(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             (root / "pyproject.toml").write_text(
@@ -70,8 +70,6 @@ class InstallationTests(unittest.TestCase):
             completed = [
                 subprocess.CompletedProcess([], 0, stdout="pip 24\n", stderr=""),
                 subprocess.CompletedProcess([], 0, stdout="git version 2.45\n", stderr=""),
-                subprocess.CompletedProcess([], 0, stdout="true\n", stderr=""),
-                subprocess.CompletedProcess([], 0, stdout="Already up to date.\n", stderr=""),
                 subprocess.CompletedProcess([], 0, stdout="installed\n", stderr=""),
                 subprocess.CompletedProcess([], 0, stdout="", stderr=""),
             ]
@@ -89,9 +87,7 @@ class InstallationTests(unittest.TestCase):
                 [
                     [sys.executable, "-m", "pip", "--version"],
                     ["git", "--version"],
-                    ["git", "rev-parse", "--is-inside-work-tree"],
-                    ["git", "pull"],
-                    [sys.executable, "-m", "pip", "install", "-e", "."],
+                    [sys.executable, "-m", "pip", "install", "--upgrade", "-e", "."],
                     [
                         sys.executable,
                         "-c",

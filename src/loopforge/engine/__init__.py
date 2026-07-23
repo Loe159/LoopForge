@@ -1297,11 +1297,13 @@ def repository_root() -> Path:
 def install_loopforge(
     *, update: bool = False, source_root: Path | None = None
 ) -> InstallationResult:
-    """Install LoopForge's editable command from its checked-out source tree.
+    """Install or upgrade LoopForge from its source tree via pip.
 
-    ``update`` intentionally performs the requested ``git pull`` before
-    invoking pip. Every external command is argument-based and its output is
-    kept out of the result so an installer never echoes credentials from a
+    ``update`` uses ``pip install --upgrade -e .`` to refresh an existing
+    editable install.  There is no ``git pull`` step — the function relies on
+    pip to obtain the latest version and does not assume a Git work-tree or
+    remote.  Every external command is argument-based and its output is kept
+    out of the result so an installer never echoes credentials from a
     configured package index or Git remote.
     """
 
@@ -1357,27 +1359,6 @@ def install_loopforge(
     if diagnostics["git"] != "available":
         blockers.append("Git is unavailable; LoopForge needs it for workspaces and verification.")
 
-    if update:
-        try:
-            git_repository = subprocess.run(
-                ["git", "rev-parse", "--is-inside-work-tree"],
-                cwd=root,
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-        except OSError:
-            git_repository = None
-        diagnostics["git_repository"] = (
-            "available"
-            if git_repository is not None
-            and git_repository.returncode == 0
-            and git_repository.stdout.strip() == "true"
-            else "unavailable"
-        )
-        if diagnostics["git_repository"] != "available":
-            blockers.append("The LoopForge source directory is not an available Git work tree.")
-
     if blockers:
         return InstallationResult(
             root,
@@ -1389,51 +1370,55 @@ def install_loopforge(
         )
 
     if update:
+        # Use pip to upgrade an already-installed LoopForge distribution.
+        # This works regardless of whether the original install was from PyPI
+        # or from a local editable checkout.  It does *not* assume a Git
+        # work-tree or perform a ``git pull``.
         try:
-            pull = subprocess.run(
-                ["git", "pull"],
+            pip_upgrade = subprocess.run(
+                [sys.executable, "-m", "pip", "install", "--upgrade", "-e", "."],
                 cwd=root,
                 check=False,
                 capture_output=True,
                 text=True,
             )
         except OSError:
-            pull = None
-        diagnostics["git_pull"] = (
-            "updated" if pull is not None and pull.returncode == 0 else "failed"
+            pip_upgrade = None
+        diagnostics["pip_upgrade"] = (
+            "updated" if pip_upgrade is not None and pip_upgrade.returncode == 0 else "failed"
         )
-        if diagnostics["git_pull"] == "failed":
+        if diagnostics["pip_upgrade"] == "failed":
             return InstallationResult(
                 root,
                 False,
-                "LoopForge update failed before installation.",
+                "LoopForge update failed.",
                 diagnostics,
-                ["`git pull` failed; no package installation was attempted."],
+                ["`python -m pip install --upgrade -e .` failed."],
                 False,
             )
-
-    try:
-        installation = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-e", "."],
-            cwd=root,
-            check=False,
-            capture_output=True,
-            text=True,
+    else:
+        try:
+            pip_upgrade = subprocess.run(
+                [sys.executable, "-m", "pip", "install", "-e", "."],
+                cwd=root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except OSError:
+            pip_upgrade = None
+        diagnostics["pip_upgrade"] = (
+            "installed" if pip_upgrade is not None and pip_upgrade.returncode == 0 else "failed"
         )
-    except OSError:
-        installation = None
-    diagnostics["editable_install"] = (
-        "installed" if installation is not None and installation.returncode == 0 else "failed"
-    )
-    if diagnostics["editable_install"] == "failed":
-        return InstallationResult(
-            root,
-            False,
-            "LoopForge installation failed.",
-            diagnostics,
-            ["`python -m pip install -e .` failed."],
-            update,
-        )
+        if diagnostics["pip_upgrade"] == "failed":
+            return InstallationResult(
+                root,
+                False,
+                "LoopForge installation failed.",
+                diagnostics,
+                ["`python -m pip install -e .` failed."],
+                False,
+            )
 
     try:
         imports = subprocess.run(
@@ -5575,9 +5560,27 @@ def relative_to_run(run_dir: Path, path: Path) -> str:
 
 
 def workspace_snapshot(project_dir: Path) -> dict[str, tuple[int, int]]:
+    """Return a map of {relative_path: (size, mtime_ns)} for every tracked file.
+
+    The runtime storage directory (``LOOPFORGE_HOME`` when it points inside the
+    project, and ``.loopforge/``) is excluded so internal state never leaks into
+    snapshots, patches, or prompts.
+    """
+    excluded = {".git", ".loopforge"}
+    home = os.environ.get("LOOPFORGE_HOME")
+    if home:
+        try:
+            home_path = Path(home).expanduser().resolve()
+            project_resolved = project_dir.resolve()
+            if home_path == project_resolved or str(home_path).startswith(str(project_resolved) + os.sep):
+                home_rel = home_path.relative_to(project_resolved)
+                excluded.add(home_rel.parts[0] if home_rel.parts else str(home_path))
+        except (ValueError, OSError):
+            pass
+
     snapshot: dict[str, tuple[int, int]] = {}
     for path in project_dir.rglob("*"):
-        if ".git" in path.parts:
+        if any(part in excluded for part in path.parts):
             continue
         if not path.is_file():
             continue

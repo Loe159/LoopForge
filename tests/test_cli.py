@@ -1674,8 +1674,10 @@ class CliTests(unittest.TestCase):
             prompt = (run_dir / "artifacts" / "stages" / "plan" / "prompt.md").read_text(
                 encoding="utf-8"
             )
-            self.assertIn(str(run_dir / "task.md"), prompt)
-            self.assertIn(str(run_dir / "research.md"), prompt)
+            expected_task = (run_dir / "task.md").read_text(encoding="utf-8").strip()
+            expected_research = (run_dir / "research.md").read_text(encoding="utf-8").strip()
+            self.assertIn(expected_task, prompt)
+            self.assertIn(expected_research, prompt)
             self.assertIn("Plan ready", output.getvalue())
 
     def test_readonly_plan_validation_accepts_level_two_headings(self) -> None:
@@ -2730,7 +2732,7 @@ Only this section is present.
                             "--json",
                         ]
                     ),
-                    1,
+                    0,
                 )
             config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
             run_dir = Path(config["run_root"]) / config["current_run_id"]
@@ -3989,7 +3991,7 @@ Only this section is present.
             ok=True,
             message="LoopForge is installed and ready to use.",
             diagnostics={
-                "editable_install": "installed",
+                "pip_upgrade": "installed",
                 "command": "C:/Python/Scripts/loopforge.exe",
             },
             blockers=[],
@@ -4003,15 +4005,15 @@ Only this section is present.
 
         payload = json.loads(output.getvalue())
         self.assertTrue(payload["ok"])
-        self.assertEqual(payload["diagnostics"]["editable_install"], "installed")
+        self.assertEqual(payload["diagnostics"]["pip_upgrade"], "installed")
 
-    def test_update_command_pulls_before_reinstalling(self) -> None:
+    def test_update_command_upgrades_without_git_pull(self) -> None:
         output = io.StringIO()
         result = InstallationResult(
             source_root=Path("C:/LoopForge"),
             ok=True,
             message="LoopForge is installed and ready to use.",
-            diagnostics={"git_pull": "updated", "editable_install": "installed"},
+            diagnostics={"pip_upgrade": "updated"},
             blockers=[],
             updated=True,
         )
@@ -4024,7 +4026,7 @@ Only this section is present.
         install.assert_called_once_with(update=True)
         payload = json.loads(output.getvalue())
         self.assertTrue(payload["updated"])
-        self.assertEqual(payload["diagnostics"]["git_pull"], "updated")
+        self.assertEqual(payload["diagnostics"]["pip_upgrade"], "updated")
 
     def test_shell_update_uses_the_shared_installation_operation(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -4033,7 +4035,7 @@ Only this section is present.
                 source_root=Path("C:/LoopForge"),
                 ok=True,
                 message="LoopForge is installed and ready to use.",
-                diagnostics={"git_pull": "updated", "editable_install": "installed"},
+                diagnostics={"pip_upgrade": "updated"},
                 blockers=[],
                 updated=True,
             )

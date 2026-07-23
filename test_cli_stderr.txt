@@ -1,0 +1,17 @@
+Attempt blocked
+attempt  attempt-001
+adapter  local-adapter-fixture
+changed  no
+status   blocked
+reason   attempt attempt-001 with adapter local-adapter-fixture reported blocked: Fixture comman...
+
+Blockers
+- attempt attempt-001 with adapter local-adapter-fixture reported blocked: Fixture command completed without workspace changes.
+
+Next
+loopforge continue --adapter codex
+fixture stderr
+----------------------------------------------------------------------
+Ran 145 tests in 107.766s
+
+OK

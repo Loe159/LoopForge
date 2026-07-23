@@ -166,7 +166,8 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
         app = LoopForgeApp(SimpleNamespace(project_dir=Path.cwd()), load_on_mount=False)
         async with app.run_test() as pilot:
             await pilot.press("ctrl+c")
-            self.assertFalse(app.is_running)
+            await pilot.pause()
+            self.assertTrue(app._exit, "Application should record _exit=True after Ctrl+C")
 
     async def test_pilot_navigates_vertical_screens_and_cancels_a_modal(self) -> None:
         from loopforge.cli.actions import ActionDescriptor

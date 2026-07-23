@@ -1,0 +1,68 @@
+﻿=== Starting ===
+1. Import OK
+2. setUp OK
+Step 1: init
+LoopForge project ready
+id       project-09977d7ab166476f96eef56f09c58dcf
+project  tmpw0v5ufdf
+profile  supervised
+runs     C:\Users\pnv_llg.ASP\AppData\Local\Temp\tmpw0v5ufdf\home\projects\project-09977d7ab166476f96eef56f09c58dcf\runs
+
+Next
+loopforge run --task "Describe the task"
+  init exit code: 0
+Step 2: run with task
+Run created
+goal      Keep adapter separator
+run       run-20260723T140236Z-e6e8a176
+pack      generic-code
+contract  loop_contract_ready
+stage     task_draft
+Selected checks
+- adapter runs
+
+Next
+loopforge run
+  run exit code: 0
+Step 3: approve
+  run_dir: C:\Users\pnv_llg.ASP\AppData\Local\Temp\tmpw0v5ufdf\home\projects\project-09977d7ab166476f96eef56f09c58dcf\runs\run-20260723T140236Z-e6e8a176
+  current_stage: implementation_ready
+  plan status: approved
+  plan_approval status: approved
+  plan_approval full: {'required': True, 'status': 'approved', 'source': 'test', 'approved_at': '2026-07-23T14:02:37Z'}
+Step 4: continue
+True
+Attempt completed
+attempt  attempt-001
+adapter  local-adapter-fixture
+changed  yes
+status   completed
+
+Next
+loopforge verify
+  continue exit code: 0
+  adapter stdout: 'True'
+  result status: completed
+  result summary: Fixture command completed and changed the workspace.
+  result full: {
+  "base_commit": "0000000000000000000000000000000000000000",
+  "deterministic_checks_run": false,
+  "issue": 1,
+  "mode": "untrusted-runner-output",
+  "network_requested": false,
+  "next_action": "deterministic_patch_generation",
+  "patch_generated": false,
+  "preflight_sha256": "5bcb9bccfb67181bc567a45d64f1ed3ad6fada1ccbc76ee23cbbae9a1ae2790a",
+  "publication_requested": false,
+  "purpose": "implementation_session_result",
+  "recovery_authorized": false,
+  "result_version": 1,
+  "risk": "low",
+  "runner_id": "local-adapter-fixture",
+  "start_authorization_receipt_sha256": "29ee2e3713a755e130abffc5f7d7f4775ae00881129525ea20c37047b64b972e",
+  "status": "completed",
+  "summary": "Fixture command completed and changed the workspace.",
+  "workspace": "C:\\Users\\pnv_llg.ASP\\AppData\\Local\\Temp\\tmpw0v5ufdf",
+  "workspace_changed": true
+}
+=== Done ===

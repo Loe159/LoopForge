@@ -1,0 +1,28 @@
+Exit code: 1
+Elapsed: 130.3s
+Summary: no output
+---STDERR---
+at C:\Users\pnv_llg.ASP\AppData\Local\Python\pythoncore-3.14-64\Lib\asyncio\runners.py:109> took 1.147 seconds
+Executing <Task pending name='Task-81' coro=<TextualFoundationTests.test_pilot_completes_existing_task_contract_from_current_guidance() running at D:\tools\intellij\modules\tools\LoopForge\tests\test_cli_textual_app.py:354> wait_for=<Future pending cb=[Task.task_wakeup()] created at C:\Users\pnv_llg.ASP\AppData\Local\Python\pythoncore-3.14-64\Lib\asyncio\base_events.py:459> cb=[_run_until_complete_cb() at C:\Users\pnv_llg.ASP\AppData\Local\Python\pythoncore-3.14-64\Lib\asyncio\base_events.py:181] created at C:\Users\pnv_llg.ASP\AppData\Local\Python\pythoncore-3.14-64\Lib\asyncio\runners.py:109> took 0.732 seconds
+Executing <Task pending name="run_test LoopForgeApp(title='LoopForge', classes={'-theme-ansi-dark', '-dark-mode'}, pseudo_classes={'dark', 'ansi', 'focus'})" coro=<App.run_test.<locals>.run_app() running at C:\Users\pnv_llg.ASP\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\textual\app.py:2191> wait_for=<_GatheringFuture pending cb=[Task.task_wakeup()] created at C:\Users\pnv_llg.ASP\AppData\Local\Python\pythoncore-3.14-64\Lib\asyncio\tasks.py:749> created at C:\Users\pnv_llg.ASP\AppData\Local\Python\pythoncore-3.14-64\Lib\asyncio\tasks.py:395> took 0.135 seconds
+======================================================================
+FAIL: test_shell_stats_tasks_usage_cost_and_raw (tests.test_cli.CliTests.test_shell_stats_tasks_usage_cost_and_raw)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\tools\intellij\modules\tools\LoopForge\tests\test_cli.py", line 3342, in test_shell_stats_tasks_usage_cost_and_raw
+    self.assertEqual(
+    ~~~~~~~~~~~~~~~~^
+        main(
+        ^^^^^
+    ...<6 lines>...
+        0,
+        ^^
+    )
+    ^
+AssertionError: 1 != 0
+
+----------------------------------------------------------------------
+Ran 234 tests in 129.438s
+
+FAILED (failures=1)
+
