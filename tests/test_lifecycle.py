@@ -303,7 +303,7 @@ class TestRefusedTransitions(unittest.TestCase):
         )
 
     def test_plan_approve_blocked_without_approval(self):
-        """PLAN_APPROVE from plan_ready blocked when plan not approved."""
+        """PLAN_APPROVE from plan_ready succeeds regardless of plan status (approval is the human decision)."""
         run = _make_run(
             "plan_ready",
             stage_statuses={
@@ -317,11 +317,11 @@ class TestRefusedTransitions(unittest.TestCase):
             },
         )
         result = DEFAULT_STATE_MACHINE.transition(run, LifecycleEvent.PLAN_APPROVE)
-        self.assertFalse(result.ok)
         self.assertTrue(
-            any("has_approved_plan" in b for b in result.blockers),
-            f"Expected has_approved_plan in blockers: {result.blockers}",
+            result.ok,
+            f"PLAN_APPROVE from plan_ready should succeed; blockers: {result.blockers}",
         )
+        self.assertEqual(result.updated_run["current_stage"], "plan_approved")
 
     def test_plan_approve_allowed_with_completed_status(self):
         """PLAN_APPROVE guard accepts 'completed' status as well as 'approved'."""
@@ -987,12 +987,15 @@ class TestGuardEdgeCases(unittest.TestCase):
         self.assertFalse(result.ok)
 
     def test_has_approved_plan_with_non_dict_stages(self):
-        """guard_has_approved_plan returns False when stage_statuses is not a dict."""
+        """PLAN_APPROVE from plan_ready succeeds (no guard) but effect may warn when stage_statuses is not a dict."""
         run = _make_run("plan_ready", stage_statuses=None)
         result = DEFAULT_STATE_MACHINE.transition(
             run, LifecycleEvent.PLAN_APPROVE
         )
-        self.assertFalse(result.ok)
+        self.assertTrue(
+            result.ok,
+            f"PLAN_APPROVE from plan_ready should succeed; blockers: {result.blockers}",
+        )
 
     def test_has_approved_review_with_non_dict_stages(self):
         """guard_has_approved_review returns False when stage_statuses is not a dict."""

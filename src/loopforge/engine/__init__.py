@@ -2438,11 +2438,30 @@ def archive_current_run(project_dir: Path) -> ConfigUpdateResult:
     return archive_run(project_dir, run_id)
 
 
+def _resolve_git_executable() -> str | None:
+    """Resolve the absolute path to ``git`` so it passes the isolation
+    policy's ``require_absolute_executable`` check in ``ProcessRunner``.
+
+    Returns ``None`` when git is not installed or not on the current PATH.
+    """
+    import shutil
+    found = shutil.which("git")
+    if not found:
+        return None
+    resolved = Path(found).resolve()
+    if resolved.is_file():
+        return str(resolved)
+    return None
+
+
 def detect_git_base_commit(project_dir: Path) -> str | None:
+    git_path = _resolve_git_executable()
+    if git_path is None:
+        return None
     from loopforge.engine.process_runner import ProcessRunner
     runner = ProcessRunner(output_limit_bytes=10000, timeout=10)
     receipt = runner.run(
-        ["git", "rev-parse", "HEAD"],
+        [git_path, "rev-parse", "HEAD"],
         cwd=project_dir,
     )
     if not receipt.completed:
@@ -2452,10 +2471,13 @@ def detect_git_base_commit(project_dir: Path) -> str | None:
 
 
 def git_toplevel(project_dir: Path) -> Path | None:
+    git_path = _resolve_git_executable()
+    if git_path is None:
+        return None
     from loopforge.engine.process_runner import ProcessRunner
     runner = ProcessRunner(output_limit_bytes=10000, timeout=10)
     receipt = runner.run(
-        ["git", "rev-parse", "--show-toplevel"],
+        [git_path, "rev-parse", "--show-toplevel"],
         cwd=project_dir,
     )
     if not receipt.completed:
@@ -6005,10 +6027,13 @@ def workspace_snapshot_changes(
 
 
 def git_status_entries(project_dir: Path) -> list[str] | None:
+    git_path = _resolve_git_executable()
+    if git_path is None:
+        return None
     from loopforge.engine.process_runner import ProcessRunner
     runner = ProcessRunner(output_limit_bytes=50000, timeout=10)
     receipt = runner.run(
-        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+        [git_path, "status", "--porcelain=v1", "--untracked-files=all"],
         cwd=project_dir,
     )
     if not receipt.completed:

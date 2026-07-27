@@ -139,7 +139,7 @@ TRANSITION_TABLE: Dict[Tuple[str, str], Tuple[str, List[str], List[str]]] = {
         LifecycleEvent.PLAN_APPROVE.value,
     ): (
         RunStage.PLAN_APPROVED.value,
-        ["has_approved_plan"],
+        [],
         ["mark_plan_approved"],
     ),
 
