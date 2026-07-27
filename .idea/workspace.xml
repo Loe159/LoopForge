@@ -4,28 +4,37 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="65fb2086-5692-4b17-a5d6-22cf138bb88e" name="Changes" comment="">
+    <list default="true" id="65fb2086-5692-4b17-a5d6-22cf138bb88e" name="Changes" comment="ref: nettoyage fichiers temporaires">
+      <change afterPath="$PROJECT_DIR$/.idea/git_toolbox_prj.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/docs/plans/2026-07-27-001-epic3-architectural-extraction-implementation-plan.md" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/loopforge/commands/__init__.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/loopforge/commands/approve.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/loopforge/commands/archive.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/loopforge/commands/base.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/loopforge/commands/doctor.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/loopforge/commands/init.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/loopforge/commands/learn.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/loopforge/commands/list_commands.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/loopforge/commands/open_project.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/loopforge/commands/review.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/loopforge/commands/run.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/loopforge/commands/stage.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/loopforge/commands/verify.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/loopforge/engine/artifacts.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/loopforge/engine/execution.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/loopforge/engine/memory.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/loopforge/engine/run_service.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/loopforge/engine/status_service.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/loopforge/engine/workflow.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/_debug_continue2_output.txt" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/_debug_output.txt" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/_query_kilo_db.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/full_suite_results.txt" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/loopforge_sessions_output.txt" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/out_cli.txt" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/query_kilo_db.js" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/query_kilo_db.ps1" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/query_kilo_projects.js" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/query_loopforge_sessions.js" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/query_sessions.mjs" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/query_versions.js" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/test_cli_error.txt" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/test_cli_output.txt" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/test_cli_stderr.txt" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/test_cli_stdout.txt" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/test_full2_output.txt" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/test_full_output.txt" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/test_results.txt" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/test_run2_output.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/docs/plans/2026-07-24-001-epic28-state-truth-recovery-implementation-plan.md" beforeDir="false" afterPath="$PROJECT_DIR$/docs/plans/2026-07-24-001-epic2-state-truth-recovery-implementation-plan.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/loopforge/cli/interactive.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/loopforge/cli/interactive.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/loopforge/cli/state_store.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/loopforge/cli/state_store.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/loopforge/cli/textual_app/app.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/loopforge/cli/textual_app/app.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/loopforge/engine/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/loopforge/engine/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/loopforge/engine/models/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/loopforge/engine/models/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/loopforge/engine/packs.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/loopforge/engine/packs.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_engine_services.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_engine_services.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -33,7 +42,7 @@
     <option name="LAST_RESOLUTION" value="IGNORE" />
   </component>
   <component name="EmbeddingIndexingInfo">
-    <option name="cachedIndexableFilesCount" value="1975" />
+    <option name="cachedIndexableFilesCount" value="1998" />
     <option name="fileBasedEmbeddingIndicesEnabled" value="true" />
   </component>
   <component name="Git.Settings">
@@ -58,23 +67,23 @@
   </component>
   <component name="NextEditCompletionFeaturesState">
     <decayedCancelled>
-      <entry key="MS100" value="1.7351517526300133" />
-      <entry key="MS500" value="4.781122559302329" />
-      <entry key="S2" value="9.950294877277468" />
-      <entry key="S5" value="12.745723228247106" />
-      <entry key="S10" value="16.57284736914137" />
-      <entry key="S30" value="33.306549243713235" />
-      <entry key="S60" value="45.253699323060665" />
-      <entry key="M2" value="55.0258290458837" />
-      <entry key="M5" value="66.73106829122649" />
-      <entry key="M10" value="82.30282241904497" />
-      <entry key="M15" value="95.89708567068257" />
-      <entry key="M30" value="122.8427999550557" />
-      <entry key="H1" value="155.1516971641254" />
-      <entry key="H2" value="195.6656002977598" />
-      <entry key="H4" value="234.42061852742492" />
-      <entry key="D1" value="468.85167152141094" />
-      <entry key="W1" value="1634.1480124199772" />
+      <entry key="MS100" value="1.3730495670358234" />
+      <entry key="MS500" value="2.354180052791029" />
+      <entry key="S2" value="2.8089592005070374" />
+      <entry key="S5" value="2.9386381503763292" />
+      <entry key="S10" value="3.312971603651182" />
+      <entry key="S30" value="5.572645410606255" />
+      <entry key="S60" value="7.247957699422945" />
+      <entry key="M2" value="8.454056050837538" />
+      <entry key="M5" value="9.789416336320537" />
+      <entry key="M10" value="18.885285234242566" />
+      <entry key="M15" value="36.117227622281604" />
+      <entry key="M30" value="96.67743466523146" />
+      <entry key="H1" value="201.27698003969732" />
+      <entry key="H2" value="333.11954711987875" />
+      <entry key="H4" value="457.2469981418271" />
+      <entry key="D1" value="797.6557580237545" />
+      <entry key="W1" value="1989.3834305896132" />
     </decayedCancelled>
     <decayedSelected>
       <entry key="MS100" value="0.0" />
@@ -85,34 +94,34 @@
       <entry key="S30" value="0.0" />
       <entry key="S60" value="0.0" />
       <entry key="M2" value="0.0" />
-      <entry key="M5" value="2.156103972606751E-270" />
-      <entry key="M10" value="1.89976264848033E-135" />
-      <entry key="M15" value="2.0230670331106928E-90" />
-      <entry key="M30" value="2.347308184836702E-45" />
-      <entry key="H1" value="8.318956482252526E-23" />
-      <entry key="H2" value="1.64864416248119E-11" />
-      <entry key="H4" value="8.128000025786435E-6" />
-      <entry key="D1" value="0.584822331803747" />
-      <entry key="W1" value="4.2873019490015745" />
+      <entry key="M5" value="6.529607490470412E-279" />
+      <entry key="M10" value="1.0454614721716197E-139" />
+      <entry key="M15" value="2.926955131816212E-93" />
+      <entry key="M30" value="8.928387054287845E-47" />
+      <entry key="H1" value="1.622446184460417E-23" />
+      <entry key="H2" value="7.280775721640773E-12" />
+      <entry key="H4" value="5.401433807098626E-6" />
+      <entry key="D1" value="0.5463171595937033" />
+      <entry key="W1" value="4.245789754890058" />
     </decayedSelected>
     <decayedShown>
-      <entry key="MS100" value="1.6608594023880137" />
-      <entry key="MS500" value="4.7426750657385774" />
-      <entry key="S2" value="9.931584537339944" />
-      <entry key="S5" value="12.73630894141968" />
-      <entry key="S10" value="16.566753169695904" />
-      <entry key="S30" value="33.30241720082511" />
-      <entry key="S60" value="45.250874211727336" />
-      <entry key="M2" value="55.02410327589968" />
-      <entry key="M5" value="66.7302235754709" />
-      <entry key="M10" value="82.3022895703035" />
-      <entry key="M15" value="95.8966640002488" />
-      <entry key="M30" value="122.84252125931661" />
-      <entry key="H1" value="155.151514200576" />
-      <entry key="H2" value="195.66548009851402" />
-      <entry key="H4" value="234.42055263036613" />
-      <entry key="D1" value="469.43641434555" />
-      <entry key="W1" value="1638.435247574219" />
+      <entry key="MS100" value="1.007557050332519" />
+      <entry key="MS500" value="1.919260231524795" />
+      <entry key="S2" value="2.6425572517861875" />
+      <entry key="S5" value="2.8658445111297377" />
+      <entry key="S10" value="3.2749222265363214" />
+      <entry key="S30" value="5.558492327005138" />
+      <entry key="S60" value="7.240395142661113" />
+      <entry key="M2" value="8.4501032508612" />
+      <entry key="M5" value="9.787781221609618" />
+      <entry key="M10" value="18.884416323466144" />
+      <entry key="M15" value="36.11658962578267" />
+      <entry key="M30" value="96.67700444649971" />
+      <entry key="H1" value="201.27665514364986" />
+      <entry key="H2" value="333.1193083423338" />
+      <entry key="H4" value="457.2468460262812" />
+      <entry key="D1" value="798.2019800457933" />
+      <entry key="W1" value="1993.6291511362995" />
     </decayedShown>
   </component>
   <component name="ProjectColorInfo">{
@@ -152,6 +161,8 @@
     &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.restore.workspace.module&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.typescript.service.memoryLimit.init&quot;: &quot;true&quot;,
+    &quot;SHARE_PROJECT_CONFIGURATION_FILES&quot;: &quot;true&quot;,
+    &quot;SONARLINT_PRECOMMIT_ANALYSIS&quot;: &quot;true&quot;,
     &quot;codeWithMe.voiceChat.enabledByDefault&quot;: &quot;false&quot;,
     &quot;git-widget-placeholder&quot;: &quot;master&quot;,
     &quot;kotlin-language-version-configured&quot;: &quot;true&quot;,
@@ -166,6 +177,11 @@
     &quot;settings.editor.selected.configurable&quot;: &quot;preferences.pluginManager&quot;
   }
 }</component>
+  <component name="RecentsManager">
+    <key name="MoveFile.RECENT_KEYS">
+      <recent name="D:\tools\intellij\modules\tools\LoopForge\docs\agent" />
+    </key>
+  </component>
   <component name="RunManager" selected="Python.test_lifecycle">
     <configuration default="true" type="KotlinStandaloneScriptRunConfigurationType">
       <module name="LoopForge" />
@@ -378,6 +394,15 @@
       <option name="presentableId" value="Default" />
       <updated>1784729244719</updated>
     </task>
+    <task id="LOCAL-00001" summary="ref: nottoyage fichiers temporaire">
+      <option name="closed" value="true" />
+      <created>1785159878284</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1785159878284</updated>
+    </task>
+    <option name="localTasksCounter" value="2" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -434,6 +459,8 @@
     <MESSAGE value="fix(epic): resolve git executable to absolute path for ProcessRunner isolation policy; remove redundant has_approved_plan guard" />
     <MESSAGE value="feat: Epic 2 - State truth and recovery&#10;&#10;Wave 1: Preparation — schema_version on all persisted structures,&#10;        migration system (v0.1.0→v2), quarantine for corrupt files,&#10;        v0.1.0 fixtures, safe_read_json&#10;&#10;Wave 2: Locking and transactions — cross-platform FileLock (msvcrt/fcntl),&#10;        repositories with revision tracking and CAS, compensable create_run,&#10;        concurrency tests&#10;&#10;Wave 3: Lifecycle state machine — typed RunStage/LifecycleEvent/TransitionTable,&#10;        guards (task_approved, plan_approved, impl_candidate, base_commit),&#10;        risk-based gates, verify_run pre-verification guards,&#10;        separate acceptance_criteria from verification_commands&#10;&#10;Wave 4: Frozen effective pack contract — EffectivePackContract dataclass,&#10;        freeze_pack_contract() with content hashes, remove direct pack re-reads,&#10;        malformed pack diagnostics, PackCycleError&#10;&#10;Wave 5: Effective risk — stop forcing risk=low, persist classified risk,&#10;        risk-based gates in state machine, DoctorService with 7 diagnostics,&#10;        non-Git policy (warning instead of hard rejection),&#10;        git worktree HEAD fix (commondir resolution)&#10;&#10;Wave 6: Integration tests — test_lifecycle (52 tests), test_concurrency (22),&#10;        test_fault_tolerance (33), test_migration (27), test_effective_pack (11),&#10;        updated existing tests for new contracts&#10;&#10;6 test errors in test_cli.py fixed: pack skills count, verify stagnation,&#10;cockpit publication, rejected readonly artifacts" />
     <MESSAGE value="feat: Epic 2 - State truth and recovery&#10;&#10;Wave 1: Preparation — schema_version on all persisted structures,&#10;        migration system (v0.1.0→v2), quarantine for corrupt files,&#10;        v0.1.0 fixtures, safe_read_json&#10;&#10;Wave 2: Locking and transactions — cross-platform FileLock (msvcrt/fcntl),&#10;        repositories with revision tracking and CAS, compensable create_run,&#10;        concurrency tests&#10;&#10;Wave 3: Lifecycle state machine — typed RunStage/LifecycleEvent/TransitionTable,&#10;        guards (task_approved, plan_approved, impl_candidate, base_commit),&#10;        risk-based gates, verify_run pre-verification guards,&#10;        separate acceptance_criteria from verification_commands&#10;&#10;Wave 4: Frozen effective pack contract — EffectivePackContract dataclass,&#10;        freeze_pack_contract() with content hashes, remove direct pack re-reads,&#10;        malformed pack diagnostics, PackCycleError&#10;&#10;Wave 5: Effective risk — stop forcing risk=low, persist classified risk,&#10;        risk-based gates in state machine, DoctorService with 7 diagnostics,&#10;        non-Git policy (warning instead of hard rejection),&#10;        git worktree HEAD fix (commondir resolution)&#10;&#10;Wave 6: Integration tests — test_lifecycle (52 tests), test_concurrency (22),&#10;        test_fault_tolerance (33), test_migration (27), test_effective_pack (11),&#10;        updated existing tests for new contracts&#10;&#10;6 test errors in test_cli.py fixed: pack skills count, verify stagnation,&#10;cockpit publication, rejected readonly artifacts" />
-    <option name="LAST_COMMIT_MESSAGE" value="feat: Epic 2 - State truth and recovery&#10;&#10;Wave 1: Preparation — schema_version on all persisted structures,&#10;        migration system (v0.1.0→v2), quarantine for corrupt files,&#10;        v0.1.0 fixtures, safe_read_json&#10;&#10;Wave 2: Locking and transactions — cross-platform FileLock (msvcrt/fcntl),&#10;        repositories with revision tracking and CAS, compensable create_run,&#10;        concurrency tests&#10;&#10;Wave 3: Lifecycle state machine — typed RunStage/LifecycleEvent/TransitionTable,&#10;        guards (task_approved, plan_approved, impl_candidate, base_commit),&#10;        risk-based gates, verify_run pre-verification guards,&#10;        separate acceptance_criteria from verification_commands&#10;&#10;Wave 4: Frozen effective pack contract — EffectivePackContract dataclass,&#10;        freeze_pack_contract() with content hashes, remove direct pack re-reads,&#10;        malformed pack diagnostics, PackCycleError&#10;&#10;Wave 5: Effective risk — stop forcing risk=low, persist classified risk,&#10;        risk-based gates in state machine, DoctorService with 7 diagnostics,&#10;        non-Git policy (warning instead of hard rejection),&#10;        git worktree HEAD fix (commondir resolution)&#10;&#10;Wave 6: Integration tests — test_lifecycle (52 tests), test_concurrency (22),&#10;        test_fault_tolerance (33), test_migration (27), test_effective_pack (11),&#10;        updated existing tests for new contracts&#10;&#10;6 test errors in test_cli.py fixed: pack skills count, verify stagnation,&#10;cockpit publication, rejected readonly artifacts" />
+    <MESSAGE value="ref: nettoyage fichiers temporaires" />
+    <MESSAGE value="ref: nettoyage fichiers temporaires" />
+    <option name="LAST_COMMIT_MESSAGE" value="ref: nettoyage fichiers temporaires" />
   </component>
 </project>

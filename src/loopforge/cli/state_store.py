@@ -64,6 +64,11 @@ class StateStore:
         global_runs_loader: Callable[[], Any] | None = None,
         branch_loader: Callable[[Path], str | None] | None = None,
     ) -> None:
+        # current_status is a read-only loader used to populate cached read
+        # models. This is an acceptable engine access pattern: the StateStore
+        # never mutates workflow state through this import, so it does not need
+        # to route through the application command layer (which is reserved for
+        # mutating operations).
         from loopforge.engine import current_status
 
         self._status_loader = status_loader or current_status

@@ -223,9 +223,9 @@ class RunWorkspaceTests(unittest.TestCase):
             project = root / "project"
             project.mkdir()
             with (
-                mock.patch("loopforge.engine.git_toplevel", return_value=project),
+                mock.patch("loopforge.engine.workspace.git_toplevel", return_value=project),
                 mock.patch("loopforge.engine.default_workspace_root", return_value=root / "workspaces"),
-                mock.patch("loopforge.engine.subprocess.run") as run,
+                mock.patch("loopforge.engine.workspace.subprocess.run") as run,
             ):
                 run.return_value = subprocess.CompletedProcess([], 0, stdout="", stderr="")
                 prepare_run_workspace(
@@ -284,9 +284,9 @@ class RunWorkspaceTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
             with (
-                mock.patch("loopforge.engine.git_toplevel", return_value=project),
+                mock.patch("loopforge.engine.workspace.git_toplevel", return_value=project),
                 mock.patch("loopforge.engine.default_workspace_root", return_value=workspace.parent),
-                mock.patch("loopforge.engine.subprocess.run", side_effect=failed_add),
+                mock.patch("loopforge.engine.workspace.subprocess.run", side_effect=failed_add),
             ):
                 with self.assertRaisesRegex(ValueError, "could not create run worktree"):
                     prepare_run_workspace(
@@ -559,8 +559,8 @@ class PackagedRuntimeLayoutTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)
             with (
-                mock.patch("loopforge.engine.git_toplevel", return_value=workspace),
-                mock.patch("loopforge.engine.isolated_process_module") as isolated,
+                mock.patch("loopforge.engine.workspace.git_toplevel", return_value=workspace),
+                mock.patch("loopforge.engine.installation.isolated_process_module") as isolated,
             ):
                 isolated.return_value.load_policy.return_value = {}
                 isolated.return_value.codex_windows_runtime_environment.side_effect = ValueError(

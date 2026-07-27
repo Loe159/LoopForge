@@ -2122,9 +2122,9 @@ class InteractiveShell:
         return DispatchResult(0 if result.ok else 1)
 
     def _resolve_pack_registry(self):
-        from loopforge.engine import _pack_registry
+        from loopforge.engine import pack_registry
 
-        return _pack_registry(self.project_dir)
+        return pack_registry(self.project_dir)
 
     def cmd_trust(self, raw: str) -> DispatchResult:
         tokens = self.split_args(raw)

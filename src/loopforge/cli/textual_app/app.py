@@ -131,6 +131,9 @@ class LoopForgeApp(App[None]):
         self._evidence_index: EvidenceIndex | None = None
         self._evidence_preview = ""
         self._notice = ""
+        # Adapter diagnostics probe PATH via shutil.which.  Computing them once
+        # and caching the result keeps the render path free of filesystem I/O.
+        self._adapter_diagnostic_cache: dict[str, str] | None = None
         self._unsubscribe: Callable[[], None] | None = self.store.subscribe(self._post_snapshot)
 
     @property
@@ -205,14 +208,16 @@ class LoopForgeApp(App[None]):
     @work(thread=True, exclusive=True, group="run-load", exit_on_error=False)
     def _open_run_worker(self, run_id: str) -> None:
         try:
-            from loopforge.engine import resume_run
+            from loopforge.commands import CommandContext, ResumeRun
 
             identity = self.store.begin_load()
-            result = resume_run(self.shell.project_dir, run_id)
+            ctx = CommandContext(project_dir=self.shell.project_dir)
+            result = ResumeRun(ctx, run_id=run_id)
             if _identity_stale(self.store, identity):
                 return
             if not result.ok:
-                raise RuntimeError(result.message)
+                message = result.errors[0].message if result.errors else "LoopForge resume failed."
+                raise RuntimeError(message)
             self.store.select_run(run_id)
             load_project_snapshot(self.store, self.shell.project_dir)
         except Exception as error:
@@ -292,7 +297,7 @@ class LoopForgeApp(App[None]):
             AdapterSelectionScreen(
                 SUPPORTED_ADAPTERS,
                 self.shell.selected_adapter,
-                _adapter_diagnostics(),
+                self._adapter_diagnostics(),
                 selected_args=tuple(self.shell.selected_adapter_args),
             ),
             self._select_adapter,
@@ -308,7 +313,7 @@ class LoopForgeApp(App[None]):
             self._render_snapshot(self._snapshot)
             return
         self.shell.refresh_session_config()
-        diagnostic = _adapter_diagnostics().get(adapter, "diagnostic unavailable")
+        diagnostic = self._adapter_diagnostics().get(adapter, "diagnostic unavailable")
         self._notice = f"Adapter set to {adapter}. {diagnostic}"
         self._render_snapshot(self._snapshot)
         self.load_selected_project(self.shell.project_dir)
@@ -769,6 +774,28 @@ class LoopForgeApp(App[None]):
         if self.theme != theme:
             self.theme = theme
 
+    def _adapter_diagnostics(self) -> dict[str, str]:
+        """Report executable availability without probing adapters or changing config.
+
+        The first invocation probes ``PATH`` via :func:`shutil.which`; every
+        subsequent call reuses the cached result so the render path never
+        performs filesystem I/O.
+        """
+
+        if self._adapter_diagnostic_cache is not None:
+            return self._adapter_diagnostic_cache
+        diagnostics: dict[str, str] = {}
+        for adapter in SUPPORTED_ADAPTERS:
+            command = AGENT_COMMANDS.get(adapter)
+            if command is None:
+                diagnostics[adapter] = "fixture adapter; configure its command through /adapter"
+            elif shutil.which(command):
+                diagnostics[adapter] = f"{command} available on PATH"
+            else:
+                diagnostics[adapter] = f"{command} not found on PATH; install it before running"
+        self._adapter_diagnostic_cache = diagnostics
+        return diagnostics
+
     def _screen_view(self, snapshot: UiSnapshot) -> tuple[str, str, str]:
         if self._screen == "home":
             projects = self._filtered_projects()
@@ -815,7 +842,7 @@ class LoopForgeApp(App[None]):
             ("Git", snapshot.project.branch),
             ("Snapshot", str(snapshot.revision)),
         ]
-        diagnostics = _adapter_diagnostics()
+        diagnostics = self._adapter_diagnostics()
         body = "\n".join(f"{key}: {value}" for key, value in values)
         body += "\n\nAdapter diagnostics\n" + "\n".join(
             f"{adapter}: {diagnostic}" for adapter, diagnostic in diagnostics.items()
@@ -943,18 +970,3 @@ def _format_elapsed(seconds: float) -> str:
     minutes, remaining = divmod(total, 60)
     hours, minutes = divmod(minutes, 60)
     return f"{hours:02}:{minutes:02}:{remaining:02}"
-
-
-def _adapter_diagnostics() -> dict[str, str]:
-    """Report executable availability without probing adapters or changing config."""
-
-    diagnostics: dict[str, str] = {}
-    for adapter in SUPPORTED_ADAPTERS:
-        command = AGENT_COMMANDS.get(adapter)
-        if command is None:
-            diagnostics[adapter] = "fixture adapter; configure its command through /adapter"
-        elif shutil.which(command):
-            diagnostics[adapter] = f"{command} available on PATH"
-        else:
-            diagnostics[adapter] = f"{command} not found on PATH; install it before running"
-    return diagnostics
