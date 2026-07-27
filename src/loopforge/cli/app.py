@@ -479,32 +479,31 @@ class ProjectCommandHandler:
             allowed=("text", "json"),
             command="loopforge doctor",
         )
-        if args.rebuild_indexes:
-            result = api.rebuild_indexes(context.project_dir)
-            payload = {
-                "ok": result.ok,
-                "message": result.message,
-                "diagnostics": result.diagnostics,
-                "blockers": result.blockers,
-            }
-            if fmt == "json":
-                api.print_json_payload(payload)
-            elif result.ok:
-                api.render_success(context.renderer, "LoopForge doctor", list(result.diagnostics.items()))
-            else:
-                api.render_blocked(context.error_renderer(), "LoopForge doctor", list(result.diagnostics.items()), blockers=result.blockers)
-            return 0 if result.ok else 1
-        diagnostics = api.index_diagnostics(context.project_dir)
+        result = api.run_doctor(
+            project_dir=context.project_dir,
+            rebuild_indexes_flag=args.rebuild_indexes,
+        )
         if fmt == "json":
-            api.print_json_payload({"ok": bool(diagnostics.get("initialized")), "diagnostics": diagnostics})
-        elif not context.options.quiet:
+            api.print_json_payload(result)
+            return 0 if result["ok"] else 1
+        if not context.options.quiet:
+            items: list[tuple[str, str]] = []
+            for d in result["diagnostics"]:
+                items.append((d["category"], f"[{d['level']}] {d['message']}"))
+            if result.get("rebuilt_indexes", 0) > 0:
+                items.append(("rebuilt", f"{result['rebuilt_indexes']} index(es) rebuilt"))
+            next_cmd = (
+                "loopforge doctor --rebuild-indexes"
+                if result.get("repairs_available", 0) > 0 and not args.rebuild_indexes
+                else None
+            )
             api.render_summary_table(
                 context.renderer,
                 "LoopForge doctor",
-                list(diagnostics.items()),
-                next_command="loopforge doctor --rebuild-indexes" if diagnostics.get("run_index") == "rebuild_required" else None,
+                items,
+                next_command=next_cmd,
             )
-        return 0 if diagnostics.get("initialized") else 1
+        return 0 if result["ok"] else 1
 
 
 class MetricsCommandHandler:

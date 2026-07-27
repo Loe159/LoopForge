@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import subprocess
@@ -27,17 +28,38 @@ from loopforge.adapters.kilo_code import (
     is_kilo_run_command,
 )
 from loopforge.checks import validate_implementation_result
-from loopforge.engine.packs import PackRegistry
+from loopforge.engine.lifecycle import (
+    DEFAULT_STATE_MACHINE,
+    LifecycleEvent,
+    RunStage,
+    StageStatus,
+    TransitionResult,
+)
+from loopforge.engine.packs import (
+    EffectivePackContract,
+    PackCycleError,
+    PackRegistry,
+    diagnose_pack_issues as _diagnose_pack_issues,
+    freeze_pack_contract,
+)
 from loopforge.engine.metrics import MetricsService
 from loopforge.engine.storage import DEFAULT_JSON_STORE
 from loopforge.engine import projects as project_registry
 from loopforge.engine import indexes as run_indexes
+from loopforge.engine.models.schema import (
+    CURRENT_RUN_SCHEMA,
+    CURRENT_CONFIG_SCHEMA,
+)
+from loopforge.engine.models.migrations import migrate_run
 from loopforge.engine.git_state import DEFAULT_GIT_STATE_SERVICE
 from loopforge.engine.path_resolvers import (
     resolve_confined,
     resolve_run_dir,
     validate_identifier,
 )
+from loopforge.engine.doctor import DoctorService
+
+logger = logging.getLogger(__name__)
 
 CONFIG_DIR = ".loopforge"
 CONFIG_FILE = "config.json"
@@ -130,6 +152,7 @@ CONFIG_KEYS = (
     "default_adapter_args",
     "created_at",
     "updated_at",
+    "schema_version",
 )
 
 NATIVE_RUN_FILES = (
@@ -973,11 +996,14 @@ def persist_run_json(project_dir: Path, run_json_path: Path, run: dict[str, Any]
     try:
         run_indexes.mark_dirty(DEFAULT_JSON_STORE, run_root, timestamp=timestamp)
     except OSError:
-        # The authoritative project-local mutation must stay usable when the
-        # optional global data root is locked down.
         write_json_atomic(run_json_path, run)
         return
-    write_json_atomic(run_json_path, run)
+    from loopforge.engine.repositories import RunRepository
+    try:
+        repo = RunRepository(run_json_path.parent)
+        repo.write(run)
+    except Exception:
+        write_json_atomic(run_json_path, run)
     try:
         index = run_indexes.update_run_index(
             DEFAULT_JSON_STORE,
@@ -1008,7 +1034,12 @@ def persist_project_config(project_dir: Path, config_path: Path, config: dict[st
             indexed = True
         except OSError:
             pass
-    write_json_atomic(config_path, config)
+    from loopforge.engine.repositories import ConfigRepository
+    try:
+        repo = ConfigRepository(config_path.parent, lock_timeout=2.0)
+        repo.write(config)
+    except Exception:
+        write_json_atomic(config_path, config)
     if indexed:
         try:
             _sync_project_indexes(project_dir, config)
@@ -1035,6 +1066,71 @@ def index_diagnostics(project_dir: Path) -> dict[str, Any]:
     }
 
 
+def diagnose_pack_issues(project_dir: Path) -> list[dict[str, str]]:
+    """Facade over packs.diagnose_pack_issues for CLI and interactive doctor."""
+    return _diagnose_pack_issues(project_dir)
+
+
+def run_doctor(
+    project_dir: Path | None = None,
+    home: Path | None = None,
+    *,
+    rebuild_indexes_flag: bool = False,
+) -> dict[str, Any]:
+    """Unified diagnostic service replacing inline /doctor handling."""
+    from loopforge.engine.doctor import DoctorResult
+
+    service = DoctorService(home=home, project_dir=project_dir)
+    result = service.examine()
+
+    if rebuild_indexes_flag:
+        rebuilt = 0
+        messages: list[str] = []
+        for diag in result.diagnostics:
+            if diag.category == "stale_index" and diag.repairable:
+                ok, msg = service.repair(diag)
+                if ok:
+                    rebuilt += 1
+                messages.append(msg)
+        return {
+            "ok": result.ok,
+            "diagnostics": [
+                {
+                    "level": d.level,
+                    "category": d.category,
+                    "source": d.source,
+                    "message": d.message,
+                    "proposed_action": d.proposed_action,
+                    "repairable": d.repairable,
+                }
+                for d in result.diagnostics
+            ],
+            "summary": result.summary,
+            "repairs_available": result.repairs_available,
+            "rebuilt_indexes": rebuilt,
+            "rebuild_messages": messages,
+            "examined_at": result.examined_at,
+        }
+
+    return {
+        "ok": result.ok,
+        "diagnostics": [
+            {
+                "level": d.level,
+                "category": d.category,
+                "source": d.source,
+                "message": d.message,
+                "proposed_action": d.proposed_action,
+                "repairable": d.repairable,
+            }
+            for d in result.diagnostics
+        ],
+        "summary": result.summary,
+        "repairs_available": result.repairs_available,
+        "examined_at": result.examined_at,
+    }
+
+
 def rebuild_indexes(project_dir: Path) -> IndexRepairResult:
     project_dir = project_dir.resolve()
     config_path = project_config_path(project_dir)
@@ -1057,7 +1153,7 @@ def initial_workflow_state() -> dict[str, Any]:
     stage_statuses = {stage: "pending" for stage in WORKFLOW_STAGES}
     stage_statuses["task"] = "draft"
     return {
-        "current_stage": DEFAULT_CURRENT_STAGE,
+        "current_stage": RunStage.TASK_DRAFT.value,
         "stage_statuses": stage_statuses,
         "approval": {
             "approved": False,
@@ -1068,6 +1164,7 @@ def initial_workflow_state() -> dict[str, Any]:
             "level": "unknown",
             "route": "unknown",
             "reasons": [],
+            "required_gates": [],
         },
         "human_gates": {
             "initial_task_approval": {
@@ -1087,6 +1184,8 @@ def initial_workflow_state() -> dict[str, Any]:
             "eligible": False,
             "reasons": ["workflow has not reached publication"],
         },
+        "acceptance_criteria": [],
+        "verification_commands": [],
     }
 
 
@@ -1119,7 +1218,7 @@ def validate_task_definition(
 
 
 def normalize_run_workflow_state(run: dict[str, Any]) -> dict[str, Any]:
-    normalized = dict(run)
+    normalized = dict(migrate_run(run))
     normalized.pop("legacy", None)
     artifacts = normalized.get("artifacts")
     if isinstance(artifacts, dict):
@@ -1131,6 +1230,15 @@ def normalize_run_workflow_state(run: dict[str, Any]) -> dict[str, Any]:
     current_stage = normalized.get("current_stage")
     if not isinstance(current_stage, str) or not current_stage.strip():
         normalized["current_stage"] = defaults["current_stage"]
+    else:
+        valid_stages = {stage.value for stage in RunStage}
+        if current_stage not in valid_stages:
+            logger.warning(
+                "normalize_run_workflow_state: unrecognized stage %r, resetting to %r",
+                current_stage,
+                RunStage.TASK_DRAFT.value,
+            )
+            normalized["current_stage"] = RunStage.TASK_DRAFT.value
 
     stage_statuses = normalized.get("stage_statuses")
     if not isinstance(stage_statuses, dict):
@@ -1147,9 +1255,17 @@ def normalize_run_workflow_state(run: dict[str, Any]) -> dict[str, Any]:
         else:
             normalized[key] = defaults[key]
 
+    for key in ("acceptance_criteria", "verification_commands"):
+        value = normalized.get(key)
+        if not isinstance(value, list):
+            normalized[key] = []
+
     reasons = normalized["risk"].get("reasons")
     if not isinstance(reasons, list):
         normalized["risk"]["reasons"] = []
+    required_gates = normalized["risk"].get("required_gates")
+    if not isinstance(required_gates, list):
+        normalized["risk"]["required_gates"] = []
     publish_reasons = normalized["publish_eligibility"].get("reasons")
     if not isinstance(publish_reasons, list):
         normalized["publish_eligibility"]["reasons"] = defaults["publish_eligibility"][
@@ -1173,21 +1289,34 @@ def apply_initial_task_approval(
     ) in {None, "valid"}
     approved = approved and task_is_valid
     if approved:
-        normalized["current_stage"] = TASK_APPROVED_STAGE
-        normalized["stage_statuses"]["task"] = "approved"
-        normalized["approval"] = {
-            "approved": True,
+        context = {
             "source": clean_source or "local",
-            "approved_at": approved_at or utc_now(),
+            "timestamp": approved_at or utc_now(),
+        }
+        result = DEFAULT_STATE_MACHINE.transition(
+            normalized, LifecycleEvent.TASK_APPROVE, context
+        )
+        if result.ok and result.updated_run is not None:
+            return result.updated_run
+        blockers = result.blockers or [
+            "task approval transition blocked by state machine"
+        ]
+        normalized["blockers"] = blockers
+        normalized["current_stage"] = RunStage.TASK_DRAFT.value
+        normalized["stage_statuses"]["task"] = StageStatus.DRAFT.value
+        normalized["approval"] = {
+            "approved": False,
+            "source": clean_source or "none",
+            "approved_at": None,
         }
         normalized["human_gates"]["initial_task_approval"] = {
             **initial_workflow_state()["human_gates"]["initial_task_approval"],
-            "status": "approved",
+            "status": "pending",
         }
         return normalized
 
-    normalized["current_stage"] = DEFAULT_CURRENT_STAGE
-    normalized["stage_statuses"]["task"] = "draft"
+    normalized["current_stage"] = RunStage.TASK_DRAFT.value
+    normalized["stage_statuses"]["task"] = StageStatus.DRAFT.value
     normalized["approval"] = {
         "approved": False,
         "source": clean_source or "none",
@@ -1208,15 +1337,19 @@ def apply_plan_approval(
 ) -> dict[str, Any]:
     normalized = normalize_run_workflow_state(run)
     clean_source = source.strip() if isinstance(source, str) else ""
-    normalized["current_stage"] = IMPLEMENTATION_READY_STAGE
-    normalized["stage_statuses"]["plan"] = "approved"
-    normalized["human_gates"]["plan_approval"] = {
-        **initial_workflow_state()["human_gates"]["plan_approval"],
-        "status": "approved",
+    context = {
         "source": clean_source or "local",
-        "approved_at": approved_at or utc_now(),
+        "timestamp": approved_at or utc_now(),
     }
-    normalized["blockers"] = []
+    result = DEFAULT_STATE_MACHINE.transition(
+        normalized, LifecycleEvent.PLAN_APPROVE, context
+    )
+    if result.ok and result.updated_run is not None:
+        return result.updated_run
+    blockers = result.blockers or [
+        "plan approval transition blocked by state machine"
+    ]
+    normalized["blockers"] = blockers
     return normalized
 
 
@@ -1228,20 +1361,19 @@ def apply_review_approval(
 ) -> dict[str, Any]:
     normalized = normalize_run_workflow_state(run)
     clean_source = source.strip() if isinstance(source, str) else ""
-    normalized["current_stage"] = REVIEW_READY_STAGE
-    normalized["stage_statuses"]["review"] = "approved"
-    normalized["human_gates"]["review_approval"] = {
-        **initial_workflow_state()["human_gates"]["review_approval"],
-        "status": "approved",
+    context = {
         "source": clean_source or "local",
-        "approved_at": approved_at or utc_now(),
+        "timestamp": approved_at or utc_now(),
     }
-    normalized["publish_eligibility"] = {
-        "eligible": True,
-        "mode": "draft",
-        "reasons": ["verified work has explicit review approval"],
-    }
-    normalized["blockers"] = []
+    result = DEFAULT_STATE_MACHINE.transition(
+        normalized, LifecycleEvent.REVIEW_APPROVE, context
+    )
+    if result.ok and result.updated_run is not None:
+        return result.updated_run
+    blockers = result.blockers or [
+        "review approval transition blocked by state machine"
+    ]
+    normalized["blockers"] = blockers
     return normalized
 
 
@@ -1251,22 +1383,31 @@ def apply_draft_publication_prepared(
     artifact_path: str,
 ) -> dict[str, Any]:
     normalized = normalize_run_workflow_state(run)
-    normalized["current_stage"] = PUBLICATION_READY_STAGE
-    normalized["stage_statuses"]["publication"] = "draft_prepared"
-    normalized["publication"] = {
-        "status": "draft_prepared",
-        "mode": "draft",
-        "artifact_path": artifact_path,
-        "network": {"performed": False},
-    }
-    normalized["publish_eligibility"] = {
-        "eligible": True,
-        "mode": "draft",
-        "status": "prepared",
-        "reasons": ["draft PR artifact prepared after explicit review approval"],
-        "artifact": artifact_path,
-    }
-    normalized["blockers"] = []
+    context = {"artifact_path": artifact_path}
+    result = DEFAULT_STATE_MACHINE.transition(
+        normalized, LifecycleEvent.PUBLICATION_PREPARE, context
+    )
+    if result.ok and result.updated_run is not None:
+        updated = result.updated_run
+        updated["publication"] = {
+            "status": "draft_prepared",
+            "mode": "draft",
+            "artifact_path": artifact_path,
+            "network": {"performed": False},
+        }
+        updated["publish_eligibility"] = {
+            "eligible": True,
+            "mode": "draft",
+            "status": "prepared",
+            "reasons": ["draft PR artifact prepared after explicit review approval"],
+            "artifact": artifact_path,
+        }
+        updated["blockers"] = []
+        return updated
+    blockers = result.blockers or [
+        "draft publication transition blocked by state machine"
+    ]
+    normalized["blockers"] = blockers
     return normalized
 
 
@@ -1941,6 +2082,7 @@ def new_config(
     project_id = project_registry.new_project_id()
     storage_root = project_registry.storage_root(loopforge_home(home=home), project_id)
     return {
+        "schema_version": int(CURRENT_CONFIG_SCHEMA),
         "project_id": project_id,
         "project_name": project_name(project_dir),
         "profile": normalized_profile,
@@ -1961,6 +2103,8 @@ def normalize_config(
 ) -> tuple[dict[str, Any], bool]:
     config = dict(existing)
     now = utc_now()
+    if "schema_version" not in config:
+        config["schema_version"] = int(CURRENT_CONFIG_SCHEMA)
     if "created_at" not in config:
         config["created_at"] = now
     if "current_run_id" not in config:
@@ -2320,6 +2464,39 @@ def git_toplevel(project_dir: Path) -> Path | None:
         return Path(receipt.stdout.strip()).resolve()
     except OSError:
         return None
+
+
+def _has_git(project_dir: Path) -> bool:
+    dotgit = project_dir / ".git"
+    if dotgit.is_dir():
+        return True
+    if dotgit.is_file():
+        try:
+            content = dotgit.read_text(encoding="utf-8").strip()
+            match = re.match(r"^gitdir:\s*(.+)$", content)
+            if match:
+                return Path(match.group(1)).is_dir()
+        except OSError:
+            return False
+    return False
+
+
+def _check_git_available(project_dir: Path) -> None:
+    if _has_git(project_dir):
+        return
+    snapshot_enabled = os.environ.get("LOOPFORGE_SNAPSHOT_BACKEND") == "1"
+    if snapshot_enabled:
+        return
+    # In non-Git projects, fall back to shared-checkout mode with a warning.
+    # This avoids breaking existing test fixtures and non-Git quick-starts.
+    # The full non-Git policy (hard rejection) is gated behind a future
+    # product decision tracked in Epic 28 Wave 5.3.
+    logger.warning(
+        "Project %s has no Git repository. "
+        "Runs will use shared-checkout mode (no worktree isolation). "
+        "Consider running `git init` or setting LOOPFORGE_SNAPSHOT_BACKEND=1.",
+        str(project_dir),
+    )
 
 
 def codex_workspace_preflight_blockers(
@@ -5040,6 +5217,50 @@ def new_run_id() -> str:
     return f"run-{timestamp}-{uuid.uuid4().hex[:8]}"
 
 
+def _cleanup_workspace(project_dir: Path, workspace_path: str) -> None:
+    """Remove a git worktree after a run creation failure.
+
+    This is deliberately lenient: if the directory or worktree metadata is
+    already gone the call is idempotent.
+    """
+    path = Path(workspace_path)
+    if not path.exists():
+        return
+    try:
+        subprocess.run(
+            ["git", "worktree", "remove", "--force", str(path)],
+            cwd=project_dir,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    shutil.rmtree(path, ignore_errors=True)
+
+
+def _rollback_run_creation(
+    run_dir: Path | None,
+    workspace_state: dict[str, Any] | None,
+    project_dir: Path,
+) -> None:
+    """Idempotent cleanup of all artifacts created during a run creation attempt.
+
+    Called when any step in the creation phase fails, this removes the run
+    directory and any git worktree so no partial artifacts are left behind.
+    """
+    logger = logging.getLogger(__name__)
+    if run_dir is not None and run_dir.exists():
+        logger.warning("Rolling back incomplete run creation: %s", run_dir)
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+    if workspace_state is not None and workspace_state.get("mode") == WORKSPACE_MODE_GIT_WORKTREE:
+        workspace_path = workspace_state.get("path")
+        if isinstance(workspace_path, str) and workspace_path.strip():
+            _cleanup_workspace(project_dir, workspace_path)
+
+
 def create_run(
     project_dir: Path,
     task: str,
@@ -5054,6 +5275,8 @@ def create_run(
     source_metadata: dict[str, Any] | None = None,
     initial_approval: dict[str, Any] | None = None,
 ) -> RunResult:
+    # ── Phase 1: Validation (no side effects) ──────────────────────────
+
     if not task.strip():
         raise ValueError("task must not be empty")
     if max_attempts < 1:
@@ -5067,39 +5290,13 @@ def create_run(
         raise FileNotFoundError(f"{config_path} does not exist; run `loopforge init` first")
 
     config = normalize_config(project_dir, read_json(config_path))[0]
-    project_memory = ensure_project_memory(project_dir)
-    run_root = Path(str(config["run_root"])).expanduser()
+    run_profile = normalize_profile(config["profile"])
     project_id = str(config.get("project_id") or "")
     if project_id:
         validate_identifier(project_id, "project")
-    run_id = new_run_id()
-    run_dir = resolve_run_dir(run_root, run_id)
-    while run_dir.exists():
-        run_id = new_run_id()
-        run_dir = resolve_run_dir(run_root, run_id)
 
-    attempts_dir = resolve_confined(run_dir, "attempts")
-    artifacts_dir = resolve_confined(run_dir, "artifacts")
-    metrics_dir = resolve_confined(run_dir, "metrics")
-    for directory in (attempts_dir, artifacts_dir, metrics_dir):
-        directory.mkdir(parents=True, exist_ok=False)
+    _check_git_available(project_dir)
 
-    now = utc_now()
-    base_commit = detect_git_base_commit(project_dir)
-    try:
-        workspace_state = prepare_run_workspace(
-            project_dir=project_dir,
-            run_id=run_id,
-            base_commit=base_commit,
-            now=now,
-            project_id=str(config.get("project_id") or "") or None,
-        )
-    except Exception:
-        # No run is valid until its isolated workspace exists. The run artifacts
-        # created above are therefore disposable and must not be left behind.
-        shutil.rmtree(run_dir, ignore_errors=True)
-        raise
-    task_id = run_id
     normalized_success_checks = normalize_nonempty_strings(success_checks)
     if pack is None:
         pack_contract = detect_project_pack(project_dir)
@@ -5111,7 +5308,25 @@ def create_run(
             raise ValueError("pack must not be empty")
         pack_contract = load_pack_contract(project_dir, selected_pack)
         pack_detection = "explicit"
-    run_profile = normalize_profile(config["profile"])
+
+    pack_check_config = load_pack_checks(project_dir, selected_pack)
+    pack_checks = pack_check_config.get("checks", [])
+    acceptance_criteria: list[str] = list(normalized_success_checks)
+    verification_commands: list[dict[str, Any]] = []
+    if pack_checks:
+        for check in pack_checks:
+            verification_commands.append(
+                {
+                    "criterion": check.get("name", ""),
+                    "command": check.get("command", []),
+                    "cwd": None,
+                    "env": check.get("env", {}),
+                    "timeout": check.get("timeout_seconds", 300),
+                }
+            )
+
+    subjective = task_looks_subjective(task)
+    normalized_rubric = subjective_rubric.strip()
     pack_skills = pack_skill_entries(pack_contract)
     normalized_skills = normalize_unique_strings(
         [*pack_skills, *normalize_nonempty_strings(selected_skills)]
@@ -5119,8 +5334,7 @@ def create_run(
     normalized_allowed_tools = normalize_nonempty_strings(allowed_tools) or list(
         DEFAULT_ALLOWED_TOOLS
     )
-    normalized_rubric = subjective_rubric.strip()
-    subjective = task_looks_subjective(task)
+
     contract_status = loop_contract_status(
         success_checks=normalized_success_checks,
         profile=run_profile,
@@ -5134,7 +5348,44 @@ def create_run(
         subjective=subjective,
         subjective_rubric=normalized_rubric,
     )
+
+    # ── Phase 2: Creation (transactional with compensation) ────────────
+
+    run_root = Path(str(config["run_root"])).expanduser()
+    run_id = new_run_id()
+    run_dir = resolve_run_dir(run_root, run_id)
+    while run_dir.exists():
+        run_id = new_run_id()
+        run_dir = resolve_run_dir(run_root, run_id)
+
+    now = utc_now()
+    base_commit = detect_git_base_commit(project_dir)
+    workspace_state: dict[str, Any] | None = None
+
+    try:
+        attempts_dir = resolve_confined(run_dir, "attempts")
+        artifacts_dir = resolve_confined(run_dir, "artifacts")
+        metrics_dir = resolve_confined(run_dir, "metrics")
+        for directory in (attempts_dir, artifacts_dir, metrics_dir):
+            directory.mkdir(parents=True, exist_ok=False)
+        (artifacts_dir / "publication").mkdir(parents=True, exist_ok=False)
+
+        workspace_state = prepare_run_workspace(
+            project_dir=project_dir,
+            run_id=run_id,
+            base_commit=base_commit,
+            now=now,
+            project_id=str(config.get("project_id") or "") or None,
+        )
+    except Exception:
+        _rollback_run_creation(run_dir, workspace_state, project_dir)
+        raise
+
+    project_memory = ensure_project_memory(project_dir)
+    task_id = run_id
+
     run_data: dict[str, Any] = {
+        "schema_version": int(CURRENT_RUN_SCHEMA),
         "run_id": run_id,
         "task_id": task_id,
         "task": task.strip(),
@@ -5144,35 +5395,20 @@ def create_run(
         "profile": run_profile,
         "profile_policy": profile_policy(run_profile),
         "pack": selected_pack,
-        "pack_contract": {
-            "name": selected_pack,
-            "version": pack_contract.get("version"),
-            "description": pack_contract.get("description"),
-            "source": pack_contract.get("source"),
-            "detection": pack_detection,
-            "detection_score": pack_contract.get("detection_score", 0),
-            "skills": pack_skills,
-            "skill_files": pack_contract.get("skill_files", []),
-            "skills_dirs": pack_contract.get("skills_dirs", []),
-            "skill_definition_files": pack_contract.get("skill_definition_files", []),
-            "agents": pack_contract.get("agents", []),
-            "permission_sets": pack_contract.get("permission_sets", {}),
-            "workflow": pack_contract.get("workflow", []),
-            "inherited_from": pack_contract.get("inherited_from", []),
-            "contribution_sources": pack_contract.get("contribution_sources", {}),
-            "skill_file": pack_contract.get("skill_file"),
-            "agents_file": pack_contract.get("agents_file"),
-            "permissions_file": pack_contract.get("permissions_file"),
-            "workflow_file": pack_contract.get("workflow_file"),
-            "checks_file": pack_contract.get("checks_file"),
-            "protected_paths_file": pack_contract.get("protected_paths_file"),
-            "memory_rules_file": pack_contract.get("memory_rules_file"),
-        },
+        "pack_contract": freeze_pack_contract(
+            project_dir,
+            selected_pack,
+            registry=_pack_registry(project_dir),
+            detection_mode=pack_detection,
+            detection_score=pack_contract.get("detection_score", 0),
+        ).to_dict(),
         "status": contract_status,
         **initial_workflow_state(),
         "task_validation": task_validation,
         "created_at": now,
         "success_checks": normalized_success_checks,
+        "acceptance_criteria": acceptance_criteria,
+        "verification_commands": verification_commands,
         "limits": {
             "max_attempts": max_attempts,
             "timeout_seconds": timeout_seconds,
@@ -5230,67 +5466,71 @@ def create_run(
             source="none",
         )
 
-    persist_run_json(project_dir, run_dir / "run.json", run_data)
-    (run_dir / "task.md").write_text(f"# Task\n\n{task.strip()}\n", encoding="utf-8")
-    (run_dir / "loop.md").write_text(
-        render_loop_contract(
-            task=task.strip(),
-            task_id=task_id,
-            project_dir=project_dir,
-            base_commit=base_commit,
-            profile=run_profile,
-            pack=selected_pack,
-            skills=normalized_skills,
-            allowed_tools=normalized_allowed_tools,
-            success_checks=normalized_success_checks,
-            max_attempts=max_attempts,
-            timeout_seconds=timeout_seconds,
-            subjective=subjective,
-            subjective_rubric=normalized_rubric,
-        ),
-        encoding="utf-8",
-    )
-    (run_dir / "research.md").write_text(
-        "# Research\n\nNo research recorded yet.\n",
-        encoding="utf-8",
-    )
-    (run_dir / "plan.md").write_text("# Plan\n\nNo plan recorded yet.\n", encoding="utf-8")
-    (run_dir / "progress.md").write_text(
-        "# Progress\n\nNo attempts recorded yet.\n",
-        encoding="utf-8",
-    )
-    (run_dir / "verification.md").write_text(
-        "# Verification\n\nVerification has not run yet.\n",
-        encoding="utf-8",
-    )
-    (run_dir / "review.md").write_text(
-        "# Review\n\nReview has not run yet.\n",
-        encoding="utf-8",
-    )
-    (run_dir / "memory.md").write_text(
-        render_run_memory_snapshot(project_dir, run_id),
-        encoding="utf-8",
-    )
-    (run_dir / "scratch.md").write_text(
-        read_project_template(project_dir, "scratch.md"),
-        encoding="utf-8",
-    )
-    write_json_atomic(
-        run_dir / "exchange.json",
-        {
-            "exchange_version": 1,
-            "run_id": run_id,
-            "producer": "",
-            "consumer": "",
-            "messages": [],
-            "artifacts": [],
-            "open_questions": [],
-        },
-    )
-    updated_config = dict(config)
-    updated_config["current_run_id"] = run_id
-    updated_config["updated_at"] = now
-    persist_project_config(project_dir, config_path, updated_config)
+    try:
+        persist_run_json(project_dir, run_dir / "run.json", run_data)
+        (run_dir / "task.md").write_text(f"# Task\n\n{task.strip()}\n", encoding="utf-8")
+        (run_dir / "loop.md").write_text(
+            render_loop_contract(
+                task=task.strip(),
+                task_id=task_id,
+                project_dir=project_dir,
+                base_commit=base_commit,
+                profile=run_profile,
+                pack=selected_pack,
+                skills=normalized_skills,
+                allowed_tools=normalized_allowed_tools,
+                success_checks=normalized_success_checks,
+                max_attempts=max_attempts,
+                timeout_seconds=timeout_seconds,
+                subjective=subjective,
+                subjective_rubric=normalized_rubric,
+            ),
+            encoding="utf-8",
+        )
+        (run_dir / "research.md").write_text(
+            "# Research\n\nNo research recorded yet.\n",
+            encoding="utf-8",
+        )
+        (run_dir / "plan.md").write_text("# Plan\n\nNo plan recorded yet.\n", encoding="utf-8")
+        (run_dir / "progress.md").write_text(
+            "# Progress\n\nNo attempts recorded yet.\n",
+            encoding="utf-8",
+        )
+        (run_dir / "verification.md").write_text(
+            "# Verification\n\nVerification has not run yet.\n",
+            encoding="utf-8",
+        )
+        (run_dir / "review.md").write_text(
+            "# Review\n\nReview has not run yet.\n",
+            encoding="utf-8",
+        )
+        (run_dir / "memory.md").write_text(
+            render_run_memory_snapshot(project_dir, run_id),
+            encoding="utf-8",
+        )
+        (run_dir / "scratch.md").write_text(
+            read_project_template(project_dir, "scratch.md"),
+            encoding="utf-8",
+        )
+        write_json_atomic(
+            run_dir / "exchange.json",
+            {
+                "exchange_version": 1,
+                "run_id": run_id,
+                "producer": "",
+                "consumer": "",
+                "messages": [],
+                "artifacts": [],
+                "open_questions": [],
+            },
+        )
+        updated_config = dict(config)
+        updated_config["current_run_id"] = run_id
+        updated_config["updated_at"] = now
+        persist_project_config(project_dir, config_path, updated_config)
+    except Exception:
+        _rollback_run_creation(run_dir, workspace_state, project_dir)
+        raise
 
     return RunResult(
         project_dir=project_dir,
@@ -5661,9 +5901,15 @@ def expected_session_for(run: dict[str, Any], adapter: str, workspace_dir: Path)
         "workspace": str(workspace_dir.resolve()),
         "recovery_authorized": recovery_authorized,
     }
+    run_risk = run.get("risk", {})
+    risk_level = (
+        run_risk.get("level")
+        if isinstance(run_risk, dict) and run_risk.get("level") in ("low", "medium", "high", "critical")
+        else "low"
+    )
     session = {
         "issue": issue,
-        "risk": "low",
+        "risk": risk_level,
         "base_commit": base_commit,
         "workspace": str(workspace_dir.resolve()),
         "runner_id": adapter,
@@ -7453,8 +7699,15 @@ def update_run_after_attempt(
         updated["status"] = READY_FOR_VERIFICATION
         updated["blockers"] = []
         updated = normalize_run_workflow_state(updated)
-        updated["stage_statuses"]["implementation"] = "complete"
-        updated["current_stage"] = "implementation_complete"
+        impl_ctx = {"source": "engine", "timestamp": utc_now()}
+        impl_trans = DEFAULT_STATE_MACHINE.transition(
+            updated, LifecycleEvent.IMPLEMENTATION_COMPLETE, impl_ctx
+        )
+        if impl_trans.ok and impl_trans.updated_run is not None:
+            updated = impl_trans.updated_run
+        else:
+            updated["stage_statuses"]["implementation"] = "complete"
+            updated["current_stage"] = "implementation_complete"
     else:
         updated["status"] = ADAPTER_BLOCKED
         blockers = [
@@ -7620,10 +7873,37 @@ def merged_risk_policy_path(
     project_dir: Path,
     run_dir: Path,
     pack: str,
+    run: dict[str, Any] | None = None,
 ) -> tuple[Path, list[str]]:
     base = read_json(default_risk_policy())
-    protected = load_pack_protected_paths(project_dir, pack)
     sources = [str(default_risk_policy())]
+    if run is not None:
+        frozen_contract = run.get("pack_contract", {})
+        if isinstance(frozen_contract, dict) and frozen_contract.get("protected_paths") is not None:
+            protected_paths = frozen_contract.get("protected_paths", [])
+            high_patterns = normalize_unique_strings(
+                [
+                    *[str(pattern) for pattern in base.get("high_path_patterns", [])],
+                    *[str(item["pattern"]) for item in protected_paths if isinstance(item, dict) and item.get("severity") == "high"],
+                ]
+            )
+            medium_patterns = normalize_unique_strings(
+                [
+                    *[str(pattern) for pattern in base.get("medium_path_patterns", [])],
+                    *[str(item["pattern"]) for item in protected_paths if isinstance(item, dict) and item.get("severity") == "medium"],
+                ]
+            )
+            if frozen_contract.get("protected_paths_content_hash"):
+                protected_source = frozen_contract.get("source")
+                if isinstance(protected_source, str) and protected_source:
+                    sources.append(protected_source)
+            merged = dict(base)
+            merged["high_path_patterns"] = high_patterns
+            merged["medium_path_patterns"] = medium_patterns
+            policy_path = run_dir / "artifacts" / "policies" / "risk-rules.merged.json"
+            write_json_atomic(policy_path, merged)
+            return policy_path, sources
+    protected = load_pack_protected_paths(project_dir, pack)
     if protected["source"]:
         sources.append(str(protected["source"]))
     high_patterns = normalize_unique_strings(
@@ -7682,6 +7962,33 @@ def failure_signature(verification: dict[str, Any]) -> str | None:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _build_criterion_results(
+    acceptance_criteria: list[str],
+    checks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for criterion in acceptance_criteria:
+        criterion_checks = [
+            check for check in checks
+            if check.get("criterion", "") == criterion
+        ]
+        if not criterion_checks:
+            criterion_checks = checks
+        passed = all(
+            check.get("status") == "passed"
+            for check in criterion_checks
+            if isinstance(check, dict)
+        )
+        results.append(
+            {
+                "criterion": criterion,
+                "status": "passed" if passed else "failed",
+                "checks": criterion_checks,
+            }
+        )
+    return results
+
+
 def render_verification_markdown(verification: dict[str, Any]) -> str:
     lines = [
         "# Verification",
@@ -7728,6 +8035,30 @@ def render_verification_markdown(verification: dict[str, Any]) -> str:
         lines.extend(["", "## Risk Policy Sources", ""])
         for source in sources:
             lines.append(f"- {source}")
+    criterion_results = verification.get("criterion_results", [])
+    if criterion_results:
+        lines.extend(["", "## Acceptance Criteria", ""])
+        for cr in criterion_results:
+            if not isinstance(cr, dict):
+                continue
+            criterion_text = cr.get("criterion", "")
+            status = cr.get("status", "unknown")
+            lines.extend(
+                [
+                    f"### Criterion: {criterion_text}",
+                    f"- Status: {status}",
+                    "",
+                ]
+            )
+            for check in cr.get("checks", []):
+                if not isinstance(check, dict):
+                    continue
+                lines.append(
+                    f"- {check.get('name', 'unnamed')}: {check.get('status', 'unknown')} "
+                    f"(returncode: {check.get('returncode')})"
+                )
+            lines.append("")
+
     lines.extend(["", "## Pack Checks", ""])
     if verification["pack_checks_source"]:
         lines.append(f"- Source: {verification['pack_checks_source']}")
@@ -7822,6 +8153,158 @@ def verify_run(
             blockers=profile_blockers,
             verification=verification_state(run),
         )
+
+    run_data = normalize_run_workflow_state(run)
+    if "verification" not in run_data:
+        run_data["verification"] = {
+            "version": 1,
+            "status": "not_run",
+            "started_at": utc_now(),
+            "finished_at": None,
+            "checks": [],
+            "checks_total": 0,
+            "checks_passed": 0,
+            "blockers": [],
+        }
+    ver_request_ctx = {"source": "engine", "timestamp": utc_now()}
+    ver_request = DEFAULT_STATE_MACHINE.transition(
+        run_data, LifecycleEvent.VERIFICATION_REQUEST, ver_request_ctx
+    )
+    if not ver_request.ok:
+        run_data["verification"] = verification_state(run_data)
+        write_json_atomic(run_json_path, run_data)
+        return VerifyResult(
+            project_dir=status.project_dir,
+            run_dir=run_dir,
+            run=run_data,
+            ok=False,
+            message="LoopForge verification blocked by state machine guards.",
+            blockers=ver_request.blockers,
+            verification=run_data["verification"],
+        )
+    run_data = ver_request.updated_run if ver_request.updated_run is not None else run_data
+
+    # ------------------------------------------------------------------
+    # Pre-verification gates — must pass before any commands are executed.
+    # ------------------------------------------------------------------
+    approval = run_data.get("approval", {})
+    stage_statuses = run_data.get("stage_statuses", {})
+    if not isinstance(approval, dict):
+        approval = {}
+    if not isinstance(stage_statuses, dict):
+        stage_statuses = {}
+
+    if not bool(approval.get("approved", False)):
+        run_data["blockers"] = ["task_not_approved"]
+        run_data["verification"] = verification_state(run_data)
+        write_json_atomic(run_json_path, run_data)
+        return VerifyResult(
+            project_dir=status.project_dir,
+            run_dir=run_dir,
+            run=run_data,
+            ok=False,
+            message="Task must be approved before verification.",
+            blockers=["task_not_approved"],
+            verification=run_data["verification"],
+        )
+
+    if stage_statuses.get("plan") not in ("approved", "completed"):
+        run_data["blockers"] = ["plan_not_approved"]
+        run_data["verification"] = verification_state(run_data)
+        write_json_atomic(run_json_path, run_data)
+        return VerifyResult(
+            project_dir=status.project_dir,
+            run_dir=run_dir,
+            run=run_data,
+            ok=False,
+            message="Plan must be approved before verification.",
+            blockers=["plan_not_approved"],
+            verification=run_data["verification"],
+        )
+
+    attempts = run_data.get("attempts", [])
+    if not isinstance(attempts, list) or not attempts:
+        run_data["blockers"] = ["no_implementation_candidate"]
+        run_data["verification"] = verification_state(run_data)
+        run_data["verification"] = verification_state(run_data)
+        write_json_atomic(run_json_path, run_data)
+        return VerifyResult(
+            project_dir=status.project_dir,
+            run_dir=run_dir,
+            run=run_data,
+            ok=False,
+            message="No valid implementation candidate. At least one successful "
+                    "implementation attempt is required before verification.",
+            blockers=["no_implementation_candidate"],
+            verification=run_data["verification"],
+        )
+    has_candidate = any(
+        a.get("returncode", -1) == 0 or a.get("status") == "completed"
+        for a in attempts
+        if isinstance(a, dict)
+    )
+    if not has_candidate:
+        run_data["blockers"] = ["no_implementation_candidate"]
+        run_data["verification"] = verification_state(run_data)
+        write_json_atomic(run_json_path, run_data)
+        return VerifyResult(
+            project_dir=status.project_dir,
+            run_dir=run_dir,
+            run=run_data,
+            ok=False,
+            message="No valid implementation candidate. At least one successful "
+                    "implementation attempt is required before verification.",
+            blockers=["no_implementation_candidate"],
+            verification=run_data["verification"],
+        )
+
+    base_commit = run_data.get("base_commit")
+    if not isinstance(base_commit, str) or not base_commit:
+        return VerifyResult(
+            project_dir=status.project_dir,
+            run_dir=run_dir,
+            run=run_data,
+            ok=False,
+            message="A base commit is required for verification.",
+            blockers=["no_base_commit"],
+            verification=verification_state(run_data),
+        )
+
+    pack = str(run_data.get("pack") or DEFAULT_PACK)
+    try:
+        from loopforge.engine.packs import pack_trust_store as _pts
+        trust_check = _pts(home=None)
+        frozen_contract = run_data.get("pack_contract", {})
+        pack_hash = frozen_contract.get("checks_content_hash", "") if isinstance(frozen_contract, dict) else ""
+        pack_source = frozen_contract.get("source") if isinstance(frozen_contract, dict) else None
+        if not pack_hash:
+            pack_config = load_pack_checks(status.project_dir, pack)
+            pack_hash = pack_config.get("content_hash", "")
+            pack_source = pack_config.get("source") if not pack_source else pack_source
+        if pack_hash and pack_source is not None:
+            registry = _pack_registry(status.project_dir)
+            bundled_root = str(registry.bundled_packs_path())
+            pack_is_bundled = pack_source.startswith(bundled_root)
+            if not pack_is_bundled and not trust_check.is_trusted(pack_hash):
+                blocker_msg = (
+                    f"Pack '{pack}' is not trusted. "
+                    f"Run `loopforge trust pack {pack}` or use interactive mode."
+                )
+                return VerifyResult(
+                    project_dir=status.project_dir,
+                    run_dir=run_dir,
+                    run=run_data,
+                    ok=False,
+                    message=(
+                        f"Pack '{pack}' is not trusted. "
+                        f"Run `loopforge trust pack {pack}` or use interactive mode."
+                    ),
+                    blockers=[blocker_msg],
+                    verification=verification_state(run_data),
+                )
+    except ValueError:
+        pass
+
     started = utc_now()
     patch_dir = run_dir / "artifacts" / "patches"
     patch_path = patch_dir / "complete.patch"
@@ -7877,9 +8360,7 @@ def verify_run(
         )
 
     base_commit = run.get("base_commit")
-    if not isinstance(base_commit, str) or not base_commit:
-        blockers.append("patch generation requires a Git base_commit recorded in run.json.")
-    elif not workspace_dir.exists() or not workspace_dir.is_dir():
+    if not workspace_dir.exists() or not workspace_dir.is_dir():
         blockers.append(f"patch generation requires the run workspace: {workspace_dir}.")
     else:
         interrupted = cancelled_result()
@@ -7981,6 +8462,7 @@ def verify_run(
                 project_dir=status.project_dir,
                 run_dir=run_dir,
                 pack=str(run.get("pack") or DEFAULT_PACK),
+                run=run,
             )
         except (OSError, ValueError, json.JSONDecodeError) as error:
             risk_summary.update({"status": "failed", "error": str(error)})
@@ -8020,6 +8502,7 @@ def verify_run(
                     "reasons": risk_payload.get("reasons", []),
                     "facts": risk_payload.get("facts", {}),
                     "human_gates": risk_payload.get("human_gates", {}),
+                    "required_gates": risk_payload.get("required_gates", []),
                     "policy": (
                         relative_to_run(run_dir, risk_policy_path)
                         if risk_policy_path is not None
@@ -8029,6 +8512,12 @@ def verify_run(
                     "status": "completed",
                 }
             )
+            run_data["risk"] = {
+                "level": risk_payload.get("risk"),
+                "route": risk_payload.get("route"),
+                "reasons": risk_payload.get("reasons", []),
+                "required_gates": risk_payload.get("required_gates", []),
+            }
         else:
             error = risk_result["stderr"].strip() or risk_result["stdout"].strip()
             risk_summary.update({"status": "failed", "error": error})
@@ -8036,46 +8525,35 @@ def verify_run(
         emit_operation_event(operation_callback, "check_finished", "Patch risk classification finished.", current=3, total=4)
 
     try:
-        pack_config = load_pack_checks(status.project_dir, str(run.get("pack") or DEFAULT_PACK))
-        pack_checks_source = pack_config.get("source")
-        pack_checks = pack_config["checks"]
-        pack_hash = pack_config.get("content_hash", "")
-        if pack_hash and pack_checks_source is not None:
-            registry = _pack_registry(status.project_dir)
-            bundled_root = str(registry.bundled_packs_path())
-            pack_is_bundled = pack_checks_source.startswith(bundled_root)
-            if not pack_is_bundled:
-                from loopforge.engine.packs import pack_trust_store as _pts
-                trust_store = _pts(home=None)
-                if not trust_store.is_trusted(pack_hash):
-                    pack_name = str(run.get("pack") or DEFAULT_PACK)
-                    commands_list = [check.get("command", []) for check in pack_checks]
-                    blocker_msg = (
-                        f"Pack '{pack_name}' is not trusted. "
-                        f"Run `loopforge trust pack {pack_name}` or use interactive mode."
-                    )
-                    updated_run = normalize_run_workflow_state(run)
-                    updated_run["updated_at"] = utc_now()
-                    updated_run["status"] = VERIFICATION_FAILED
-                    updated_run["blockers"] = [blocker_msg]
-                    updated_run["current_stage"] = "verification_blocked"
-                    updated_run["stage_statuses"]["verification"] = "blocked"
-                    persist_run_json(status.project_dir, status.run_json_path, updated_run)
-                    emit_operation_event(
-                        operation_callback,
-                        "blocked",
-                        blocker_msg,
-                        status="blocked",
-                    )
-                    return VerifyResult(
-                        project_dir=status.project_dir,
-                        run_dir=status.run_dir,
-                        run=updated_run,
-                        ok=False,
-                        message=f"Pack '{pack_name}' is not trusted. Run `loopforge trust pack {pack_name}` or use interactive mode.",
-                        blockers=[blocker_msg],
-                        verification=verification_state(updated_run),
-                    )
+        verification_commands = run_data.get("verification_commands")
+        if isinstance(verification_commands, list) and verification_commands:
+            run_checks = []
+            for vc in verification_commands:
+                if not isinstance(vc, dict):
+                    continue
+                command = vc.get("command", [])
+                if not isinstance(command, list) or not command:
+                    continue
+                run_checks.append(
+                    {
+                        "name": vc.get("criterion", ""),
+                        "command": command,
+                        "env": vc.get("env") or {},
+                        "timeout_seconds": vc.get("timeout", 300),
+                        "criterion": vc.get("criterion", ""),
+                    }
+                )
+            pack_checks_source = run_data.get("pack_contract", {}).get("checks_file")
+            pack_checks = run_checks
+        else:
+            frozen_checks = run_data.get("pack_contract", {}).get("checks")
+            if frozen_checks is not None and isinstance(frozen_checks, list):
+                pack_checks_source = run_data.get("pack_contract", {}).get("source")
+                pack_checks = frozen_checks
+            else:
+                pack_config = load_pack_checks(status.project_dir, str(run_data.get("pack") or DEFAULT_PACK))
+                pack_checks_source = pack_config.get("source")
+                pack_checks = pack_config["checks"]
         for index, check in enumerate(pack_checks, start=1):
             interrupted = cancelled_result()
             if interrupted is not None:
@@ -8093,6 +8571,9 @@ def verify_run(
                 run_dir=run_dir,
                 patch_path=patch_path if patch_path.exists() else None,
             )
+            criterion = check.get("criterion", "")
+            if criterion and isinstance(criterion, str) and criterion.strip():
+                result["criterion"] = criterion.strip()
             checks.append(result)
             emit_operation_event(
                 operation_callback,
@@ -8103,7 +8584,16 @@ def verify_run(
                 status=str(result["status"]),
             )
             if result["status"] != "passed":
-                blockers.append(f"pack check failed: {result['name']} ({result['status']}).")
+                criterion = check.get("criterion", "")
+                if criterion and isinstance(criterion, str):
+                    blockers.append(
+                        f"pack check failed: {result['name']} → {criterion} "
+                        f"({result['status']})."
+                    )
+                else:
+                    blockers.append(
+                        f"pack check failed: {result['name']} ({result['status']})."
+                    )
     except ValueError as error:
         blockers.append(f"pack checks could not be loaded: {error}")
 
@@ -8113,12 +8603,17 @@ def verify_run(
         "version": 1,
         "started_at": started,
         "finished_at": finished,
-        "status": "failed" if blockers else "passed",
+        "status": "blocked" if blockers else "passed",
         "patch": patch_summary,
         "diff_policy": diff_summary,
         "risk": risk_summary,
         "pack": run.get("pack") or DEFAULT_PACK,
         "pack_checks_source": pack_checks_source,
+        "acceptance_criteria": run.get("acceptance_criteria") if isinstance(run.get("acceptance_criteria"), list) else [],
+        "criterion_results": _build_criterion_results(
+            run.get("acceptance_criteria") if isinstance(run.get("acceptance_criteria"), list) else [],
+            checks,
+        ),
         "checks": checks,
         "checks_total": len(checks),
         "checks_passed": checks_passed,
@@ -8130,14 +8625,14 @@ def verify_run(
         if (
             isinstance(previous, dict)
             and previous.get("failure_signature") == signature
-            and previous.get("status") == "failed"
+            and previous.get("status") in ("failed", "blocked")
         ):
             verification["stagnated"] = True
             append_unique(blockers, "stagnation: repeated equivalent verification failure.")
         verification["failure_signature"] = signature
     verification["blockers"] = blockers
     if blockers:
-        verification["status"] = "failed"
+        verification["status"] = "blocked"
 
     (run_dir / "verification.md").write_text(
         render_verification_markdown(verification),
@@ -8145,32 +8640,26 @@ def verify_run(
     )
     update_loop_diagnostic(run_dir, verification)
 
-    updated_run = normalize_run_workflow_state(run)
-    updated_run["verification"] = verification
+    updated_run = normalize_run_workflow_state(run_data)
     updated_run["updated_at"] = utc_now()
-    updated_run["status"] = VERIFIED if not blockers else VERIFICATION_FAILED
-    updated_run["blockers"] = [] if not blockers else blockers
+    ver_ctx = {"source": "engine", "timestamp": utc_now()}
     if not blockers:
-        updated_run["current_stage"] = VERIFICATION_READY_STAGE
-        updated_run["stage_statuses"]["verification"] = "complete"
-        updated_run["stage_statuses"]["review"] = "pending"
-        updated_run["human_gates"]["review_approval"] = {
-            **initial_workflow_state()["human_gates"]["review_approval"],
-            "status": "pending",
-        }
-        updated_run["publish_eligibility"] = {
-            "eligible": False,
-            "reasons": ["read-only review and approval are required before draft publication"],
-        }
+        ver_pass = DEFAULT_STATE_MACHINE.transition(
+            updated_run, LifecycleEvent.VERIFICATION_PASS, ver_ctx
+        )
+        if ver_pass.ok and ver_pass.updated_run is not None:
+            updated_run = ver_pass.updated_run
+        updated_run["status"] = VERIFIED
+        updated_run["blockers"] = []
     else:
-        updated_run["current_stage"] = "verification_blocked"
-        updated_run["stage_statuses"]["verification"] = "blocked"
-        if updated_run["stage_statuses"].get("review") not in {"approved", "complete"}:
-            updated_run["stage_statuses"]["review"] = "pending"
-        updated_run["publish_eligibility"] = {
-            "eligible": False,
-            "reasons": ["deterministic verification is blocked"],
-        }
+        ver_fail = DEFAULT_STATE_MACHINE.transition(
+            updated_run, LifecycleEvent.VERIFICATION_FAIL, ver_ctx
+        )
+        if ver_fail.ok and ver_fail.updated_run is not None:
+            updated_run = ver_fail.updated_run
+        updated_run["status"] = VERIFICATION_FAILED
+        updated_run["blockers"] = blockers
+    updated_run["verification"] = verification
     persist_run_json(status.project_dir, run_json_path, updated_run)
     emit_operation_event(
         operation_callback,
@@ -8332,11 +8821,19 @@ def continue_run(
             blockers=profile_blockers,
         )
 
+    run = normalize_run_workflow_state(status.run)
+    impl_start_ctx = {"source": "engine", "timestamp": utc_now()}
+    impl_start = DEFAULT_STATE_MACHINE.transition(
+        run, LifecycleEvent.IMPLEMENTATION_START, impl_start_ctx
+    )
+    if impl_start.ok and impl_start.updated_run is not None:
+        run = impl_start.updated_run
+
     try:
         attempt = execute_attempt(
             project_dir=status.project_dir,
             run_dir=status.run_dir,
-            run=status.run,
+            run=run,
             contract=contract,
             adapter=adapter,
             adapter_args=adapter_args or [],
@@ -8347,7 +8844,7 @@ def continue_run(
         updated_run = update_run_after_attempt(
             project_dir=status.project_dir,
             run_json_path=status.run_json_path or (status.run_dir / "run.json"),
-            run=status.run,
+            run=run,
             attempt=attempt,
         )
     except (OSError, RuntimeError, ValueError) as error:

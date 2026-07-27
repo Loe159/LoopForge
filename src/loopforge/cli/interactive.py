@@ -2077,20 +2077,39 @@ class InteractiveShell:
 
     def cmd_doctor(self, raw: str = "") -> DispatchResult:
         del raw
+        try:
+            from loopforge.engine.doctor import DoctorService
+            service = DoctorService(project_dir=self.project_dir)
+            result = service.examine()
+        except Exception as exc:
+            self.write(f"Doctor check failed: {exc}", error=True)
+            return DispatchResult(1)
+
         deps = tui_dependency_state()
         status = current_status(self.project_dir)
         lines = [
             f"project: {self.project_dir.resolve()}",
             f"initialized: {status.initialized}",
-            f"prompt_toolkit: {'available' if deps['prompt_toolkit'] else 'missing'}",
-            f"rich: {'available' if deps['rich'] else 'missing'}",
-            f"textual: {'available' if deps['textual'] else 'missing'}",
-            f"selected adapter: {self.selected_adapter}",
-            "selected adapter args: " + " ".join(self.selected_adapter_args),
-            f"renderer: {self.renderer_mode}",
-            f"theme: {self.theme}",
-            f"keymap: {self.editing_mode}",
         ]
+
+        for d in result.diagnostics:
+            marker = {"error": "!", "warning": "~", "info": " "}.get(d.level, " ")
+            lines.append(f"[{marker}] {d.category}: {d.message}")
+            if d.repairable:
+                lines.append(f"    -> repair: {d.repair_description or d.proposed_action}")
+
+        if not result.diagnostics:
+            lines.append("No issues found.")
+
+        lines.append("")
+        lines.append(f"prompt_toolkit: {'available' if deps['prompt_toolkit'] else 'missing'}")
+        lines.append(f"rich: {'available' if deps['rich'] else 'missing'}")
+        lines.append(f"textual: {'available' if deps['textual'] else 'missing'}")
+        lines.append(f"selected adapter: {self.selected_adapter}")
+        lines.append("selected adapter args: " + " ".join(self.selected_adapter_args))
+        lines.append(f"renderer: {self.renderer_mode}")
+        lines.append(f"theme: {self.theme}")
+        lines.append(f"keymap: {self.editing_mode}")
         git = subprocess.run(["git", "--version"], check=False, capture_output=True, text=True)
         lines.append(f"git: {git.stdout.strip() if git.returncode == 0 else 'missing'}")
         lines.append(f"supported adapters: {', '.join(SUPPORTED_ADAPTERS)}")
@@ -2098,8 +2117,9 @@ class InteractiveShell:
             lines.append("blockers:")
             for blocker in status.blockers:
                 lines.append(f"- {blocker}")
+        lines.append(f"summary: {result.summary}")
         self.write_panel("LoopForge doctor", lines)
-        return DispatchResult(0)
+        return DispatchResult(0 if result.ok else 1)
 
     def _resolve_pack_registry(self):
         from loopforge.engine import _pack_registry

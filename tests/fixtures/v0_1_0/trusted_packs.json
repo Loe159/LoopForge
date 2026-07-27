@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "packs": {
+    "abc123def45678901234567890123456abc123def45678901234567890123456": {
+      "name": "python",
+      "commands": ["python -m unittest", "ruff check"],
+      "trusted_at": "2026-07-17T00:00:00Z"
+    },
+    "fed456cba12309876543210987654321fed456cba12309876543210987654321": {
+      "name": "generic-code",
+      "commands": ["python -m unittest"],
+      "trusted_at": "2026-07-16T00:00:00Z"
+    }
+  }
+}

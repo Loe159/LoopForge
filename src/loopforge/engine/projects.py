@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -12,6 +13,10 @@ from typing import Any
 from loopforge.engine.storage import DEFAULT_JSON_STORE
 from loopforge.engine.git_state import DEFAULT_GIT_STATE_SERVICE
 from loopforge.engine.path_resolvers import validate_identifier, resolve_confined
+from loopforge.engine.models.schema import CURRENT_REGISTRY_SCHEMA
+from loopforge.engine.recovery import safe_read_json
+
+logger = logging.getLogger(__name__)
 
 PROJECTS_DIRECTORY = "projects"
 REGISTRY_FILE = "registry.json"
@@ -54,25 +59,32 @@ def registry_path(home: Path) -> Path:
 
 
 def empty_registry() -> dict[str, Any]:
-    return {"registry_version": 1, "projects": {}}
+    return {"schema_version": int(CURRENT_REGISTRY_SCHEMA), "registry_version": 1, "projects": {}}
 
 
 def load_registry(home: Path) -> dict[str, Any]:
     path = registry_path(home)
-    if not path.exists():
+    data, diagnostic = safe_read_json(DEFAULT_JSON_STORE, path)
+    if data is None:
+        if diagnostic and "File not found" in diagnostic:
+            logger.info("Registry not found at %s, creating empty registry", path)
+        else:
+            logger.error("Registry corrupt: %s", diagnostic)
         return empty_registry()
-    try:
-        registry = DEFAULT_JSON_STORE.read_object(path)
-    except (OSError, ValueError):
-        return empty_registry()
-    projects = registry.get("projects")
+    projects = data.get("projects")
     if not isinstance(projects, dict):
+        logger.error("Registry schema invalid: projects is not a dict")
         return empty_registry()
-    return {"registry_version": 1, "projects": projects}
+    return {"schema_version": int(CURRENT_REGISTRY_SCHEMA), "registry_version": 1, "projects": projects}
 
 
 def save_registry(home: Path, registry: dict[str, Any]) -> None:
-    DEFAULT_JSON_STORE.write_object(registry_path(home), registry)
+    from loopforge.engine.repositories import RegistryRepository
+    try:
+        repo = RegistryRepository(registry_path(home), lock_timeout=3.0)
+        repo.write(registry)
+    except Exception:
+        DEFAULT_JSON_STORE.write_object(registry_path(home), registry)
 
 
 def git_branch(project_dir: Path) -> str | None:

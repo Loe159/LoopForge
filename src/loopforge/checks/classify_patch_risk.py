@@ -14,8 +14,8 @@ from loopforge.checks import diff_policy
 from loopforge.contracts import policy_path
 
 
-RISK_ORDER = {"low": 0, "medium": 1, "high": 2}
-ROUTES = {"low": "A", "medium": "B", "high": "C"}
+RISK_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+ROUTES = {"low": "A", "medium": "B", "high": "C", "critical": "D"}
 HUMAN_GATES = {
     "low": {
         "required": ["implementation_review"],
@@ -34,6 +34,13 @@ HUMAN_GATES = {
         ],
         "recommended": [],
     },
+}
+
+REQUIRED_GATES = {
+    "low": [],
+    "medium": [],
+    "high": ["plan_approval"],
+    "critical": ["review_approval"],
 }
 
 
@@ -141,6 +148,7 @@ def classify(
         "label": f"risk:{risk}",
         "route": ROUTES[risk],
         "human_gates": HUMAN_GATES[risk],
+        "required_gates": REQUIRED_GATES.get(risk, []),
         "policy_allowed": policy_result["allowed"],
         "reasons": reasons,
         "facts": {

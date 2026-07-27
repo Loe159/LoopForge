@@ -60,12 +60,11 @@ class GitStateService:
             metadata = "missing"
         return f"{metadata}:{content}"
 
-    @staticmethod
-    def _resolve_git_dir(project_dir: Path) -> tuple[Path | None, str | None]:
+    def _resolve_git_dir(self, project_dir: Path) -> tuple[Path | None, str | None]:
         dot_git = project_dir / ".git"
         try:
             if dot_git.is_dir():
-                return dot_git, None
+                return dot_git.resolve(), None
             if not dot_git.is_file():
                 return None, "not_repository"
             value = dot_git.read_text(encoding="utf-8").strip()
@@ -75,11 +74,30 @@ class GitStateService:
             return None, "unavailable"
         git_dir = Path(value.split(":", 1)[1].strip())
         if not git_dir.is_absolute():
-            git_dir = (project_dir / git_dir).resolve()
-        return git_dir, None
+            git_dir = (project_dir / git_dir)
+        return git_dir.resolve(), None
 
     @staticmethod
-    def _packed_ref(git_dir: Path, reference: str) -> tuple[str | None, str]:
+    def _resolve_git_dir_fallback(project_dir: Path, timeout: float = FALLBACK_TIMEOUT_SECONDS) -> tuple[Path | None, str | None]:
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--git-dir"],
+                cwd=project_dir,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None, "unavailable"
+        if result.returncode != 0:
+            return None, "unavailable"
+        git_dir = Path(result.stdout.strip())
+        if not git_dir.is_absolute():
+            git_dir = (project_dir / git_dir)
+        return git_dir.resolve(), None
+
+    @classmethod
+    def _packed_ref(cls, git_dir: Path, reference: str) -> tuple[str | None, str]:
         packed_refs = git_dir / "packed-refs"
         try:
             content = packed_refs.read_text(encoding="utf-8")
@@ -89,13 +107,15 @@ class GitStateService:
             if line and not line.startswith(("#", "^")):
                 value, _, name = line.partition(" ")
                 if name == reference:
-                    return value, self._file_signature(packed_refs, content)
-        return None, self._file_signature(packed_refs, content)
+                    return value, cls._file_signature(packed_refs, content)
+        return None, cls._file_signature(packed_refs, content)
 
     def _read_direct(self, project_dir: Path) -> _DirectRead:
         git_dir, error = self._resolve_git_dir(project_dir)
         if git_dir is None:
-            return _DirectRead(GitState(project_dir, None, None, None, error or "unavailable", error))
+            git_dir, fallback_error = self._resolve_git_dir_fallback(project_dir, timeout=self.fallback_timeout)
+            if git_dir is None:
+                return _DirectRead(GitState(project_dir, None, None, None, error or fallback_error or "unavailable", error))
         head_path = git_dir / "HEAD"
         try:
             head_value = head_path.read_text(encoding="utf-8").strip()

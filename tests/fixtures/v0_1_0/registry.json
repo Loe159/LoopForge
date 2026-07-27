@@ -1,0 +1,45 @@
+{
+  "registry_version": 1,
+  "projects": {
+    "project-a1b2c3d4e5f6a7b8c9d0": {
+      "project_id": "project-a1b2c3d4e5f6a7b8c9d0",
+      "name": "test-project",
+      "path": "/tmp/test-project",
+      "profile": "supervised",
+      "run_root": "/tmp/test-home/LoopForge/projects/project-a1b2c3d4e5f6a7b8c9d0/runs",
+      "last_opened_at": "2026-07-17T00:00:00Z",
+      "updated_at": "2026-07-17T00:00:00Z",
+      "summary_revision": 1,
+      "summary_source_timestamp": "2026-07-17T00:00:00Z",
+      "index_state": "ready",
+      "initialized": true,
+      "run_count": 1,
+      "attention": "ready",
+      "last_activity": "2026-07-17T00:00:00Z",
+      "current_run_id": "run-001",
+      "branch": null,
+      "last_known_branch": null,
+      "git_head_signature": null
+    },
+    "project-f6e7d8c9b0a1f2e3d4c5": {
+      "project_id": "project-f6e7d8c9b0a1f2e3d4c5",
+      "name": "second-project",
+      "path": "/tmp/second-project",
+      "profile": "autonomous",
+      "run_root": "/tmp/test-home/LoopForge/projects/project-f6e7d8c9b0a1f2e3d4c5/runs",
+      "last_opened_at": "2026-07-16T00:00:00Z",
+      "updated_at": "2026-07-17T00:00:00Z",
+      "summary_revision": 3,
+      "summary_source_timestamp": "2026-07-16T00:00:00Z",
+      "index_state": "ready",
+      "initialized": true,
+      "run_count": 2,
+      "attention": "ready",
+      "last_activity": "2026-07-17T00:00:00Z",
+      "current_run_id": null,
+      "branch": null,
+      "last_known_branch": null,
+      "git_head_signature": null
+    }
+  }
+}

@@ -1,0 +1,41 @@
+schema_version: 1
+module:
+  id: tools-loopforge
+  name: LoopForge
+  path: tools/LoopForge
+  technology: python
+  role: tooling
+  purpose: Portable agentic workflow engine — a local Python CLI (loopforge) for bounded autonomous work loops. Supports staged intake, read-only research/planning, gated implementation, deterministic verification, explicit review, and local draft publication preparation. Uses Textual TUI, Rich, and prompt_toolkit.
+  source_revision: unknown
+  audited_at: "2026-07-24"
+  documentation_status: current
+entry_points:
+  - type: cli
+    class: loopforge.cli:main
+    module: src/loopforge/cli/__init__.py
+build:
+  system: pip/setuptools
+  descriptor: pyproject.toml
+  commands:
+    - python -m unittest
+    - git diff --check
+    - pytest tests/test_cli_structure.py
+    - pytest tests/test_engine_services.py
+contracts:
+  provides:
+    - type: cli
+      description: loopforge CLI facade with slash commands
+      path: src/loopforge/cli/
+    - type: library
+      description: Engine APIs, JsonStore, PackRegistry, MetricsService
+      path: src/loopforge/engine/
+  consumes: []
+relations:
+  depends_on: []
+  consumed_by: []
+danger_zones:
+  - loopforge.cli:main facade stability
+  - Engine lifecycle API (src/loopforge/engine/__init__.py)
+  - Interactive TTY sessions (preserve --plain compatibility)
+evidence: [AGENTS.md, pyproject.toml, docs/agent/]
+unresolved: []

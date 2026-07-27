@@ -304,6 +304,7 @@ class RunWorkspaceTests(unittest.TestCase):
             root = Path(temp_dir)
             project = root / "project"
             project.mkdir()
+            (project / ".git").mkdir()
             initialized = initialize_project(project, home=root / "home")
 
             with mock.patch(
@@ -393,6 +394,7 @@ class ProjectRegistryTests(unittest.TestCase):
             assert resolved.init is not None
             self.assertNotEqual(resolved.init.config["project_id"], initial.config["project_id"])
 
+    @mock.patch.dict(os.environ, {"LOOPFORGE_SNAPSHOT_BACKEND": "1"})
     def test_global_runs_include_project_identity(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -408,6 +410,7 @@ class ProjectRegistryTests(unittest.TestCase):
             self.assertEqual(result.runs[0]["project_id"], init.config["project_id"])
             self.assertEqual(result.runs[0]["project"], project.name)
 
+    @mock.patch.dict(os.environ, {"LOOPFORGE_SNAPSHOT_BACKEND": "1"})
     def test_warm_run_listing_reads_the_compact_index_not_run_json(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -426,6 +429,7 @@ class ProjectRegistryTests(unittest.TestCase):
             self.assertIn(str(Path(initial.config["run_root"]) / "index.json"), read_paths)
             self.assertNotIn(str(Path(initial.config["run_root"]) / result.runs[0]["run_id"] / "run.json"), read_paths)
 
+    @mock.patch.dict(os.environ, {"LOOPFORGE_SNAPSHOT_BACKEND": "1"})
     def test_corrupt_run_index_is_safely_rebuilt_from_authoritative_runs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -1029,6 +1033,7 @@ class StatusReadTests(unittest.TestCase):
 
 
 class ArchiveRunTests(unittest.TestCase):
+    @mock.patch.dict(os.environ, {"LOOPFORGE_SNAPSHOT_BACKEND": "1"})
     def test_archive_run_with_explicit_id(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -1049,6 +1054,7 @@ class ArchiveRunTests(unittest.TestCase):
             self.assertTrue(status.run.get("archived", False))
             self.assertIn("archived_at", status.run)
 
+    @mock.patch.dict(os.environ, {"LOOPFORGE_SNAPSHOT_BACKEND": "1"})
     def test_archive_run_wrong_project_raises(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -1066,6 +1072,7 @@ class ArchiveRunTests(unittest.TestCase):
             self.assertFalse(result.ok)
             self.assertIn("run metadata not found", str(result.blockers))
 
+    @mock.patch.dict(os.environ, {"LOOPFORGE_SNAPSHOT_BACKEND": "1"})
     def test_archive_current_run_wraps_archive_run(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
