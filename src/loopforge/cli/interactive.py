@@ -623,6 +623,17 @@ class InteractiveShell:
             self.write_panel("Stderr (truncated)", [str(latest["stderr"])[:500]])
         return DispatchResult(0)
 
+    def _next_command_from_guidance(self) -> str | None:
+        """Derive the next command from the engine's current guidance (S2.3)."""
+
+        try:
+            guidance = current_guidance(self.project_dir)
+        except Exception:
+            return None
+        if guidance.recommended_actions:
+            return guidance.recommended_actions[0].command or None
+        return None
+
     def execute_readonly_guided_stage(
         self,
         *,
@@ -1133,7 +1144,7 @@ class InteractiveShell:
                 ("pack", result.run["pack"]),
                 ("contract", result.run["loop_contract"]["status"]),
             ],
-            next_command="/continue",
+            next_command=self._next_command_from_guidance() or "/continue",
         )
         return DispatchResult(0)
 
@@ -1296,14 +1307,14 @@ class InteractiveShell:
                 )
             )
         if result.ok:
-            render_success(self.renderer, "Verified", rows, next_command="/learn")
+            render_success(self.renderer, "Verified", rows, next_command=self._next_command_from_guidance() or "/learn")
         else:
             render_blocked(
                 self.renderer,
                 "Verification failed",
                 rows,
                 blockers=result.blockers,
-                next_command="/diff",
+                next_command=self._next_command_from_guidance() or "/diff",
             )
         return DispatchResult(0 if result.ok else 1)
 
@@ -1526,7 +1537,7 @@ class InteractiveShell:
             ("pack", result.run.get("pack") or "none"),
             ("file", loop_path),
         ]
-        render_summary_table(self.renderer, "Plan", rows, next_command="/continue")
+        render_summary_table(self.renderer, "Plan", rows, next_command=self._next_command_from_guidance() or "/continue")
         if result.loop_contract is not None:
             checks = result.loop_contract.get("success_checks", [])
             check_lines = [f"[ ] {check}" for check in checks] or ["none recorded"]
@@ -2028,20 +2039,26 @@ class InteractiveShell:
         status = current_status(self.project_dir)
         if status.run is None:
             return self.cmd_run(task)
+        source = status.run
+        limits = source.get("limits", {}) if isinstance(source.get("limits"), dict) else {}
         try:
             result = create_run(
                 self.project_dir,
                 task=task,
-                pack=str(status.run.get("pack") or ""),
-                success_checks=[
-                    str(check) for check in status.run.get("success_checks", [])
-                ],
+                pack=str(source.get("pack") or ""),
+                success_checks=[str(c) for c in source.get("success_checks", [])],
+                selected_skills=[str(s) for s in source.get("selected_skills", [])],
+                allowed_tools=[str(t) for t in source.get("allowed_tools", [])],
+                max_attempts=int(limits.get("max_attempts", 3)),
+                timeout_seconds=int(limits.get("timeout_seconds", 1800)),
+                subjective_rubric=str(source.get("subjective_rubric", "")),
             )
         except (FileNotFoundError, ValueError) as error:
             self.write(f"fork failed: {error}", error=True)
             return DispatchResult(1)
         self.write(f"LoopForge fork created: {result.run_dir}")
         self.write(f"run id: {result.run['run_id']}")
+        self.write(f"cloned contract: skills={len(source.get('selected_skills', []))}, tools={len(source.get('allowed_tools', []))}, max_attempts={limits.get('max_attempts', 3)}")
         return DispatchResult(0)
 
     def cmd_cd(self, raw: str) -> DispatchResult:
