@@ -740,7 +740,10 @@ class LoopForgeApp(App[None]):
     @work(thread=True, exclusive=True, group="evidence-export", exit_on_error=False)
     def _export_evidence_worker(self, item: EvidenceItem) -> None:
         try:
+            import hashlib
             import shutil
+
+            from datetime import datetime, timezone
 
             # S3.1: capture identity and target run_dir BEFORE the side effect.
             identity = self.store.begin_load()
@@ -749,13 +752,39 @@ class LoopForgeApp(App[None]):
                 raise RuntimeError("No run is selected.")
             run_dir = status.run_dir
             source_path = item.path
-            destination = run_dir / "artifacts" / "exports" / item.path.name
-            destination.parent.mkdir(parents=True, exist_ok=True)
+            exports_dir = run_dir / "artifacts" / "exports"
+            exports_dir.mkdir(parents=True, exist_ok=True)
+            # S4.3: unique destination to avoid overwriting same-name artifacts.
+            destination = exports_dir / item.path.name
+            counter = 1
+            while destination.exists():
+                stem = item.path.stem
+                suffix = item.path.suffix
+                destination = exports_dir / f"{stem}_{counter}{suffix}"
+                counter += 1
             shutil.copyfile(source_path, destination)
+            # S4.3: write a receipt with full identity.
+            content_hash = hashlib.sha256(source_path.read_bytes()).hexdigest()[:16]
+            receipt = {
+                "project": str(self.shell.project_dir.name),
+                "run_id": str(self._snapshot.selected_run_id or ""),
+                "artifact": str(item.path.name),
+                "content_hash": content_hash,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "destination": str(destination.relative_to(run_dir)),
+            }
+            receipt_path = exports_dir / f"{destination.stem}.receipt.json"
+            receipt_path.write_text(
+                __import__("json").dumps(receipt, indent=2),
+                encoding="utf-8",
+            )
             # Check freshness AFTER the effect but BEFORE publishing.
             if _identity_stale(self.store, identity):
                 return
-            self.call_from_thread(self._set_notice, f"Exported {destination.relative_to(run_dir)}")
+            self.call_from_thread(
+                self._set_notice,
+                f"Exported {destination.relative_to(run_dir)} (hash {content_hash})",
+            )
         except Exception as error:
             self.post_message(LoadFailed(str(error)))
 
