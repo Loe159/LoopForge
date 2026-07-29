@@ -2295,10 +2295,10 @@ def merged_risk_policy_path(
                     *[str(item["pattern"]) for item in protected_paths if isinstance(item, dict) and item.get("severity") == "medium"],
                 ]
             )
-            if frozen_contract.get("protected_paths_content_hash"):
-                protected_source = frozen_contract.get("source")
-                if isinstance(protected_source, str) and protected_source:
-                    sources.append(protected_source)
+            if protected_paths:
+                protected_source = load_pack_protected_paths(project_dir, pack)
+                if protected_source.get("source"):
+                    sources.append(str(protected_source["source"]))
             merged = dict(base)
             merged["high_path_patterns"] = high_patterns
             merged["medium_path_patterns"] = medium_patterns
