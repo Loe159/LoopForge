@@ -257,6 +257,23 @@ class CliTests(unittest.TestCase):
         self.approve_current_plan(run_dir)
         return run_dir
 
+    def add_implementation_candidate(self, run_dir: Path) -> None:
+        """Append a completed implementation attempt so verify gates pass (P0)."""
+        run_json_path = run_dir / "run.json"
+        run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+        run_json.setdefault("attempts", []).append(
+            {
+                "id": "test-attempt",
+                "adapter": "local-adapter-fixture",
+                "returncode": 0,
+                "status": "completed",
+                "started_at": "2026-01-01T00:00:00Z",
+                "finished_at": "2026-01-01T00:00:01Z",
+                "summary": "Test attempt for verify gate.",
+            }
+        )
+        run_json_path.write_text(json.dumps(run_json), encoding="utf-8")
+
     def complete_current_review(self, run_dir: Path) -> None:
         run_json_path = run_dir / "run.json"
         run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
@@ -1090,6 +1107,8 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(main(["init"]), 0)
                 self.assertEqual(main(["shell", "--command", run_command]), 0)
                 (repo / "README.md").write_text("# Project\n\nUpdated.\n", encoding="utf-8")
+                run_dir = self.approve_current_run_for_implementation(repo, loopforge_home)
+                self.add_implementation_candidate(run_dir)
                 self.assertEqual(main(["shell", "--command", "/verify"]), 0)
 
             config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
@@ -1950,6 +1969,8 @@ class CliTests(unittest.TestCase):
                 run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
                 workspace_dir = Path(run_json["workspace"]["path"])
                 (workspace_dir / "README.md").write_text("# Project\n\nUpdated.\n", encoding="utf-8")
+                self.approve_current_run_for_implementation(repo, loopforge_home)
+                self.add_implementation_candidate(run_dir)
                 self.assertEqual(main(["verify"]), 0)
                 self.complete_current_review(run_dir)
 
@@ -2008,6 +2029,8 @@ class CliTests(unittest.TestCase):
                 run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
                 workspace_dir = Path(run_json["workspace"]["path"])
                 (workspace_dir / "README.md").write_text("# Project\n\nUpdated.\n", encoding="utf-8")
+                self.approve_current_run_for_implementation(repo, loopforge_home)
+                self.add_implementation_candidate(run_dir)
                 self.assertEqual(main(["verify"]), 0)
 
             output = io.StringIO()
@@ -2058,6 +2081,8 @@ class CliTests(unittest.TestCase):
                 run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
                 workspace_dir = Path(run_json["workspace"]["path"])
                 (workspace_dir / "README.md").write_text("# Project\n\nUpdated.\n", encoding="utf-8")
+                self.approve_current_run_for_implementation(repo, loopforge_home)
+                self.add_implementation_candidate(run_dir)
                 self.assertEqual(main(["verify"]), 0)
                 self.complete_current_review(run_dir)
 
@@ -2135,6 +2160,8 @@ class CliTests(unittest.TestCase):
                 run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
                 workspace_dir = Path(run_json["workspace"]["path"])
                 (workspace_dir / "README.md").write_text("# Project\n\nUpdated.\n", encoding="utf-8")
+                self.approve_current_run_for_implementation(repo, loopforge_home)
+                self.add_implementation_candidate(run_dir)
                 self.assertEqual(main(["verify"]), 0)
                 self.complete_current_review(run_dir)
                 self.assertTrue(approve_review(repo, source="test").ok)
@@ -3036,6 +3063,7 @@ Only this section is present.
                 (workspace_dir / "README.md").write_text(
                     "# Project\n\nVerified.\n", encoding="utf-8"
                 )
+                self.add_implementation_candidate(run_dir)
                 self.assertEqual(main(["verify"]), 0)
                 verified = current_guidance(repo)
                 self.assertEqual(verified.state, "review_pending")
@@ -4503,6 +4531,10 @@ Only this section is present.
                     0,
                 )
                 (repo / "README.md").write_text("# Project\n\nUpdated.\n", encoding="utf-8")
+                self.approve_current_run_for_implementation(repo, loopforge_home)
+                config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
+                run_dir = Path(config["run_root"]) / config["current_run_id"]
+                self.add_implementation_candidate(run_dir)
                 with contextlib.redirect_stderr(verify_error):
                     self.assertEqual(main(["verify"]), 1)
                 self.assertEqual(main(["verify", "--confirm"]), 0)
@@ -5235,6 +5267,8 @@ Only this section is present.
                     "# Project\n\nUpdated.\n",
                     encoding="utf-8",
                 )
+                self.approve_current_run_for_implementation(repo, loopforge_home)
+                self.add_implementation_candidate(run_dir)
                 self.assertEqual(main(["verify"]), 0)
                 self.assertEqual(main(["status", "--details"]), 0)
 
@@ -5642,6 +5676,8 @@ Only this section is present.
                     "[project]\nname = \"sample\"\nversion = \"0.2.0\"\n",
                     encoding="utf-8",
                 )
+                self.approve_current_run_for_implementation(repo, loopforge_home)
+                self.add_implementation_candidate(run_dir)
                 self.assertEqual(main(["verify"]), 0)
 
             config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
@@ -6398,6 +6434,12 @@ Only this section is present.
                 run_data["current_stage"] = "verification_pending"
                 run_data["base_commit"] = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
                 run_data["stage_statuses"]["verification"] = "pending"
+                run_data.setdefault("approval", {})["approved"] = True
+                run_data["stage_statuses"]["task"] = "approved"
+                run_data["stage_statuses"]["plan"] = "approved"
+                run_data.setdefault("attempts", []).append(
+                    {"id": "t", "adapter": "local-adapter-fixture", "returncode": 0, "status": "completed"}
+                )
                 run_path.write_text(json.dumps(run_data), encoding="utf-8")
 
                 from loopforge.engine import verify_run as engine_verify

@@ -114,6 +114,38 @@ def verify_run(
         )
 
     run_data = normalize_run_workflow_state(run)
+    # P0: verify gates — the run must have passed its workflow gates.
+    stage_statuses = run_data.get("stage_statuses", {})
+    gate_blockers: list[str] = []
+    if not run_data.get("approval", {}).get("approved"):
+        gate_blockers.append("task_not_approved")
+    if stage_statuses.get("plan") not in ("approved", "complete"):
+        gate_blockers.append("plan_not_approved")
+    attempts = run_data.get("attempts", [])
+    has_candidate = isinstance(attempts, list) and any(
+        isinstance(a, dict) and a.get("returncode") is not None for a in attempts
+    )
+    if not has_candidate:
+        gate_blockers.append("no_implementation_candidate")
+    if gate_blockers:
+        failed_run = normalize_run_workflow_state(run_data)
+        failed_run["updated_at"] = utc_now()
+        failed_run["status"] = VERIFICATION_FAILED
+        failed_run["blockers"] = gate_blockers
+        failed_run["current_stage"] = RunStage.VERIFICATION_BLOCKED.value
+        failed_run["stage_statuses"]["verification"] = "blocked"
+        failed_run["verification"] = verification_state(failed_run)
+        persist_run_json(status.project_dir, run_json_path, failed_run)
+        return VerifyResult(
+            project_dir=status.project_dir,
+            run_dir=run_dir,
+            run=failed_run,
+            ok=False,
+            message="The run has not passed its workflow gates. "
+            + ", ".join(gate_blockers),
+            blockers=gate_blockers,
+            verification=failed_run["verification"],
+        )
     if "verification" not in run_data:
         run_data["verification"] = {
             "version": 1,
