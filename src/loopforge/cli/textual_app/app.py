@@ -340,6 +340,7 @@ class LoopForgeApp(App[None]):
                 if run_id:
                     self._screen = "run"
                     self._reset_list_cursor()
+                    self._render_snapshot(self._snapshot)
                     self._open_run_worker(run_id)
             return
         if self._screen == "run":
