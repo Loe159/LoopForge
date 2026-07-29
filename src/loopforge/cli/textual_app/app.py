@@ -872,10 +872,10 @@ class LoopForgeApp(App[None]):
         return f"{state} · revision {snapshot.revision}"
 
     def _set_width_class(self, width: int) -> None:
+        from loopforge.cli.terminal_capabilities import width_class_for
+
         self.remove_class("width-60", "width-80", "width-120", "width-160")
-        self.add_class(
-            "width-60" if width < 80 else "width-80" if width < 120 else "width-120" if width < 160 else "width-160"
-        )
+        self.add_class(width_class_for(width))
 
     def _handle_exception(self, error: Exception) -> None:
         if self.is_running:

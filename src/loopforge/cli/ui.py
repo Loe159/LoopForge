@@ -54,22 +54,16 @@ class TerminalRenderer:
         self.set_mode(mode)
 
     def set_mode(self, mode: str) -> None:
+        from loopforge.cli.terminal_capabilities import detect_capabilities
+
         self.mode = mode
-        no_color = (
-            self.no_color
-            or os.environ.get("NO_COLOR") is not None
-            or os.environ.get("LOOPFORGE_NO_COLOR") is not None
-            or os.environ.get("TERM") == "dumb"
+        caps = detect_capabilities(
+            self.output,
+            mode=mode,
+            no_color=self.no_color,
+            rich_available=self.rich_available,
         )
-        force_color = os.environ.get("FORCE_COLOR") is not None and not no_color
-        is_tty = hasattr(self.output, "isatty") and self.output.isatty()
-        auto_rich = (
-            mode == "auto"
-            and self.rich_available
-            and (is_tty or force_color)
-            and not no_color
-        )
-        self.use_rich = (mode == "rich" and self.rich_available and not no_color) or auto_rich
+        self.use_rich = caps.use_rich
         if self.use_rich:
             from rich.console import Console
 
@@ -77,7 +71,7 @@ class TerminalRenderer:
                 file=self.output,
                 force_terminal=True,
                 color_system="standard" if mode == "rich" else None,
-                no_color=no_color,
+                no_color=caps.no_color,
                 highlight=False,
             )
         else:
