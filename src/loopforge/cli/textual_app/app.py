@@ -59,6 +59,15 @@ def textual_theme_name(preference: str) -> str:
     return TEXTUAL_THEME_BY_PREFERENCE.get(preference, TEXTUAL_THEME_BY_PREFERENCE["default"])
 
 
+EXPERT_COMMANDS = (
+    ("/context", "Compact run context"),
+    ("/diff", "Show pending diff"),
+    ("/fork", "Fork this run"),
+    ("/permissions", "Show permissions"),
+    ("/report", "Generate evidence report"),
+)
+
+
 class LoopForgeActionProvider(Provider):
     """Expose the shared action descriptors in Textual's command palette."""
 
@@ -74,6 +83,18 @@ class LoopForgeActionProvider(Provider):
                     text=action.label,
                     help=action.description,
                 )
+        shell = self.app._snapshot.run.shell
+        if shell is not None and shell.run is not None:
+            for cmd, label in EXPERT_COMMANDS:
+                score = matcher.match(label)
+                if score > 0:
+                    yield Hit(
+                        score,
+                        matcher.highlight(label),
+                        lambda cmd=cmd: self.app._run_slash_command(cmd),
+                        text=label,
+                        help=f"Slash command {cmd}",
+                    )
 
     async def discover(self) -> Hits:
         for action in self.app.available_actions:
@@ -82,6 +103,14 @@ class LoopForgeActionProvider(Provider):
                 lambda action=action: self.app.request_action(action),
                 help=action.description,
             )
+        shell = self.app._snapshot.run.shell
+        if shell is not None and shell.run is not None:
+            for cmd, label in EXPERT_COMMANDS:
+                yield DiscoveryHit(
+                    label,
+                    lambda cmd=cmd: self.app._run_slash_command(cmd),
+                    help=f"Slash command {cmd}",
+                )
 
 
 class LoopForgeApp(App[None]):
@@ -515,7 +544,12 @@ class LoopForgeApp(App[None]):
             self._notice = "Select a run to archive."
             self._render_snapshot(self._snapshot)
             return
-        lines = (f"Archive run {run_id[:16]}?", "The run remains available in history and can be inspected later.")
+        project_name = self.shell.project_dir.name
+        lines = (
+            f"Archive run {run_id[:16]}?",
+            f"Project: {project_name}  ·  Revision: {self._snapshot.revision}",
+            "The run remains available in history and can be inspected later.",
+        )
         self.push_screen(ConfirmationScreen("Archive run", lines, approve_label="Archive"), lambda approved: self._archive_confirmed(approved, run_id))
 
     def _archive_confirmed(self, approved: bool, run_id: str) -> None:
@@ -856,7 +890,13 @@ class LoopForgeApp(App[None]):
             stages = "\n".join(f"{stage.marker} {stage.title} — {stage.label} ({stage.actor})" for stage in shell.stages)
             blockers = "\n".join(f"× {item}" for item in shell.blockers)
             action = shell.run.next_action.label if shell.run.next_action is not None else "No action available"
-            before = f"{shell.run.task}\n{marker} {label} · {shell.run.short_id} · {shell.run.actor}\n\nPipeline\n{stages or 'No workflow stages.'}\n\nNext action\n{action}"
+            adapter = getattr(self.shell, "selected_adapter", "default")
+            project_name = snapshot.project.project.name if snapshot.project.project else self.shell.project_dir.name
+            before = (
+                f"{shell.run.task}\n{marker} {label} · {shell.run.short_id} · {shell.run.actor}\n"
+                f"{project_name} · adapter: {adapter} · revision {snapshot.revision}\n\n"
+                f"Pipeline\n{stages or 'No workflow stages.'}\n\nNext action\n{action}"
+            )
             if blockers:
                 before += "\n\nBlockers\n" + blockers
             return shell.run.task or "Run", before, (), None, "", "Enter action · e evidence · Ctrl+K actions · Esc runs"
@@ -893,6 +933,8 @@ class LoopForgeApp(App[None]):
 
     def _state_label(self, snapshot: UiSnapshot) -> str:
         state = getattr(snapshot, self._screen).state
+        if self._screen == "run" and snapshot.project.project is not None:
+            return f"{snapshot.project.project.name} · {state} · revision {snapshot.revision}"
         return f"{state} · revision {snapshot.revision}"
 
     def _set_width_class(self, width: int) -> None:

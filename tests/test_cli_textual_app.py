@@ -724,6 +724,35 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn("Pipeline", body)
                     self.assertIn("Next action", body)
 
+    async def test_run_screen_shows_project_adapter_and_revision_identity(self) -> None:
+        """S1.4: the run screen displays project name, adapter, and revision."""
+        from loopforge.cli.interactive import InteractiveShell
+        from loopforge.cli.textual_app import LoopForgeApp
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            project = Path(temp_dir) / "project"
+            project.mkdir()
+            subprocess.run(["git", "init"], cwd=project, check=True, capture_output=True, text=True)
+            (project / "README.md").write_text("# Project\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=project, check=True, capture_output=True, text=True)
+            subprocess.run(
+                ["git", "-c", "user.name=T", "-c", "user.email=t@t", "commit", "-m", "init"],
+                cwd=project, check=True, capture_output=True, text=True,
+            )
+            loopforge_home = Path(temp_dir) / "home"
+            with mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}):
+                self._seed_project_with_run(project, loopforge_home, "Identity task")
+                shell = InteractiveShell(project, output=io.StringIO(), error=io.StringIO())
+                app = LoopForgeApp(shell)
+                async with app.run_test(size=(80, 24)) as pilot:
+                    await self.open_current_run_with_pilot(app, pilot)
+                    body = self._body_text(app)
+                    self.assertIn("adapter:", body)
+                    self.assertIn("revision", body)
+                    state = str(app.query_one("#screen-state").render())
+                    self.assertIn("project", state.lower())
+                    self.assertIn("revision", state.lower())
+
     async def test_evidence_screen_body_renders_empty_state(self) -> None:
         from loopforge.cli.interactive import InteractiveShell
         from loopforge.cli.textual_app import LoopForgeApp
