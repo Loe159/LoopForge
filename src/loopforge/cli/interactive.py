@@ -1020,6 +1020,9 @@ class InteractiveShell:
                 self.write("usage: /adapter <name> [-- <default adapter args...>]", error=True)
                 return DispatchResult(2)
             adapter_args = tokens[2:]
+        elif adapter != self.selected_adapter:
+            # S2.6(d): switching adapter without --args resets to empty (not inherited).
+            adapter_args = []
         result = set_default_adapter(self.project_dir, adapter, adapter_args)
         self.write("Adapter set" if result.ok else result.message, error=not result.ok)
         if result.blockers:
@@ -1717,9 +1720,25 @@ class InteractiveShell:
             return DispatchResult(2)
         self.editing_mode = value
         self.persist_user_preference("keymap", value)
+        self._apply_live_keymap()
         self.write("Keymap set")
         self.write(f"keymap  {self.editing_mode}")
         return DispatchResult(0)
+
+    def _apply_live_keymap(self) -> None:
+        """Apply the current editing_mode to the active prompt session (S2.6e)."""
+
+        session = getattr(self, "_prompt_session", None)
+        if session is None or session.app is None:
+            return
+        try:
+            from prompt_toolkit.enums import EditingMode
+
+            session.app.editing_mode = (
+                EditingMode.VI if self.editing_mode == "vim" else EditingMode.EMACS
+            )
+        except Exception:
+            pass
 
     def cmd_vim(self, raw: str = "") -> DispatchResult:
         del raw
@@ -1933,18 +1952,23 @@ class InteractiveShell:
 
     def cmd_permissions(self, raw: str = "") -> DispatchResult:
         del raw
-        self.write_table(
-            "Permissions",
-            ["Area", "Status"],
-            [
-                ["filesystem", "allowed by loop contract"],
-                ["network", "adapter-owned"],
-                ["publication", "requires review"],
-                ["destructive actions", "blocked or confirm"],
-            ],
-        )
+        status = current_status(self.project_dir)
+        rows = []
+        if status.config is not None:
+            for line in profile_permission_lines(status.config.get("profile")):
+                rows.append(["profile", line])
+        if status.run is not None:
+            contract = status.run.get("pack_contract", {})
+            allowed = contract.get("allowed_tools", []) if isinstance(contract, dict) else []
+            if allowed:
+                rows.append(["allowed tools", ", ".join(str(t) for t in allowed)])
+            else:
+                rows.append(["allowed tools", "none declared"])
+        if not rows:
+            rows.append(["status", "no run or config to inspect"])
+        self.write_table("Permissions", ["Area", "Status"], rows)
         self.write("Next")
-        self.write("/plan")
+        self.write(self._next_command_from_guidance() or "/status")
         return DispatchResult(0)
 
     def cmd_sandbox(self, raw: str = "") -> DispatchResult:
@@ -2367,6 +2391,7 @@ class InteractiveShell:
             bottom_toolbar=lambda: self.toolbar(),
             editing_mode=editing_mode,
         )
+        self._prompt_session = session
         self.write_home()
         exit_code = 0
         while self.running:
