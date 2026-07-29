@@ -321,13 +321,18 @@ class InteractiveShell:
         command, args, implicit_run = self.parse_line(line)
         command, args = self.canonical_command(command, args)
         if implicit_run:
-            return self.cmd_run(args)
+            result = self.cmd_run(args)
+            self._status_dirty = True
+            return result
         handler = getattr(self, f"cmd_{command.replace('-', '_')}", None)
         if handler is None:
             self.write(f"Unknown command: /{command}", error=True)
             self.write("Run /commands to see available commands.", error=True)
             return DispatchResult(2)
-        return handler(args)
+        result = handler(args)
+        # S5.3: invalidate the cached status so the toolbar reflects the new state.
+        self._status_dirty = True
+        return result
 
     def parse_line(self, line: str) -> tuple[str, str, bool]:
         if line.startswith("/"):
@@ -2336,10 +2341,18 @@ class InteractiveShell:
     def cmd_quit(self, raw: str = "") -> DispatchResult:
         return self.cmd_exit(raw)
 
+    def _cached_toolbar_status(self):
+        """Return a cached status snapshot, reloading only when dirty (S5.3)."""
+
+        if self._status_dirty or self._cached_status is None:
+            self._cached_status = current_status(self.project_dir)
+            self._status_dirty = False
+        return self._cached_status
+
     def toolbar(self) -> str:
         if self.statusline == "off":
             return ""
-        status = current_status(self.project_dir)
+        status = self._cached_toolbar_status()
         parts = [status.project_dir.name]
         if status.config is not None:
             parts.append(str(status.config.get("profile")))
