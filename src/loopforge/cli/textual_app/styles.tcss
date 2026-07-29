@@ -62,6 +62,23 @@ Header, Footer {
     margin-top: 1;
 }
 
+/* ScreenList: visible cursor highlight even without focus (can_focus=False). */
+#screen-list {
+    margin-top: 1;
+    height: 1fr;
+    overflow-y: auto;
+}
+
+#screen-list .option-list--option-highlighted {
+    background: $boost;
+    text-style: bold;
+    color: $text;
+}
+
+#screen-list .option-list--option {
+    padding: 0 1;
+}
+
 .error-title {
     color: $error;
     text-style: bold;
