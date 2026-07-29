@@ -231,6 +231,9 @@ class LoopForgeApp(App[None]):
 
         project = project.resolve()
         self.shell.project_dir = project
+        # S3.4: reload config + adapter + args atomically (like /cd does).
+        if hasattr(self.shell, "refresh_session_config"):
+            self.shell.refresh_session_config()
         self.store.select_project(project)
         self._screen = "project"
         self._reset_list_cursor()
@@ -241,16 +244,19 @@ class LoopForgeApp(App[None]):
         try:
             from loopforge.commands import CommandContext, ResumeRun
 
+            # S3.1: capture identity BEFORE any side effect.
             identity = self.store.begin_load()
-            ctx = CommandContext(project_dir=self.shell.project_dir)
+            project_dir = self.shell.project_dir
+            ctx = CommandContext(project_dir=project_dir)
             result = ResumeRun(ctx, run_id=run_id)
+            # Check freshness AFTER the effect but BEFORE publishing.
             if _identity_stale(self.store, identity):
                 return
             if not result.ok:
                 message = result.errors[0].message if result.errors else "LoopForge resume failed."
                 raise RuntimeError(message)
             self.store.select_run(run_id)
-            load_project_snapshot(self.store, self.shell.project_dir)
+            load_project_snapshot(self.store, project_dir)
         except Exception as error:
             self.post_message(LoadFailed(str(error)))
 
@@ -736,16 +742,20 @@ class LoopForgeApp(App[None]):
         try:
             import shutil
 
+            # S3.1: capture identity and target run_dir BEFORE the side effect.
             identity = self.store.begin_load()
             status = self.store.status
             if status is None or status.run_dir is None:
                 raise RuntimeError("No run is selected.")
-            destination = status.run_dir / "artifacts" / "exports" / item.path.name
+            run_dir = status.run_dir
+            source_path = item.path
+            destination = run_dir / "artifacts" / "exports" / item.path.name
             destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(item.path, destination)
+            shutil.copyfile(source_path, destination)
+            # Check freshness AFTER the effect but BEFORE publishing.
             if _identity_stale(self.store, identity):
                 return
-            self.call_from_thread(self._set_notice, f"Exported {destination.relative_to(status.run_dir)}")
+            self.call_from_thread(self._set_notice, f"Exported {destination.relative_to(run_dir)}")
         except Exception as error:
             self.post_message(LoadFailed(str(error)))
 

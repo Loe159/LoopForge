@@ -617,6 +617,25 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(result.ok)
             self.assertEqual(result.message, "Committed successfully.")
 
+    async def test_structured_error_includes_code_and_remediation(self) -> None:
+        """S3.2: a failed operation surfaces structured error info, not just str(error)."""
+        from loopforge.cli.operations import OperationController
+        from loopforge.cli.state_store import _operation_snapshot
+
+        operation = OperationController("Test op")
+
+        def runner(emit, cancelled):
+            raise FileNotFoundError("run.json not found")
+
+        operation.start(runner)
+        operation._thread.join(timeout=5)
+        snapshot = _operation_snapshot(operation, operation.history)
+        self.assertEqual(snapshot.state, "failed")
+        self.assertEqual(snapshot.error_code, "FileNotFoundError")
+        self.assertIsNotNone(snapshot.error_remediation)
+        self.assertIn("missing", snapshot.error_remediation.lower())
+        self.assertTrue(snapshot.error_recoverable)
+
     # ── S0.1 characterization net: lock screen-body content before S1.1 widgets ──
 
     @staticmethod

@@ -44,6 +44,9 @@ class OperationController:
     started_at: float = field(default_factory=monotonic)
     result: Any = None
     error: BaseException | None = None
+    error_code: str | None = None
+    error_remediation: str | None = None
+    error_recoverable: bool = False
     finished: bool = False
     cancelled: bool = False
     commit_started: bool = False
@@ -79,7 +82,20 @@ class OperationController:
                 )
             except BaseException as error:  # surfaced in the UI, never swallowed
                 self.error = error
-                self.emit({"kind": "failed", "message": str(error), "status": "failed"})
+                code, remediation, recoverable = _structured_error(error)
+                self.error_code = code
+                self.error_remediation = remediation
+                self.error_recoverable = recoverable
+                self.emit(
+                    {
+                        "kind": "failed",
+                        "message": str(error),
+                        "status": "failed",
+                        "error_code": code,
+                        "error_remediation": remediation,
+                        "error_recoverable": recoverable,
+                    }
+                )
             finally:
                 self.finished = True
 
@@ -153,3 +169,23 @@ def _integer_or_none(value: object) -> int | None:
 
 def _text_or_none(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
+
+
+def _structured_error(error: BaseException) -> tuple[str, str, bool]:
+    """Extract (code, remediation, recoverable) from an operation exception (S3.2)."""
+
+    code = type(error).__name__
+    message = str(error)
+    recoverable = True
+    if isinstance(error, FileNotFoundError):
+        remediation = "The expected file is missing. Check that the run artifacts are intact."
+    elif isinstance(error, PermissionError):
+        remediation = "LoopForge lacks permission to access this path. Verify file ownership."
+        recoverable = False
+    elif isinstance(error, (TimeoutError, TimeoutError)):
+        remediation = "The operation timed out. Retry or increase the adapter timeout."
+    elif isinstance(error, (ValueError, KeyError)):
+        remediation = "The run data is inconsistent. Re-validate the loop contract with /continue."
+    else:
+        remediation = message or "An unexpected error occurred during this operation."
+    return code, remediation, recoverable

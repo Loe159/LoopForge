@@ -66,6 +66,9 @@ class OperationSnapshot:
     cancelled: bool = False
     message: str = ""
     elapsed_seconds: int = 0
+    error_code: str | None = None
+    error_remediation: str | None = None
+    error_recoverable: bool = False
 
 
 @dataclass(frozen=True)

@@ -344,4 +344,7 @@ def _operation_snapshot(
         operation.cancelled and operation.is_cancellable,
         message,
         int(operation.elapsed_seconds()),
+        error_code=getattr(operation, "error_code", None),
+        error_remediation=getattr(operation, "error_remediation", None),
+        error_recoverable=getattr(operation, "error_recoverable", False),
     )
