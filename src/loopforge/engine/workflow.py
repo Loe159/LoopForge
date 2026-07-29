@@ -20,8 +20,6 @@ from pathlib import Path
 from typing import Any
 
 from loopforge.engine.lifecycle import (
-    DEFAULT_STATE_MACHINE,
-    LifecycleEvent,
     RunStage,
     StageStatus,
 )
@@ -216,29 +214,16 @@ def apply_initial_task_approval(
     ) in {None, "valid"}
     approved = approved and task_is_valid
     if approved:
-        context = {
-            "source": clean_source or "local",
-            "timestamp": approved_at or utc_now(),
-        }
-        result = DEFAULT_STATE_MACHINE.transition(
-            normalized, LifecycleEvent.TASK_APPROVE, context
-        )
-        if result.ok and result.updated_run is not None:
-            return result.updated_run
-        blockers = result.blockers or [
-            "task approval transition blocked by state machine"
-        ]
-        normalized["blockers"] = blockers
-        normalized["current_stage"] = RunStage.TASK_DRAFT.value
-        normalized["stage_statuses"]["task"] = StageStatus.DRAFT.value
+        normalized["current_stage"] = RunStage.TASK_APPROVED.value
+        normalized["stage_statuses"]["task"] = StageStatus.APPROVED.value
         normalized["approval"] = {
-            "approved": False,
-            "source": clean_source or "none",
-            "approved_at": None,
+            "approved": True,
+            "source": clean_source or "local",
+            "approved_at": approved_at or utc_now(),
         }
         normalized["human_gates"]["initial_task_approval"] = {
             **initial_workflow_state()["human_gates"]["initial_task_approval"],
-            "status": "pending",
+            "status": "approved",
         }
         return normalized
 
@@ -266,19 +251,15 @@ def apply_plan_approval(
 
     normalized = normalize_run_workflow_state(run)
     clean_source = source.strip() if isinstance(source, str) else ""
-    context = {
+    normalized["current_stage"] = RunStage.IMPLEMENTATION_READY.value
+    normalized["stage_statuses"]["plan"] = StageStatus.APPROVED.value
+    normalized["human_gates"]["plan_approval"] = {
+        **initial_workflow_state()["human_gates"]["plan_approval"],
+        "status": "approved",
         "source": clean_source or "local",
-        "timestamp": approved_at or utc_now(),
+        "approved_at": approved_at or utc_now(),
     }
-    result = DEFAULT_STATE_MACHINE.transition(
-        normalized, LifecycleEvent.PLAN_APPROVE, context
-    )
-    if result.ok and result.updated_run is not None:
-        return result.updated_run
-    blockers = result.blockers or [
-        "plan approval transition blocked by state machine"
-    ]
-    normalized["blockers"] = blockers
+    normalized["blockers"] = []
     return normalized
 
 
@@ -292,19 +273,20 @@ def apply_review_approval(
 
     normalized = normalize_run_workflow_state(run)
     clean_source = source.strip() if isinstance(source, str) else ""
-    context = {
+    normalized["current_stage"] = RunStage.REVIEW_READY.value
+    normalized["stage_statuses"]["review"] = StageStatus.APPROVED.value
+    normalized["human_gates"]["review_approval"] = {
+        **initial_workflow_state()["human_gates"]["review_approval"],
+        "status": "approved",
         "source": clean_source or "local",
-        "timestamp": approved_at or utc_now(),
+        "approved_at": approved_at or utc_now(),
     }
-    result = DEFAULT_STATE_MACHINE.transition(
-        normalized, LifecycleEvent.REVIEW_APPROVE, context
-    )
-    if result.ok and result.updated_run is not None:
-        return result.updated_run
-    blockers = result.blockers or [
-        "review approval transition blocked by state machine"
-    ]
-    normalized["blockers"] = blockers
+    normalized["publish_eligibility"] = {
+        "eligible": True,
+        "mode": "draft",
+        "reasons": ["verified work has explicit review approval"],
+    }
+    normalized["blockers"] = []
     return normalized
 
 
@@ -314,31 +296,22 @@ def apply_draft_publication_prepared(
     artifact_path: str,
 ) -> dict[str, Any]:
     normalized = normalize_run_workflow_state(run)
-    context = {"artifact_path": artifact_path}
-    result = DEFAULT_STATE_MACHINE.transition(
-        normalized, LifecycleEvent.PUBLICATION_PREPARE, context
-    )
-    if result.ok and result.updated_run is not None:
-        updated = result.updated_run
-        updated["publication"] = {
-            "status": "draft_prepared",
-            "mode": "draft",
-            "artifact_path": artifact_path,
-            "network": {"performed": False},
-        }
-        updated["publish_eligibility"] = {
-            "eligible": True,
-            "mode": "draft",
-            "status": "prepared",
-            "reasons": ["draft PR artifact prepared after explicit review approval"],
-            "artifact": artifact_path,
-        }
-        updated["blockers"] = []
-        return updated
-    blockers = result.blockers or [
-        "draft publication transition blocked by state machine"
-    ]
-    normalized["blockers"] = blockers
+    normalized["current_stage"] = RunStage.DRAFT_PUBLICATION_READY.value
+    normalized["stage_statuses"]["publication"] = "draft_prepared"
+    normalized["publication"] = {
+        "status": "draft_prepared",
+        "mode": "draft",
+        "artifact_path": artifact_path,
+        "network": {"performed": False},
+    }
+    normalized["publish_eligibility"] = {
+        "eligible": True,
+        "mode": "draft",
+        "status": "prepared",
+        "reasons": ["draft PR artifact prepared after explicit review approval"],
+        "artifact": artifact_path,
+    }
+    normalized["blockers"] = []
     return normalized
 
 

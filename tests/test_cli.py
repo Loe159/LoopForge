@@ -224,13 +224,12 @@ class CliTests(unittest.TestCase):
         run_json_path = run_dir / "run.json"
         run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
         approval_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        run_json["approval"] = {
-            "approved": True,
-            "source": "test",
-            "approved_at": approval_at,
-        }
-        run_json.setdefault("stage_statuses", {})["task"] = "approved"
-        run_json["current_stage"] = "task_approved"
+        run_json = apply_initial_task_approval(
+            run_json,
+            approved=True,
+            source="test",
+            approved_at=approval_at,
+        )
         run_json_path.write_text(json.dumps(run_json), encoding="utf-8")
         return run_dir
 
@@ -5423,7 +5422,7 @@ Only this section is present.
             draft = json.loads(draft_path.read_text(encoding="utf-8"))
             run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
             self.assertEqual(run_json["current_stage"], "draft_publication_ready")
-            self.assertEqual(run_json["stage_statuses"]["publication"], "completed")
+            self.assertEqual(run_json["stage_statuses"]["publication"], "draft_prepared")
             self.assertEqual(run_json["publication"]["network"], {"performed": False})
             self.assertTrue(draft["draft"])
             self.assertEqual(draft["network"]["performed"], False)

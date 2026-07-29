@@ -434,7 +434,7 @@ def workflow_stage_guidance(
 def current_guidance(project_dir: Path) -> GuidanceResult:
     """Compatibility wrapper for callers that only have a project path."""
 
-    from loopforge.engine import guidance_from_status
+    from loopforge.engine import current_status, guidance_from_status
 
     return guidance_from_status(current_status(project_dir))
 

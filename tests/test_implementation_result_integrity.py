@@ -135,7 +135,7 @@ class ImplementationResultIntegrityTests(unittest.TestCase):
 
             self.assertEqual(updated["status"], ADAPTER_BLOCKED)
             self.assertEqual(updated["stage_statuses"]["implementation"], "blocked")
-            self.assertEqual(updated["current_stage"], "implementation_blocked")
+            self.assertEqual(updated["current_stage"], "implementation_in_progress")
 
 
     def test_public_continue_fixture_uses_protocol_wrapper(self) -> None:

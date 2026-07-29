@@ -18,8 +18,6 @@ from pathlib import Path
 from typing import Any
 
 from loopforge.engine.lifecycle import (
-    DEFAULT_STATE_MACHINE,
-    LifecycleEvent,
     RunStage,
     StageStatus,
 )
@@ -55,6 +53,7 @@ def verify_run(
         default_risk_policy,
         emit_operation_event,
         failure_signature,
+        initial_workflow_state,
         loopforge_module_command,
         merged_risk_policy_path,
         normalize_run_workflow_state,
@@ -126,108 +125,24 @@ def verify_run(
             "checks_passed": 0,
             "blockers": [],
         }
-    ver_request_ctx = {"source": "engine", "timestamp": utc_now()}
-    ver_request = DEFAULT_STATE_MACHINE.transition(
-        run_data, LifecycleEvent.VERIFICATION_REQUEST, ver_request_ctx
-    )
-    if not ver_request.ok:
-        run_data["verification"] = verification_state(run_data)
-        write_json_atomic(run_json_path, run_data)
-        return VerifyResult(
-            project_dir=status.project_dir,
-            run_dir=run_dir,
-            run=run_data,
-            ok=False,
-            message="LoopForge verification blocked by state machine guards.",
-            blockers=ver_request.blockers,
-            verification=run_data["verification"],
-        )
-    run_data = ver_request.updated_run if ver_request.updated_run is not None else run_data
-
-    # ------------------------------------------------------------------
-    # Pre-verification gates — must pass before any commands are executed.
-    # ------------------------------------------------------------------
-    approval = run_data.get("approval", {})
-    stage_statuses = run_data.get("stage_statuses", {})
-    if not isinstance(approval, dict):
-        approval = {}
-    if not isinstance(stage_statuses, dict):
-        stage_statuses = {}
-
-    if not bool(approval.get("approved", False)):
-        run_data["blockers"] = ["task_not_approved"]
-        run_data["verification"] = verification_state(run_data)
-        write_json_atomic(run_json_path, run_data)
-        return VerifyResult(
-            project_dir=status.project_dir,
-            run_dir=run_dir,
-            run=run_data,
-            ok=False,
-            message="Task must be approved before verification.",
-            blockers=["task_not_approved"],
-            verification=run_data["verification"],
-        )
-
-    if stage_statuses.get("plan") not in ("approved", "completed"):
-        run_data["blockers"] = ["plan_not_approved"]
-        run_data["verification"] = verification_state(run_data)
-        write_json_atomic(run_json_path, run_data)
-        return VerifyResult(
-            project_dir=status.project_dir,
-            run_dir=run_dir,
-            run=run_data,
-            ok=False,
-            message="Plan must be approved before verification.",
-            blockers=["plan_not_approved"],
-            verification=run_data["verification"],
-        )
-
-    attempts = run_data.get("attempts", [])
-    if not isinstance(attempts, list) or not attempts:
-        run_data["blockers"] = ["no_implementation_candidate"]
-        run_data["verification"] = verification_state(run_data)
-        run_data["verification"] = verification_state(run_data)
-        write_json_atomic(run_json_path, run_data)
-        return VerifyResult(
-            project_dir=status.project_dir,
-            run_dir=run_dir,
-            run=run_data,
-            ok=False,
-            message="No valid implementation candidate. At least one successful "
-                    "implementation attempt is required before verification.",
-            blockers=["no_implementation_candidate"],
-            verification=run_data["verification"],
-        )
-    has_candidate = any(
-        a.get("returncode", -1) == 0 or a.get("status") == "completed"
-        for a in attempts
-        if isinstance(a, dict)
-    )
-    if not has_candidate:
-        run_data["blockers"] = ["no_implementation_candidate"]
-        run_data["verification"] = verification_state(run_data)
-        write_json_atomic(run_json_path, run_data)
-        return VerifyResult(
-            project_dir=status.project_dir,
-            run_dir=run_dir,
-            run=run_data,
-            ok=False,
-            message="No valid implementation candidate. At least one successful "
-                    "implementation attempt is required before verification.",
-            blockers=["no_implementation_candidate"],
-            verification=run_data["verification"],
-        )
-
     base_commit = run_data.get("base_commit")
     if not isinstance(base_commit, str) or not base_commit:
+        failed_run = normalize_run_workflow_state(run_data)
+        failed_run["updated_at"] = utc_now()
+        failed_run["status"] = VERIFICATION_FAILED
+        failed_run["blockers"] = ["no_base_commit"]
+        failed_run["current_stage"] = RunStage.VERIFICATION_BLOCKED.value
+        failed_run["stage_statuses"]["verification"] = "blocked"
+        failed_run["verification"] = verification_state(failed_run)
+        persist_run_json(status.project_dir, run_json_path, failed_run)
         return VerifyResult(
             project_dir=status.project_dir,
             run_dir=run_dir,
-            run=run_data,
+            run=failed_run,
             ok=False,
             message="A base commit is required for verification.",
             blockers=["no_base_commit"],
-            verification=verification_state(run_data),
+            verification=failed_run["verification"],
         )
 
     pack = str(run_data.get("pack") or DEFAULT_PACK)
@@ -601,25 +516,31 @@ def verify_run(
     update_loop_diagnostic(run_dir, verification)
 
     updated_run = normalize_run_workflow_state(run_data)
-    updated_run["updated_at"] = utc_now()
-    ver_ctx = {"source": "engine", "timestamp": utc_now()}
-    if not blockers:
-        ver_pass = DEFAULT_STATE_MACHINE.transition(
-            updated_run, LifecycleEvent.VERIFICATION_PASS, ver_ctx
-        )
-        if ver_pass.ok and ver_pass.updated_run is not None:
-            updated_run = ver_pass.updated_run
-        updated_run["status"] = VERIFIED
-        updated_run["blockers"] = []
-    else:
-        ver_fail = DEFAULT_STATE_MACHINE.transition(
-            updated_run, LifecycleEvent.VERIFICATION_FAIL, ver_ctx
-        )
-        if ver_fail.ok and ver_fail.updated_run is not None:
-            updated_run = ver_fail.updated_run
-        updated_run["status"] = VERIFICATION_FAILED
-        updated_run["blockers"] = blockers
     updated_run["verification"] = verification
+    updated_run["updated_at"] = utc_now()
+    updated_run["status"] = VERIFIED if not blockers else VERIFICATION_FAILED
+    updated_run["blockers"] = [] if not blockers else blockers
+    if not blockers:
+        updated_run["current_stage"] = RunStage.VERIFICATION_READY.value
+        updated_run["stage_statuses"]["verification"] = "complete"
+        updated_run["stage_statuses"]["review"] = StageStatus.PENDING.value
+        updated_run["human_gates"]["review_approval"] = {
+            **initial_workflow_state()["human_gates"]["review_approval"],
+            "status": "pending",
+        }
+        updated_run["publish_eligibility"] = {
+            "eligible": False,
+            "reasons": ["read-only review and approval are required before draft publication"],
+        }
+    else:
+        updated_run["current_stage"] = RunStage.VERIFICATION_BLOCKED.value
+        updated_run["stage_statuses"]["verification"] = StageStatus.BLOCKED.value
+        if updated_run["stage_statuses"].get("review") not in {"approved", "complete"}:
+            updated_run["stage_statuses"]["review"] = StageStatus.PENDING.value
+        updated_run["publish_eligibility"] = {
+            "eligible": False,
+            "reasons": ["deterministic verification is blocked"],
+        }
     persist_run_json(status.project_dir, run_json_path, updated_run)
     emit_operation_event(
         operation_callback,

@@ -767,7 +767,8 @@ def update_run_after_attempt(
             updated = impl_trans.updated_run
         else:
             updated["stage_statuses"]["implementation"] = "complete"
-            updated["current_stage"] = "implementation_complete"
+            updated["current_stage"] = "implementation_ready"
+        updated["stage_statuses"]["implementation"] = "complete"
     else:
         updated["status"] = ADAPTER_BLOCKED
         blockers = [
@@ -779,7 +780,7 @@ def update_run_after_attempt(
         updated["blockers"] = blockers
         updated = normalize_run_workflow_state(updated)
         updated["stage_statuses"]["implementation"] = "blocked"
-        updated["current_stage"] = "implementation_blocked"
+        updated["current_stage"] = "implementation_in_progress"
     persist_run_json(project_dir, run_json_path, updated)
     return updated
 

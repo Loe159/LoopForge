@@ -595,6 +595,7 @@ from loopforge.engine.workflow import (
 from loopforge.engine.run_service import (
     CompactContextResult,
     ResumeRunResult,
+    _rollback_run_creation,
     compact_current_context,
     create_run,
     directory_file_sizes,
