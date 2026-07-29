@@ -1099,6 +1099,42 @@ class CliTests(unittest.TestCase):
             self.assertIn("Verified", output.getvalue())
             self.assertIn("status  passed", output.getvalue())
 
+    def test_shell_plan_command_summarizes_loop_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            loopforge_home = workspace / "loopforge-home"
+
+            subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True, text=True)
+            (repo / ".gitignore").write_text(".loopforge/\n", encoding="utf-8")
+            (repo / "README.md").write_text("# Project\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "add", ".gitignore", "README.md"],
+                cwd=repo, check=True, capture_output=True, text=True,
+            )
+            subprocess.run(
+                ["git", "-c", "user.name=T", "-c", "user.email=t@t", "commit", "-m", "init"],
+                cwd=repo, check=True, capture_output=True, text=True,
+            )
+
+            output = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(
+                        ["shell", "--command", '/run --task "Plan a change" --success-check "check"']
+                    ),
+                    0,
+                )
+                self.assertEqual(main(["shell", "--command", "/plan"]), 0)
+
+            self.assertIn("Plan", output.getvalue())
+
     def test_shell_context_and_compact(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)

@@ -556,3 +556,187 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
             result = _operation_result(operation, SimpleNamespace(exit_code=0, message="Committed successfully."), operation.cancel_event.is_set())
             self.assertTrue(result.ok)
             self.assertEqual(result.message, "Committed successfully.")
+
+    # ── S0.1 characterization net: lock screen-body content before S1.1 widgets ──
+
+    @staticmethod
+    def _seed_project_with_run(project: Path, loopforge_home: Path, task: str = "Characterization task") -> None:
+        """Seed init + run so the TUI has a home/project/run snapshot to render."""
+        from loopforge.cli import main
+
+        previous_cwd = Path.cwd()
+        os.chdir(project)
+        try:
+            with redirect_stdout(io.StringIO()):
+                assert main(["init"]) == 0
+                assert main(["run", "--task", task, "--success-check", "Proof exists"]) == 0
+        finally:
+            os.chdir(previous_cwd)
+
+    @staticmethod
+    def _body_text(app) -> str:
+        return str(app.query_one("#screen-body").render())
+
+    @staticmethod
+    def _paint(app, screen: str) -> None:
+        """Force a render of *screen* without async navigation."""
+        app._screen = screen
+        app._render_snapshot(app.snapshot)
+
+    async def test_home_screen_body_renders_projects_and_recent_runs(self) -> None:
+        from loopforge.cli.interactive import InteractiveShell
+        from loopforge.cli.textual_app import LoopForgeApp
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project = Path(temp_dir) / "project"
+            project.mkdir()
+            subprocess.run(["git", "init"], cwd=project, check=True, capture_output=True, text=True)
+            (project / "README.md").write_text("# Project\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=project, check=True, capture_output=True, text=True)
+            subprocess.run(
+                ["git", "-c", "user.name=T", "-c", "user.email=t@t", "commit", "-m", "init"],
+                cwd=project, check=True, capture_output=True, text=True,
+            )
+            loopforge_home = Path(temp_dir) / "home"
+            with mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}):
+                self._seed_project_with_run(project, loopforge_home)
+                shell = InteractiveShell(project, output=io.StringIO(), error=io.StringIO())
+                app = LoopForgeApp(shell, load_on_mount=False)
+                async with app.run_test(size=(80, 24)) as pilot:
+                    app.select_project(project)
+                    await wait_for_condition(pilot, lambda: bool(app.snapshot.home.projects), "home projects")
+                    self._paint(app, "home")
+                    self.assertEqual(str(app.query_one("#screen-title").render()), "LoopForge")
+                    body = self._body_text(app)
+                    self.assertIn("Projects", body)
+                    self.assertIn("Recent runs", body)
+                    self.assertIn("› ", body)
+
+    async def test_project_screen_body_renders_runs_count(self) -> None:
+        from loopforge.cli.interactive import InteractiveShell
+        from loopforge.cli.textual_app import LoopForgeApp
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project = Path(temp_dir) / "project"
+            project.mkdir()
+            subprocess.run(["git", "init"], cwd=project, check=True, capture_output=True, text=True)
+            (project / "README.md").write_text("# Project\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=project, check=True, capture_output=True, text=True)
+            subprocess.run(
+                ["git", "-c", "user.name=T", "-c", "user.email=t@t", "commit", "-m", "init"],
+                cwd=project, check=True, capture_output=True, text=True,
+            )
+            loopforge_home = Path(temp_dir) / "home"
+            with mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}):
+                self._seed_project_with_run(project, loopforge_home)
+                shell = InteractiveShell(project, output=io.StringIO(), error=io.StringIO())
+                app = LoopForgeApp(shell, load_on_mount=False)
+                async with app.run_test(size=(80, 24)) as pilot:
+                    app.select_project(project)
+                    await wait_for_condition(pilot, lambda: bool(app.snapshot.project.runs), "project runs")
+                    self._paint(app, "project")
+                    body = self._body_text(app)
+                    self.assertIn("runs", body)
+                    self.assertIn("Runs", body)
+
+    async def test_run_screen_body_renders_pipeline_and_next_action(self) -> None:
+        from loopforge.cli.interactive import InteractiveShell
+        from loopforge.cli.textual_app import LoopForgeApp
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project = Path(temp_dir) / "project"
+            project.mkdir()
+            subprocess.run(["git", "init"], cwd=project, check=True, capture_output=True, text=True)
+            (project / "README.md").write_text("# Project\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=project, check=True, capture_output=True, text=True)
+            subprocess.run(
+                ["git", "-c", "user.name=T", "-c", "user.email=t@t", "commit", "-m", "init"],
+                cwd=project, check=True, capture_output=True, text=True,
+            )
+            loopforge_home = Path(temp_dir) / "home"
+            with mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}):
+                self._seed_project_with_run(project, loopforge_home, "Characterization pipeline task")
+                shell = InteractiveShell(project, output=io.StringIO(), error=io.StringIO())
+                app = LoopForgeApp(shell)
+                async with app.run_test(size=(80, 24)) as pilot:
+                    await self.open_current_run_with_pilot(app, pilot)
+                    body = self._body_text(app)
+                    self.assertIn("Pipeline", body)
+                    self.assertIn("Next action", body)
+
+    async def test_evidence_screen_body_renders_empty_state(self) -> None:
+        from loopforge.cli.interactive import InteractiveShell
+        from loopforge.cli.textual_app import LoopForgeApp
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project = Path(temp_dir) / "project"
+            project.mkdir()
+            subprocess.run(["git", "init"], cwd=project, check=True, capture_output=True, text=True)
+            (project / "README.md").write_text("# Project\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=project, check=True, capture_output=True, text=True)
+            subprocess.run(
+                ["git", "-c", "user.name=T", "-c", "user.email=t@t", "commit", "-m", "init"],
+                cwd=project, check=True, capture_output=True, text=True,
+            )
+            loopforge_home = Path(temp_dir) / "home"
+            with mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}):
+                self._seed_project_with_run(project, loopforge_home)
+                shell = InteractiveShell(project, output=io.StringIO(), error=io.StringIO())
+                app = LoopForgeApp(shell, load_on_mount=False)
+                async with app.run_test(size=(80, 24)) as pilot:
+                    app.select_project(project)
+                    await wait_for_condition(pilot, lambda: bool(app.snapshot.project.runs), "project runs")
+                    self._paint(app, "evidence")
+                    body = self._body_text(app)
+                    self.assertIn("No evidence available.", body)
+
+    async def test_settings_screen_body_renders_values_and_diagnostics(self) -> None:
+        from loopforge.cli.textual_app import LoopForgeApp
+
+        app = LoopForgeApp(SimpleNamespace(project_dir=Path.cwd()), load_on_mount=False)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            self._paint(app, "settings")
+            self.assertEqual(str(app.query_one("#screen-title").render()), "Settings and diagnostics")
+            body = self._body_text(app)
+            for label in ("Theme:", "Statusline:", "Keymap:", "Adapter:", "Git:", "Snapshot:", "Adapter diagnostics"):
+                self.assertIn(label, body)
+
+    async def test_open_selected_resets_selected_index_to_zero(self) -> None:
+        from loopforge.cli import main
+        from loopforge.cli.interactive import InteractiveShell
+        from loopforge.cli.textual_app import LoopForgeApp
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            project = Path(temp_dir) / "project"
+            project.mkdir()
+            subprocess.run(["git", "init"], cwd=project, check=True, capture_output=True, text=True)
+            (project / "README.md").write_text("# Project\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=project, check=True, capture_output=True, text=True)
+            subprocess.run(
+                ["git", "-c", "user.name=T", "-c", "user.email=t@t", "commit", "-m", "init"],
+                cwd=project, check=True, capture_output=True, text=True,
+            )
+            loopforge_home = Path(temp_dir) / "home"
+            with mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}):
+                # Seed two runs so action_move_down actually advances past index 0.
+                previous_cwd = Path.cwd()
+                os.chdir(project)
+                try:
+                    with redirect_stdout(io.StringIO()):
+                        self.assertEqual(main(["init"]), 0)
+                        self.assertEqual(main(["run", "--task", "First run"]), 0)
+                        self.assertEqual(main(["run", "--task", "Second run"]), 0)
+                finally:
+                    os.chdir(previous_cwd)
+
+                shell = InteractiveShell(project, output=io.StringIO(), error=io.StringIO())
+                app = LoopForgeApp(shell, load_on_mount=False)
+                async with app.run_test(size=(80, 24)) as pilot:
+                    app.select_project(project)
+                    await wait_for_condition(pilot, lambda: len(app.snapshot.project.runs) >= 2, "two project runs")
+                    app._screen = "project"
+                    app.action_move_down()
+                    self.assertGreater(app._selected_index, 0)
+                    app.action_open_selected()
+                    self.assertEqual(app._selected_index, 0)
