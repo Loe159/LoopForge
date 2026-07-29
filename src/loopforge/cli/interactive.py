@@ -75,7 +75,6 @@ from loopforge.cli.ui import (
 
 
 SUPPORTED_COMMANDS = {
-    "add-dir": "Add a session-only context directory.",
     "adapter": "Show or select the default adapter for this project.",
     "adapters": "List supported adapters and the selected default.",
     "actions": "List guided actions available for the current state.",
@@ -109,8 +108,6 @@ SUPPORTED_COMMANDS = {
     "keymap": "Show or change the session editing mode.",
     "learn": "Propose or approve durable memory updates.",
     "memories": "Show durable and proposed memory state.",
-    "memory": "Show durable and proposed memory state.",
-    "mention": "Add a session-only file mention to context.",
     "new": "Create a new run.",
     "next": "Show the single best next action.",
     "pack": "List or detect project packs.",
@@ -299,8 +296,6 @@ class InteractiveShell:
         self.theme = preferences["theme"]
         self.renderer_mode = renderer_mode
         self.renderer = TerminalRenderer(self.output, mode=self.renderer_mode, theme=self.theme)
-        self.extra_context_dirs: list[Path] = []
-        self.mentioned_paths: list[Path] = []
         self.editing_mode = preferences["keymap"]
         self.session_title = "LoopForge"
         status = current_status(self.project_dir)
@@ -798,12 +793,6 @@ class InteractiveShell:
                     f"run bytes: {sum(size for _, size in sizes)}",
                 ]
             )
-        if self.extra_context_dirs:
-            lines.append("session context dirs:")
-            lines.extend(f"- {path}" for path in self.extra_context_dirs)
-        if self.mentioned_paths:
-            lines.append("session mentions:")
-            lines.extend(f"- {path}" for path in self.mentioned_paths)
         if result.memory is not None:
             lines.append(f"durable memory items: {result.memory.get('durable_items', 0)}")
             lines.append(f"pending memory proposals: {result.memory.get('pending', 0)}")
@@ -1453,8 +1442,8 @@ class InteractiveShell:
             text=True,
         )
         if status.returncode != 0:
-            self.write("Git status is unavailable in this directory.")
-            return DispatchResult(0)
+            self.write("Git status is unavailable in this directory.", error=True)
+            return DispatchResult(1)
         self.write("git status:")
         self.write(status.stdout.strip() or "clean")
         diff = subprocess.run(
@@ -2088,32 +2077,6 @@ class InteractiveShell:
             ],
             next_command=action.command_fallback if action is not None else status.next_step,
         )
-        return DispatchResult(0)
-
-    def cmd_add_dir(self, raw: str) -> DispatchResult:
-        target = Path(raw.strip()).expanduser()
-        if not target.is_absolute():
-            target = self.project_dir / target
-        if not target.exists() or not target.is_dir():
-            self.write(f"context directory not found: {target}", error=True)
-            return DispatchResult(1)
-        resolved = target.resolve()
-        if resolved not in self.extra_context_dirs:
-            self.extra_context_dirs.append(resolved)
-        self.write(f"added context dir: {resolved}")
-        return DispatchResult(0)
-
-    def cmd_mention(self, raw: str) -> DispatchResult:
-        target = Path(raw.strip()).expanduser()
-        if not target.is_absolute():
-            target = self.project_dir / target
-        if not target.exists():
-            self.write(f"mention path not found: {target}", error=True)
-            return DispatchResult(1)
-        resolved = target.resolve()
-        if resolved not in self.mentioned_paths:
-            self.mentioned_paths.append(resolved)
-        self.write(f"mentioned: {resolved}")
         return DispatchResult(0)
 
     def cmd_branch(self, raw: str) -> DispatchResult:

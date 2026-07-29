@@ -3977,22 +3977,16 @@ Only this section is present.
             self.assertIn("LoopForge fork created", output.getvalue())
             self.assertIn("LoopForge archived run", output.getvalue())
 
-    def test_shell_cd_add_dir_mention_and_context(self) -> None:
+    def test_shell_cd_and_context(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)
             repo = workspace / "project"
             repo.mkdir()
-            extra = repo / "extra"
-            extra.mkdir()
-            mentioned = repo / "README.md"
-            mentioned.write_text("# Project\n", encoding="utf-8")
             script = workspace / "context.loopforge"
             script.write_text(
                 "\n".join(
                     [
                         "/cd project",
-                        "/add-dir extra",
-                        "/mention README.md",
                         "/context",
                     ]
                 ),
@@ -4005,10 +3999,6 @@ Only this section is present.
 
             text = output.getvalue()
             self.assertIn(f"project  {repo}", text)
-            self.assertIn(f"added context dir: {extra}", text)
-            self.assertIn(f"mentioned: {mentioned}", text)
-            self.assertIn("session context dirs:", text)
-            self.assertIn("session mentions:", text)
 
     def test_shell_doctor_reports_missing_tui_dependencies(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
