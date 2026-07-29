@@ -135,6 +135,8 @@ class LoopForgeApp(App[None]):
         Binding("x", "export_evidence", "Export", show=False),
         Binding("escape", "go_back", "Back", show=True),
         Binding("ctrl+c", "cancel_or_exit", "Cancel / exit", show=True),
+        Binding("pageup", "evidence_page_up", "Page up", show=False),
+        Binding("pagedown", "evidence_page_down", "Page down", show=False),
     ]
 
     def __init__(
@@ -159,6 +161,9 @@ class LoopForgeApp(App[None]):
         self._filter = ""
         self._evidence_index: EvidenceIndex | None = None
         self._evidence_preview = ""
+        self._evidence_lines: list[str] = []
+        self._evidence_page_offset = 0
+        self._evidence_page_size = 20
         self._notice = ""
         # Adapter diagnostics probe PATH via shutil.which.  Computing them once
         # and caching the result keeps the render path free of filesystem I/O.
@@ -295,7 +300,32 @@ class LoopForgeApp(App[None]):
 
     def _set_evidence_preview(self, preview: str) -> None:
         self._evidence_preview = preview
+        self._evidence_lines = preview.split("\n")
+        self._evidence_page_offset = 0
         self._render_snapshot(self._snapshot)
+
+    def _evidence_page_text(self) -> str:
+        """Return the current page of evidence preview with a status footer."""
+        if not self._evidence_lines:
+            return self._evidence_preview
+        total = len(self._evidence_lines)
+        page_size = self._evidence_page_size
+        start = self._evidence_page_offset
+        end = min(start + page_size, total)
+        page = self._evidence_lines[start:end]
+        footer = f"\n\n--- lines {start + 1}–{end} / {total} · PgUp/PgDn to navigate ---"
+        return "\n".join(page) + footer
+
+    def action_evidence_page_up(self) -> None:
+        if self._screen == "evidence" and self._evidence_lines:
+            self._evidence_page_offset = max(0, self._evidence_page_offset - self._evidence_page_size)
+            self._render_snapshot(self._snapshot)
+
+    def action_evidence_page_down(self) -> None:
+        if self._screen == "evidence" and self._evidence_lines:
+            max_offset = max(0, len(self._evidence_lines) - self._evidence_page_size)
+            self._evidence_page_offset = min(max_offset, self._evidence_page_offset + self._evidence_page_size)
+            self._render_snapshot(self._snapshot)
 
     def action_move_up(self) -> None:
         self._move(-1)
@@ -947,7 +977,7 @@ class LoopForgeApp(App[None]):
             return shell.run.task or "Run", before, (), None, "", "Enter action · e evidence · Ctrl+K actions · Esc runs"
         if self._screen == "evidence":
             if self._evidence_preview:
-                return "Evidence", self._evidence_preview, (), None, "", "Esc list · c copy · x export"
+                return "Evidence", self._evidence_page_text(), (), None, "", "Esc list · c copy · x export · PgUp/PgDn navigate"
             items = self._visible_evidence()
             before = "Evidence" if items else "Evidence\nNo evidence available."
             return "Evidence", before, items, _evidence_line, "", "Enter open · / search · c copy · x export · Esc run"
