@@ -49,15 +49,16 @@ def action_descriptors(guidance: GuidanceResult) -> tuple[ActionDescriptor, ...]
 
 
 def action_descriptor(action: GuidedAction) -> ActionDescriptor:
+    executor_key = ACTION_EXECUTORS.get(action.id, "command")
     return ActionDescriptor(
         id=action.id,
         label=action.label,
         description=action.why,
         risk=action.risk,
         requires_confirmation=action.requires_confirmation,
-        available=True,
+        available=executor_key != "command",
         command_fallback=action.command,
-        executor_key=ACTION_EXECUTORS.get(action.id, "command"),
+        executor_key=executor_key,
     )
 
 

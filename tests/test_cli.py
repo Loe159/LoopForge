@@ -6449,6 +6449,37 @@ Only this section is present.
             os.environ.pop("LOOPFORGE_HOME", None)
             os.environ.pop("LOOPFORGE_SNAPSHOT_BACKEND", None)
 
+    def test_action_without_executor_is_not_available(self) -> None:
+        """S2.1: an action whose id has no executor in ACTION_EXECUTORS has available=False."""
+        from loopforge.cli.actions import ACTION_EXECUTORS, action_descriptor
+        from loopforge.engine import GuidedAction
+
+        # "inspect-verification" has no executor — it falls back to "command".
+        fake = GuidedAction(
+            id="inspect-verification",
+            label="Inspect verification",
+            why="See what failed",
+            risk="low",
+            requires_confirmation=False,
+            command="/verify --details",
+        )
+        descriptor = action_descriptor(fake)
+        self.assertFalse(descriptor.available)
+        self.assertEqual(descriptor.executor_key, "command")
+
+        # "approve-task" HAS an executor — available must be True.
+        real = GuidedAction(
+            id="approve-task",
+            label="Approve task",
+            why="Unlock research",
+            risk="low",
+            requires_confirmation=True,
+            command="/approve --task",
+        )
+        descriptor = action_descriptor(real)
+        self.assertTrue(descriptor.available)
+        self.assertNotEqual(descriptor.executor_key, "command")
+
 
 if __name__ == "__main__":
     unittest.main()
