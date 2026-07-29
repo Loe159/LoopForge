@@ -514,7 +514,7 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIsNotNone(non_current_index, "Expected a non-current run in the list")
                     from loopforge.cli.textual_app.widgets import ScreenList
                     app.query_one("#screen-list", ScreenList).highlighted = non_current_index
-                    highlighted_id = app._highlighted_run_id()
+                    highlighted_id = app._target_run_id()
 
                     await pilot.press("a")
                     from loopforge.cli.textual_app.screens import ConfirmationScreen
@@ -526,6 +526,65 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
                     )
                     self.assertEqual(app.screen.title_text, "Archive run")
                     self.assertIn(highlighted_id[:16], app.screen.lines[0])
+
+    async def test_archive_on_run_screen_targets_opened_run_not_runs_zero(self) -> None:
+        """AE6: on the run screen, archive targets the opened run, not runs[0]."""
+        from loopforge.cli import main
+        from loopforge.cli.interactive import InteractiveShell
+        from loopforge.cli.textual_app import LoopForgeApp
+        from loopforge.cli.textual_app.screens import ConfirmationScreen
+        from loopforge.engine import current_status
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            project = Path(temp_dir) / "project"
+            project.mkdir()
+            subprocess.run(["git", "init"], cwd=project, check=True, capture_output=True, text=True)
+            (project / "README.md").write_text("# Project\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=project, check=True, capture_output=True, text=True)
+            subprocess.run(
+                ["git", "-c", "user.name=T", "-c", "user.email=t@t", "commit", "-m", "init"],
+                cwd=project, check=True, capture_output=True, text=True,
+            )
+            loopforge_home = Path(temp_dir) / "home"
+            with mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}):
+                previous_cwd = Path.cwd()
+                os.chdir(project)
+                try:
+                    with redirect_stdout(io.StringIO()):
+                        self.assertEqual(main(["init"]), 0)
+                        self.assertEqual(main(["run", "--task", "First run"]), 0)
+                        self.assertEqual(main(["run", "--task", "Second run"]), 0)
+                finally:
+                    os.chdir(previous_cwd)
+
+                status = current_status(project)
+                assert status.config is not None
+                current_id = str(status.config.get("current_run_id") or "")
+                self.assertTrue(current_id)
+
+                shell = InteractiveShell(project, output=io.StringIO(), error=io.StringIO())
+                app = LoopForgeApp(shell)
+                async with app.run_test(size=(80, 24)) as pilot:
+                    # Navigate to the run screen (opens the current/second run).
+                    await self.open_current_run_with_pilot(app, pilot)
+                    self.assertEqual(app._screen, "run")
+                    # Wait for the snapshot to bind the opened run's identity.
+                    await wait_for_condition(
+                        pilot,
+                        lambda: app._snapshot.selected_run_id is not None,
+                        "selected_run_id in the run snapshot",
+                    )
+                    opened_id = app._target_run_id()
+                    self.assertEqual(opened_id, current_id)
+
+                    await pilot.press("a")
+                    await wait_for_condition(
+                        pilot,
+                        lambda: isinstance(app.screen, ConfirmationScreen),
+                        "archive confirmation on run screen",
+                    )
+                    self.assertEqual(app.screen.title_text, "Archive run")
+                    self.assertIn(current_id[:16], app.screen.lines[0])
 
     async def test_cancellation_before_commit_no_effect(self) -> None:
         from loopforge.cli.operations import OperationController

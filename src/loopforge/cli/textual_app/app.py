@@ -509,7 +509,7 @@ class LoopForgeApp(App[None]):
     def action_archive(self) -> None:
         if self._screen != "project" and self._screen != "run":
             return
-        run_id = self._highlighted_run_id()
+        run_id = self._target_run_id()
         if not run_id:
             self._notice = "Select a run to archive."
             self._render_snapshot(self._snapshot)
@@ -526,12 +526,24 @@ class LoopForgeApp(App[None]):
                 ),
             )
 
-    def _highlighted_run_id(self) -> str | None:
-        item = self._screen_list().selected_item
-        if item is None:
-            return None
-        value = dict(item) if hasattr(item, "items") else {}
-        return str(value.get("run_id") or "") or None
+    def _target_run_id(self) -> str | None:
+        """Return the run_id that actions should target based on screen context.
+
+        On the 'run' screen this is the opened run from the immutable snapshot;
+        on the 'project' screen this is the ScreenList cursor's selected item.
+        This replaces the old screen-agnostic ``_highlighted_run_id`` that could
+        target ``runs[0]`` when a run was already open.
+        """
+
+        if self._screen == "run":
+            return self._snapshot.selected_run_id
+        if self._screen == "project":
+            item = self._screen_list().selected_item
+            if item is None:
+                return None
+            value = dict(item) if hasattr(item, "items") else {}
+            return str(value.get("run_id") or "") or None
+        return None
 
     def request_action(self, action: ActionDescriptor) -> None:
         if action.executor_key == "adapter":
