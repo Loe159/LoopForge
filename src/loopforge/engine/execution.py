@@ -19,9 +19,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from loopforge.engine.lifecycle import DEFAULT_STATE_MACHINE, LifecycleEvent
-
-
 @dataclass(frozen=True)
 class ContinueResult:
     project_dir: Path
@@ -759,16 +756,8 @@ def update_run_after_attempt(
         updated["status"] = READY_FOR_VERIFICATION
         updated["blockers"] = []
         updated = normalize_run_workflow_state(updated)
-        impl_ctx = {"source": "engine", "timestamp": utc_now()}
-        impl_trans = DEFAULT_STATE_MACHINE.transition(
-            updated, LifecycleEvent.IMPLEMENTATION_COMPLETE, impl_ctx
-        )
-        if impl_trans.ok and impl_trans.updated_run is not None:
-            updated = impl_trans.updated_run
-        else:
-            updated["stage_statuses"]["implementation"] = "complete"
-            updated["current_stage"] = "implementation_ready"
         updated["stage_statuses"]["implementation"] = "complete"
+        updated["current_stage"] = "implementation_ready"
     else:
         updated["status"] = ADAPTER_BLOCKED
         blockers = [
@@ -927,12 +916,13 @@ def continue_run(
         )
 
     run = normalize_run_workflow_state(status.run)
-    impl_start_ctx = {"source": "engine", "timestamp": utc_now()}
-    impl_start = DEFAULT_STATE_MACHINE.transition(
-        run, LifecycleEvent.IMPLEMENTATION_START, impl_start_ctx
-    )
-    if impl_start.ok and impl_start.updated_run is not None:
-        run = impl_start.updated_run
+    current_stage = run.get("current_stage", "")
+    if current_stage == "plan_approved":
+        run["current_stage"] = "implementation_ready"
+        run["stage_statuses"]["implementation"] = "in_progress"
+    elif current_stage == "implementation_ready":
+        run["current_stage"] = "implementation_in_progress"
+        run["stage_statuses"]["implementation"] = "in_progress"
 
     try:
         attempt = execute_attempt(

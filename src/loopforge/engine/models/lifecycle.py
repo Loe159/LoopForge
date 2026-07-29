@@ -58,16 +58,12 @@ class LifecycleTransition:
 
 
 from loopforge.engine.lifecycle import (  # noqa: E402  (re-export at module bottom)
-    LifecycleEvent,
     RunStage,
     StageStatus,
-    TransitionResult,
 )
 
 __all__ = [
     "LifecycleTransition",
     "RunStage",
     "StageStatus",
-    "LifecycleEvent",
-    "TransitionResult",
 ]

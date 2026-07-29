@@ -19,6 +19,25 @@ This record supersedes the deferred fix noted in `003-epic3-baseline.md`
 
 ---
 
+## 0. Update (2026-07-29): LifecycleStateMachine removed as dead code
+
+> **DECISION:** The `LifecycleStateMachine` has been removed as dead code
+> (never used in the business path). Model A (direct stage logic) is now the
+> definitive implementation. P0 (verify gates) and P1 (protected-paths) are
+> CLOSED. See `workflow_transitions.py` for the reference transition table.
+
+`engine/lifecycle.py` now contains only the shared `RunStage` / `StageStatus`
+enums. The state machine, its transition table, guards, effects, and
+`TransitionResult` have been deleted. The two former call sites in
+`engine/execution.py` (`update_run_after_attempt` and `continue_run`) now
+assign workflow state directly, matching the behavior the product actually
+exhibited. The authoritative transition contract is preserved as a readable,
+non-executable reference in `src/loopforge/engine/workflow_transitions.py`,
+and `tests/test_lifecycle.py` was slimmed to the two
+`normalize_run_workflow_state` tests.
+
+---
+
 ## 1. Stop-the-line outcome (committed)
 
 `master` at `ede3932` ("Epic 3: Architectural extraction") was **RED**: 19

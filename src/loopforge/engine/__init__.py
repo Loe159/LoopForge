@@ -29,11 +29,8 @@ from loopforge.adapters.kilo_code import (
 )
 from loopforge.checks import validate_implementation_result
 from loopforge.engine.lifecycle import (
-    DEFAULT_STATE_MACHINE,
-    LifecycleEvent,
     RunStage,
     StageStatus,
-    TransitionResult,
 )
 from loopforge.engine.packs import (
     EffectivePackContract,
