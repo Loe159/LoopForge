@@ -551,8 +551,77 @@ class InteractiveShell:
             return DispatchResult(2)
         if key == "status":
             return self.cmd_status("")
+        if key == "inspect-verification":
+            return self._inspect_verification()
+        if key == "inspect-attempt":
+            return self._inspect_attempt()
+        if key == "approve-memory":
+            return self.cmd_learn("--approve")
+        if key == "show-plan":
+            return self.cmd_plan("")
+        if key == "check-contract":
+            return self.cmd_continue("")
+        if key == "review-contract":
+            return self.cmd_plan("")
+        if key == "review-autonomy-stop":
+            return self.cmd_status("")
         self.write(f"Cannot execute guided action yet: {action.command_fallback}", error=True)
         return DispatchResult(2)
+
+    def _inspect_verification(self) -> DispatchResult:
+        """Show verification diagnostics for the current run."""
+
+        status = current_status(self.project_dir)
+        if status.run is None or status.verification is None:
+            self.write("No verification results to inspect.", error=True)
+            return DispatchResult(1)
+        verification = status.verification
+        checks = verification.get("checks", [])
+        blockers = verification.get("blockers", []) or status.blockers
+        rows = [("status", verification.get("status", "unknown"))]
+        if verification.get("patch", {}).get("status"):
+            rows.append(("patch", verification["patch"]["status"]))
+        if verification.get("risk", {}).get("risk"):
+            rows.append(("risk", verification["risk"]["risk"]))
+        render_summary_table(self.renderer, "Verification", rows, next_command=None)
+        if isinstance(checks, list):
+            check_rows = [
+                [str(c.get("name", "?")), str(c.get("status", "?")), str(c.get("returncode", ""))]
+                for c in checks
+                if isinstance(c, dict)
+            ]
+            if check_rows:
+                self.write_table("Checks", ["Name", "Status", "Code"], check_rows)
+        if blockers:
+            self.write_panel("Blockers", [f"× {b}" for b in blockers])
+        return DispatchResult(0)
+
+    def _inspect_attempt(self) -> DispatchResult:
+        """Show the latest attempt's error and stderr summary."""
+
+        status = current_status(self.project_dir)
+        if status.run is None:
+            self.write("No run to inspect.", error=True)
+            return DispatchResult(1)
+        attempts = status.run.get("attempts", [])
+        if not isinstance(attempts, list) or not attempts:
+            self.write("No attempts recorded yet.", error=True)
+            return DispatchResult(1)
+        latest = attempts[-1]
+        if not isinstance(latest, dict):
+            latest = {}
+        rows = [
+            ("attempt", str(latest.get("id", "?"))),
+            ("status", str(latest.get("status", "?"))),
+            ("adapter", str(latest.get("adapter", "?"))),
+            ("summary", str(latest.get("summary", "no summary"))),
+        ]
+        if latest.get("contract_validation_error"):
+            rows.append(("contract error", str(latest["contract_validation_error"])))
+        render_summary_table(self.renderer, "Latest attempt", rows, next_command=None)
+        if latest.get("stderr"):
+            self.write_panel("Stderr (truncated)", [str(latest["stderr"])[:500]])
+        return DispatchResult(0)
 
     def execute_readonly_guided_stage(
         self,

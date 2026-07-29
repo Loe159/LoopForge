@@ -39,6 +39,13 @@ ACTION_EXECUTORS = {
     "status": "status",
     "create-run": "collect-task",
     "choose-adapter": "adapter",
+    "inspect-verification": "inspect-verification",
+    "inspect-attempt": "inspect-attempt",
+    "approve-memory": "approve-memory",
+    "show-plan": "show-plan",
+    "check-contract": "check-contract",
+    "review-contract": "review-contract",
+    "review-autonomy-stop": "review-autonomy-stop",
 }
 
 

@@ -6454,14 +6454,14 @@ Only this section is present.
         from loopforge.cli.actions import ACTION_EXECUTORS, action_descriptor
         from loopforge.engine import GuidedAction
 
-        # "inspect-verification" has no executor — it falls back to "command".
+        # An unknown action with no executor falls back to "command".
         fake = GuidedAction(
-            id="inspect-verification",
-            label="Inspect verification",
-            why="See what failed",
+            id="nonexistent-future-action",
+            label="Does not exist",
+            why="test",
             risk="low",
             requires_confirmation=False,
-            command="/verify --details",
+            command="/nonexistent",
         )
         descriptor = action_descriptor(fake)
         self.assertFalse(descriptor.available)
@@ -6479,6 +6479,37 @@ Only this section is present.
         descriptor = action_descriptor(real)
         self.assertTrue(descriptor.available)
         self.assertNotEqual(descriptor.executor_key, "command")
+
+    def test_recovery_actions_have_real_executors(self) -> None:
+        """S2.2: recovery actions inspect-verification, inspect-attempt, approve-memory,
+        show-plan, check-contract, review-contract, review-autonomy-stop all have executors
+        (not the 'command' fallback)."""
+        from loopforge.cli.actions import ACTION_EXECUTORS, action_descriptor
+        from loopforge.engine import GuidedAction
+
+        for action_id in (
+            "inspect-verification",
+            "inspect-attempt",
+            "approve-memory",
+            "show-plan",
+            "check-contract",
+            "review-contract",
+            "review-autonomy-stop",
+        ):
+            fake = GuidedAction(
+                id=action_id,
+                label=action_id,
+                why="test",
+                risk="low",
+                requires_confirmation=False,
+                command=f"/{action_id}",
+            )
+            descriptor = action_descriptor(fake)
+            self.assertTrue(
+                descriptor.available,
+                f"{action_id} should be available (has executor), got executor_key={descriptor.executor_key}",
+            )
+            self.assertNotEqual(descriptor.executor_key, "command")
 
 
 if __name__ == "__main__":
