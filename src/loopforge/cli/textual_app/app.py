@@ -24,6 +24,7 @@ from loopforge.cli.operations import OperationController
 from loopforge.cli.presentation import FAMILY_PRESENTATION
 from loopforge.cli.state_store import StateStore
 from loopforge.cli.textual_app.messages import LoadFailed, SnapshotPublished
+from loopforge.cli.textual_app.widgets import ScreenList
 from loopforge.cli.textual_app.screens import (
     AdapterSelectionScreen,
     ConfirmationScreen,
@@ -126,7 +127,6 @@ class LoopForgeApp(App[None]):
         self._operation_run_label = "current run"
         self._refreshing_after_operation = False
         self._screen = "home"
-        self._selected_index = 0
         self._filter = ""
         self._evidence_index: EvidenceIndex | None = None
         self._evidence_preview = ""
@@ -151,6 +151,8 @@ class LoopForgeApp(App[None]):
             yield Static(id="screen-title")
             yield Static(id="screen-state", classes="secondary")
             yield Static(id="screen-body")
+            yield ScreenList()
+            yield Static(id="screen-after", classes="secondary")
             with Container(id="operation-panel"):
                 yield Static(id="operation-status", markup=False)
                 yield Static(id="operation-log", classes="secondary", markup=False)
@@ -202,7 +204,7 @@ class LoopForgeApp(App[None]):
         self.shell.project_dir = project
         self.store.select_project(project)
         self._screen = "project"
-        self._selected_index = 0
+        self._reset_list_cursor()
         self.load_selected_project(project)
 
     @work(thread=True, exclusive=True, group="run-load", exit_on_error=False)
@@ -264,14 +266,11 @@ class LoopForgeApp(App[None]):
         self._move(1)
 
     def _move(self, delta: int) -> None:
-        items = self._screen_items()
-        if items:
-            self._selected_index = (self._selected_index + delta) % len(items)
-        self._render_snapshot(self._snapshot)
+        self._screen_list().move_cursor(delta)
 
     def action_show_home(self) -> None:
         self._screen = "home"
-        self._selected_index = 0
+        self._reset_list_cursor()
         self._render_snapshot(self._snapshot)
 
     def action_show_evidence(self) -> None:
@@ -280,14 +279,14 @@ class LoopForgeApp(App[None]):
             self._render_snapshot(self._snapshot)
             return
         self._screen = "evidence"
-        self._selected_index = 0
+        self._reset_list_cursor()
         self._evidence_preview = ""
         self._load_evidence_worker(self._snapshot.evidence.query)
         self._render_snapshot(self._snapshot)
 
     def action_show_settings(self) -> None:
         self._screen = "settings"
-        self._selected_index = 0
+        self._reset_list_cursor()
         self._render_snapshot(self._snapshot)
 
     def show_adapter_selector(self) -> None:
@@ -323,22 +322,24 @@ class LoopForgeApp(App[None]):
             self._evidence_preview = ""
         else:
             self._screen = {"home": "home", "project": "home", "run": "project", "evidence": "run", "settings": "run"}[self._screen]
-            self._selected_index = 0
+            self._reset_list_cursor()
         self._render_snapshot(self._snapshot)
 
     def action_open_selected(self) -> None:
         if self._screen == "home":
-            projects = self._filtered_projects()
-            if projects:
-                self.select_project(Path(str(projects[self._selected_index].get("path") or self.shell.project_dir)))
+            item = self._screen_list().selected_item
+            if item is not None:
+                value = dict(item) if hasattr(item, "items") else {}
+                self.select_project(Path(str(value.get("path") or self.shell.project_dir)))
             return
         if self._screen == "project":
-            runs = self._filtered_runs()
-            if runs:
-                run_id = str(runs[self._selected_index].get("run_id") or "")
+            item = self._screen_list().selected_item
+            if item is not None:
+                value = dict(item) if hasattr(item, "items") else {}
+                run_id = str(value.get("run_id") or "")
                 if run_id:
                     self._screen = "run"
-                    self._selected_index = 0
+                    self._reset_list_cursor()
                     self._open_run_worker(run_id)
             return
         if self._screen == "run":
@@ -347,9 +348,9 @@ class LoopForgeApp(App[None]):
                 self.request_action(action)
             return
         if self._screen == "evidence":
-            items = self._visible_evidence()
-            if items:
-                self._open_evidence_worker(items[self._selected_index])
+            item = self._screen_list().selected_item
+            if item is not None:
+                self._open_evidence_worker(item)
             return
         if self._screen == "settings":
             self.show_adapter_selector()
@@ -497,7 +498,7 @@ class LoopForgeApp(App[None]):
     def _apply_filter(self, value: str | None) -> None:
         if value is None:
             return
-        self._selected_index = 0
+        self._reset_list_cursor()
         if self._screen == "evidence":
             self._evidence_preview = ""
             self._load_evidence_worker(value)
@@ -526,12 +527,10 @@ class LoopForgeApp(App[None]):
             )
 
     def _highlighted_run_id(self) -> str | None:
-        runs = self._filtered_runs()
-        if not runs:
+        item = self._screen_list().selected_item
+        if item is None:
             return None
-        index = min(self._selected_index, len(runs) - 1)
-        row = runs[index]
-        value = dict(row) if hasattr(row, "items") else {}
+        value = dict(item) if hasattr(item, "items") else {}
         return str(value.get("run_id") or "") or None
 
     def request_action(self, action: ActionDescriptor) -> None:
@@ -681,7 +680,9 @@ class LoopForgeApp(App[None]):
             self._notice = "Select evidence to export."
             self._render_snapshot(self._snapshot)
             return
-        self._export_evidence_worker(items[self._selected_index])
+        item = self._screen_list().selected_item
+        if item is not None:
+            self._export_evidence_worker(item)
 
     @work(thread=True, exclusive=True, group="evidence-export", exit_on_error=False)
     def _export_evidence_worker(self, item: EvidenceItem) -> None:
@@ -705,10 +706,19 @@ class LoopForgeApp(App[None]):
         self._notice = notice
         self._render_snapshot(self._snapshot)
 
+    def _screen_list(self) -> ScreenList:
+        return self.query_one("#screen-list", ScreenList)
+
+    def _reset_list_cursor(self) -> None:
+        try:
+            self.query_one("#screen-list", ScreenList).reset_cursor()
+        except NoMatches:
+            pass
+
     def _render_snapshot(self, snapshot: UiSnapshot) -> None:
         self._apply_shell_theme()
         self._snapshot = snapshot
-        title, body, help_text = self._screen_view(snapshot)
+        title, before, items, formatter, after, help_text = self._screen_layout(snapshot)
         try:
             title_widget = self.query_one("#screen-title", Static)
         except NoMatches:
@@ -716,7 +726,14 @@ class LoopForgeApp(App[None]):
             return
         title_widget.update(title)
         self.query_one("#screen-state", Static).update(f"{self._screen.title()} · {self._state_label(snapshot)}")
-        self.query_one("#screen-body", Static).update(body)
+        self.query_one("#screen-body", Static).update(before)
+        screen_list = self.query_one("#screen-list", ScreenList)
+        if items and formatter:
+            screen_list.populate(list(items), formatter)
+            screen_list.display = True
+        else:
+            screen_list.display = False
+        self.query_one("#screen-after", Static).update(after)
         self._render_operation_panel(snapshot)
         self.query_one("#screen-notice", Static).update(self._notice)
         self.query_one("#screen-help", Static).update(help_text)
@@ -796,43 +813,46 @@ class LoopForgeApp(App[None]):
         self._adapter_diagnostic_cache = diagnostics
         return diagnostics
 
-    def _screen_view(self, snapshot: UiSnapshot) -> tuple[str, str, str]:
+    def _screen_layout(
+        self, snapshot: UiSnapshot
+    ) -> tuple[str, str, tuple[object, ...], Callable[[object], str] | None, str, str]:
         if self._screen == "home":
             projects = self._filtered_projects()
-            project_lines = _selected_lines(projects, self._selected_index, _project_line)
             recent = tuple(snapshot.home.runs[:5])
             recent_lines = [_run_line(row) for row in recent] or ["No recent runs."]
-            body = "Projects\n" + ("\n".join(project_lines) or "No registered projects.")
-            body += "\n\nRecent runs\n" + "\n".join(recent_lines)
-            return "LoopForge", body, "Enter open · Ctrl+P projects · n new run · Ctrl+K actions"
+            before = "Projects" if projects else "Projects\nNo registered projects."
+            after = "Recent runs\n" + "\n".join(recent_lines)
+            return "LoopForge", before, projects, _project_line, after, "Enter open · Ctrl+P projects · n new run · Ctrl+K actions"
         if self._screen == "project":
             project = snapshot.project.project or self.shell.project_dir
             runs = self._filtered_runs()
-            body = f"{project.name} · {snapshot.project.branch} · {len(snapshot.project.runs)} runs\n\nRuns\n"
-            body += "\n".join(_selected_lines(runs, self._selected_index, _run_line)) or "No runs yet. Press n to create one."
+            before = f"{project.name} · {snapshot.project.branch} · {len(snapshot.project.runs)} runs\n\nRuns"
+            if not runs:
+                before += "\nNo runs yet. Press n to create one."
+            after = ""
             if snapshot.project.blockers:
-                body += "\n\nProject health\n" + "\n".join(f"× {item}" for item in snapshot.project.blockers)
-            return project.name, body, "Enter open · / filter · n new · a archive · Esc projects"
+                after = "\n\nProject health\n" + "\n".join(f"× {item}" for item in snapshot.project.blockers)
+            return project.name, before, runs, _run_line, after, "Enter open · / filter · n new · a archive · Esc projects"
         if self._screen == "run":
             if self._refreshing_after_operation:
-                return "Run", "Refreshing run state…", "Waiting for the current action to finish refreshing"
+                return "Run", "Refreshing run state…", (), None, "", "Waiting for the current action to finish refreshing"
             shell = snapshot.run.shell
             if shell is None or shell.run is None:
-                return "Run", "Loading run state…", "Esc runs"
+                return "Run", "Loading run state…", (), None, "", "Esc runs"
             label, marker, _ = FAMILY_PRESENTATION[shell.family]
             stages = "\n".join(f"{stage.marker} {stage.title} — {stage.label} ({stage.actor})" for stage in shell.stages)
             blockers = "\n".join(f"× {item}" for item in shell.blockers)
             action = shell.run.next_action.label if shell.run.next_action is not None else "No action available"
-            body = f"{shell.run.task}\n{marker} {label} · {shell.run.short_id} · {shell.run.actor}\n\nPipeline\n{stages or 'No workflow stages.'}\n\nNext action\n{action}"
+            before = f"{shell.run.task}\n{marker} {label} · {shell.run.short_id} · {shell.run.actor}\n\nPipeline\n{stages or 'No workflow stages.'}\n\nNext action\n{action}"
             if blockers:
-                body += "\n\nBlockers\n" + blockers
-            return shell.run.task or "Run", body, "Enter action · e evidence · Ctrl+K actions · Esc runs"
+                before += "\n\nBlockers\n" + blockers
+            return shell.run.task or "Run", before, (), None, "", "Enter action · e evidence · Ctrl+K actions · Esc runs"
         if self._screen == "evidence":
-            items = self._visible_evidence()
             if self._evidence_preview:
-                return "Evidence", self._evidence_preview, "Esc list · c copy · x export"
-            body = "Evidence\n" + ("\n".join(_selected_lines(items, self._selected_index, _evidence_line)) or "No evidence available.")
-            return "Evidence", body, "Enter open · / search · c copy · x export · Esc run"
+                return "Evidence", self._evidence_preview, (), None, "", "Esc list · c copy · x export"
+            items = self._visible_evidence()
+            before = "Evidence" if items else "Evidence\nNo evidence available."
+            return "Evidence", before, items, _evidence_line, "", "Enter open · / search · c copy · x export · Esc run"
         values = [
             ("Theme", getattr(self.shell, "theme", "default")),
             ("Statusline", getattr(self.shell, "statusline", "default")),
@@ -843,20 +863,11 @@ class LoopForgeApp(App[None]):
             ("Snapshot", str(snapshot.revision)),
         ]
         diagnostics = self._adapter_diagnostics()
-        body = "\n".join(f"{key}: {value}" for key, value in values)
-        body += "\n\nAdapter diagnostics\n" + "\n".join(
+        before = "\n".join(f"{key}: {value}" for key, value in values)
+        before += "\n\nAdapter diagnostics\n" + "\n".join(
             f"{adapter}: {diagnostic}" for adapter, diagnostic in diagnostics.items()
         )
-        return "Settings and diagnostics", body, "Enter adapter picker · Esc run · Ctrl+P projects"
-
-    def _screen_items(self) -> tuple[object, ...]:
-        if self._screen == "home":
-            return self._filtered_projects()
-        if self._screen == "project":
-            return self._filtered_runs()
-        if self._screen == "evidence" and not self._evidence_preview:
-            return self._visible_evidence()
-        return ()
+        return "Settings and diagnostics", before, (), None, "", "Enter adapter picker · Esc run · Ctrl+P projects"
 
     def _filtered_projects(self) -> tuple[object, ...]:
         return _filter_rows(self._snapshot.home.projects, self._filter)
@@ -890,14 +901,6 @@ def _filter_rows(rows: Iterable[object], query: str) -> tuple[object, ...]:
     if not needle:
         return values
     return tuple(row for row in values if needle in str(dict(row) if hasattr(row, "items") else row).casefold())
-
-
-def _selected_lines(rows: Iterable[object], selected: int, formatter: Callable[[object], str]) -> list[str]:
-    values = tuple(rows)
-    if not values:
-        return []
-    selected = min(selected, len(values) - 1)
-    return [("› " if index == selected else "  ") + formatter(row) for index, row in enumerate(values)]
 
 
 def _project_line(row: object) -> str:

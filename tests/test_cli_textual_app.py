@@ -512,7 +512,8 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
                             non_current_index = i
                             break
                     self.assertIsNotNone(non_current_index, "Expected a non-current run in the list")
-                    app._selected_index = non_current_index
+                    from loopforge.cli.textual_app.widgets import ScreenList
+                    app.query_one("#screen-list", ScreenList).highlighted = non_current_index
                     highlighted_id = app._highlighted_run_id()
 
                     await pilot.press("a")
@@ -609,8 +610,8 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(str(app.query_one("#screen-title").render()), "LoopForge")
                     body = self._body_text(app)
                     self.assertIn("Projects", body)
-                    self.assertIn("Recent runs", body)
-                    self.assertIn("› ", body)
+                    after = str(app.query_one("#screen-after").render())
+                    self.assertIn("Recent runs", after)
 
     async def test_project_screen_body_renders_runs_count(self) -> None:
         from loopforge.cli.interactive import InteractiveShell
@@ -706,6 +707,7 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
         from loopforge.cli import main
         from loopforge.cli.interactive import InteractiveShell
         from loopforge.cli.textual_app import LoopForgeApp
+        from loopforge.cli.textual_app.widgets import ScreenList
 
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             project = Path(temp_dir) / "project"
@@ -736,7 +738,55 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
                     app.select_project(project)
                     await wait_for_condition(pilot, lambda: len(app.snapshot.project.runs) >= 2, "two project runs")
                     app._screen = "project"
+                    screen_list = app.query_one("#screen-list", ScreenList)
+                    self.assertGreaterEqual(screen_list.item_count, 2)
                     app.action_move_down()
-                    self.assertGreater(app._selected_index, 0)
+                    self.assertGreater(screen_list.highlighted, 0)
                     app.action_open_selected()
-                    self.assertEqual(app._selected_index, 0)
+                    self.assertEqual(screen_list.highlighted, 0)
+
+    async def test_pilot_selects_third_line_and_verifies_item(self) -> None:
+        from loopforge.cli import main
+        from loopforge.cli.interactive import InteractiveShell
+        from loopforge.cli.textual_app import LoopForgeApp
+        from loopforge.cli.textual_app.widgets import ScreenList
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            project = Path(temp_dir) / "project"
+            project.mkdir()
+            subprocess.run(["git", "init"], cwd=project, check=True, capture_output=True, text=True)
+            (project / "README.md").write_text("# Project\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=project, check=True, capture_output=True, text=True)
+            subprocess.run(
+                ["git", "-c", "user.name=T", "-c", "user.email=t@t", "commit", "-m", "init"],
+                cwd=project, check=True, capture_output=True, text=True,
+            )
+            loopforge_home = Path(temp_dir) / "home"
+            with mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}):
+                previous_cwd = Path.cwd()
+                os.chdir(project)
+                try:
+                    with redirect_stdout(io.StringIO()):
+                        self.assertEqual(main(["init"]), 0)
+                        self.assertEqual(main(["run", "--task", "Alpha run"]), 0)
+                        self.assertEqual(main(["run", "--task", "Beta run"]), 0)
+                        self.assertEqual(main(["run", "--task", "Gamma run"]), 0)
+                finally:
+                    os.chdir(previous_cwd)
+
+                shell = InteractiveShell(project, output=io.StringIO(), error=io.StringIO())
+                app = LoopForgeApp(shell, load_on_mount=False)
+                async with app.run_test(size=(80, 24)) as pilot:
+                    app.select_project(project)
+                    await wait_for_condition(pilot, lambda: len(app.snapshot.project.runs) >= 3, "three project runs")
+                    self._paint(app, "project")
+                    screen_list = app.query_one("#screen-list", ScreenList)
+                    self.assertGreaterEqual(screen_list.item_count, 3)
+                    screen_list.highlighted = 2
+                    item = screen_list.selected_item
+                    self.assertIsNotNone(item)
+                    runs = app._filtered_runs()
+                    value = dict(item) if hasattr(item, "items") else {}
+                    expected = dict(runs[2]) if hasattr(runs[2], "items") else {}
+                    self.assertEqual(str(value.get("run_id")), str(expected.get("run_id")))
+                    self.assertTrue(str(value.get("task") or ""))
