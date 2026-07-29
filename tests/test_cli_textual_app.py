@@ -410,7 +410,7 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
         from loopforge.cli.textual_app.screens import ConfirmationScreen
         from loopforge.engine import current_guidance, current_status
 
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             project = Path(temp_dir) / "project"
             project.mkdir()
             subprocess.run(["git", "init"], cwd=project, check=True, capture_output=True, text=True)
@@ -722,7 +722,7 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
         from loopforge.cli.interactive import InteractiveShell
         from loopforge.cli.textual_app import LoopForgeApp
 
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             project = Path(temp_dir) / "project"
             project.mkdir()
             subprocess.run(["git", "init"], cwd=project, check=True, capture_output=True, text=True)

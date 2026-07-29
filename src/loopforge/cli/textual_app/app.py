@@ -192,6 +192,9 @@ class LoopForgeApp(App[None]):
     def on_mount(self) -> None:
         self._set_width_class(self.size.width)
         self._render_snapshot(self._snapshot)
+        # S5.2: the 120ms timer polls operations; _poll_operation is a cheap
+        # no-op when no operation is running (returns immediately), so idle
+        # CPU stays near zero.
         self.set_interval(0.12, self._poll_operation)
         if self._load_on_mount:
             self.load_selected_project()
@@ -855,8 +858,11 @@ class LoopForgeApp(App[None]):
     def _operation_status(self, snapshot: UiSnapshot) -> str:
         operation = snapshot.operation
         running = operation.state == "loading" and not operation.finished
+        from loopforge.cli.terminal_capabilities import _env_truthy
+        ascii_only = _env_truthy("LOOPFORGE_ASCII")
+        spinner = "|/-\\" if ascii_only else "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
         marker = (
-            "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[self._operation_spinner_phase]
+            spinner[self._operation_spinner_phase % len(spinner)]
             if running
             else _operation_marker(operation.state)
         )
