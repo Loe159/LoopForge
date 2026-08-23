@@ -110,6 +110,7 @@ class ImplementationResultIntegrityTests(unittest.TestCase):
                     contract=contract,
                     adapter="codex",
                     adapter_args=[],
+                    implementation_mode="headless",
                 )
 
             self.assertEqual(attempt["status"], "failed")

@@ -44,6 +44,7 @@ from loopforge.engine import (
 )
 from loopforge.engine.packs import PackRegistry
 from loopforge.engine.storage import JsonStore
+from loopforge.engine.terminal import TerminalLaunchRequest, TerminalSessionResult
 from loopforge.cli.interactive import (
     InteractiveShell,
     SlashCommandCompleter,
@@ -232,6 +233,25 @@ class CliTests(unittest.TestCase):
         )
         run_json_path.write_text(json.dumps(run_json), encoding="utf-8")
         return run_dir
+
+    def create_approved_run(
+        self,
+        repo: Path,
+        loopforge_home: Path,
+        *,
+        task: str,
+    ) -> Path:
+        with (
+            mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+            working_directory(repo),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(main(["init"]), 0)
+            self.assertEqual(
+                main(["run", "--task", task, "--success-check", "Tests pass"]),
+                0,
+            )
+        return self.approve_current_run(repo, loopforge_home)
 
     def approve_current_plan(self, run_dir: Path) -> None:
         run_json_path = run_dir / "run.json"
@@ -2424,8 +2444,320 @@ Only this section is present.
                     )
 
                 self.assertTrue(recovered.ok)
-                self.assertEqual((run_dir / "research.md").read_text(encoding="utf-8"), valid_research_markdown())
+                self.assertEqual(
+                    (run_dir / "research.md").read_text(encoding="utf-8"),
+                    valid_research_markdown(),
+                )
                 self.assertEqual(rejected_path.read_bytes(), candidate)
+
+    def test_readonly_research_accepts_interactive_terminal_candidate_after_control_c(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            self.initialize_git_project(repo)
+            loopforge_home = workspace / "home"
+            run_dir = self.create_approved_run(
+                repo,
+                loopforge_home,
+                task="Research in a visible harness",
+            )
+            launcher = mock.Mock()
+
+            def launch(request: TerminalLaunchRequest) -> TerminalSessionResult:
+                candidate = (
+                    request.cwd
+                    / ".loopforge"
+                    / "runtime-stages"
+                    / "research-candidate.md"
+                )
+                candidate.parent.mkdir(parents=True, exist_ok=True)
+                candidate.write_text(valid_research_markdown(), encoding="utf-8")
+                return TerminalSessionResult(
+                    launched=True,
+                    returncode=0xC000013A,
+                    launcher="test-terminal",
+                )
+
+            launcher.launch.side_effect = launch
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                mock.patch(
+                    "loopforge.engine.codex_workspace_preflight_blockers",
+                    return_value=[],
+                ),
+            ):
+                result = execute_readonly_stage(
+                    repo,
+                    stage="research",
+                    adapter="codex",
+                    execution_mode="terminal",
+                    terminal_launcher=launcher,
+                )
+
+            request = launcher.launch.call_args.args[0]
+            command_text = " ".join(request.command)
+            run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            workspace_dir = Path(run_json["workspace"]["path"])
+            self.assertTrue(result.ok)
+            self.assertEqual(
+                (run_dir / "research.md").read_text(encoding="utf-8"),
+                valid_research_markdown(),
+            )
+            stage_prompt = (
+                run_dir / "artifacts" / "stages" / "research" / "prompt.md"
+            ).read_text(encoding="utf-8")
+            self.assertIn("research-candidate.md", command_text)
+            self.assertIn("research-candidate.md", stage_prompt)
+            self.assertNotIn(
+                "Produce exactly one complete portable Markdown artifact on stdout.",
+                stage_prompt,
+            )
+            self.assertFalse(
+                (
+                    workspace_dir
+                    / ".loopforge"
+                    / "runtime-stages"
+                    / "research-candidate.md"
+                ).exists()
+            )
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+                    cwd=workspace_dir,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout,
+                "",
+            )
+
+    def test_readonly_interactive_terminal_blocks_uncontrolled_worktree_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            self.initialize_git_project(repo)
+            loopforge_home = workspace / "home"
+            self.create_approved_run(
+                repo,
+                loopforge_home,
+                task="Keep interactive research read-only",
+            )
+            launcher = mock.Mock()
+
+            def launch(request: TerminalLaunchRequest) -> TerminalSessionResult:
+                candidate = (
+                    request.cwd
+                    / ".loopforge"
+                    / "runtime-stages"
+                    / "research-candidate.md"
+                )
+                candidate.parent.mkdir(parents=True, exist_ok=True)
+                candidate.write_text(valid_research_markdown(), encoding="utf-8")
+                (request.cwd / "unauthorized.txt").write_text("changed\n", encoding="utf-8")
+                return TerminalSessionResult(
+                    launched=True,
+                    returncode=0,
+                    launcher="test-terminal",
+                )
+
+            launcher.launch.side_effect = launch
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                mock.patch(
+                    "loopforge.engine.codex_workspace_preflight_blockers",
+                    return_value=[],
+                ),
+            ):
+                result = execute_readonly_stage(
+                    repo,
+                    stage="research",
+                    adapter="codex",
+                    execution_mode="terminal",
+                    terminal_launcher=launcher,
+                )
+
+            self.assertFalse(result.ok)
+            self.assertIn("changed the worktree", "\n".join(result.blockers))
+            self.assertIn("unauthorized.txt", "\n".join(result.blockers))
+
+    def test_plan_and_review_open_interactive_harnesses(self) -> None:
+        cases = (
+            ("plan", valid_plan_markdown),
+            ("review", valid_review_markdown),
+        )
+        for stage, artifact_factory in cases:
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as temp_dir:
+                workspace = Path(temp_dir)
+                repo = workspace / "project"
+                repo.mkdir()
+                self.initialize_git_project(repo)
+                loopforge_home = workspace / "home"
+                run_dir = self.create_approved_run(
+                    repo,
+                    loopforge_home,
+                    task=f"Run interactive {stage}",
+                )
+                run_json_path = run_dir / "run.json"
+                run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+                run_json["stage_statuses"]["research"] = "complete"
+                run_json["current_stage"] = "research_ready"
+                (run_dir / "research.md").write_text(
+                    valid_research_markdown(), encoding="utf-8"
+                )
+                if stage == "review":
+                    run_json["stage_statuses"].update(
+                        {
+                            "plan": "approved",
+                            "implementation": "complete",
+                            "verification": "complete",
+                            "review": "pending",
+                        }
+                    )
+                    run_json["current_stage"] = "verification_ready"
+                    run_json["status"] = "verified"
+                    run_json.setdefault("verification", {})["status"] = "passed"
+                    (run_dir / "plan.md").write_text(
+                        valid_plan_markdown(), encoding="utf-8"
+                    )
+                run_json_path.write_text(json.dumps(run_json), encoding="utf-8")
+                launcher = mock.Mock()
+
+                def launch(request: TerminalLaunchRequest) -> TerminalSessionResult:
+                    candidate = (
+                        request.cwd
+                        / ".loopforge"
+                        / "runtime-stages"
+                        / f"{stage}-candidate.md"
+                    )
+                    candidate.parent.mkdir(parents=True, exist_ok=True)
+                    candidate.write_text(artifact_factory(), encoding="utf-8")
+                    return TerminalSessionResult(
+                        launched=True,
+                        returncode=0,
+                        launcher="test-terminal",
+                    )
+
+                launcher.launch.side_effect = launch
+                with (
+                    mock.patch.dict(
+                        os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}
+                    ),
+                    mock.patch(
+                        "loopforge.engine.codex_workspace_preflight_blockers",
+                        return_value=[],
+                    ),
+                ):
+                    result = execute_readonly_stage(
+                        repo,
+                        stage=stage,
+                        adapter="codex",
+                        execution_mode="terminal",
+                        terminal_launcher=launcher,
+                    )
+
+                self.assertTrue(result.ok, result.blockers)
+                launcher.launch.assert_called_once()
+                self.assertEqual(
+                    (run_dir / f"{stage}.md").read_text(encoding="utf-8"),
+                    artifact_factory(),
+                )
+
+    def test_readonly_interactive_terminal_requires_candidate_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            self.initialize_git_project(repo)
+            loopforge_home = workspace / "home"
+            self.create_approved_run(
+                repo,
+                loopforge_home,
+                task="Require terminal research evidence",
+            )
+            launcher = mock.Mock()
+            launcher.launch.return_value = TerminalSessionResult(
+                launched=True,
+                returncode=0,
+                launcher="test-terminal",
+            )
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                mock.patch(
+                    "loopforge.engine.codex_workspace_preflight_blockers",
+                    return_value=[],
+                ),
+            ):
+                result = execute_readonly_stage(
+                    repo,
+                    stage="research",
+                    adapter="codex",
+                    execution_mode="terminal",
+                    terminal_launcher=launcher,
+                )
+
+            self.assertFalse(result.ok)
+            self.assertIn("candidate", "\n".join(result.blockers).lower())
+            self.assertIn("empty", "\n".join(result.blockers).lower())
+
+    def test_readonly_auto_falls_back_to_headless_when_terminal_is_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            self.initialize_git_project(repo)
+            loopforge_home = workspace / "home"
+            self.create_approved_run(
+                repo,
+                loopforge_home,
+                task="Fall back when no terminal exists",
+            )
+            launcher = mock.Mock()
+            launcher.launch.return_value = TerminalSessionResult(
+                launched=False,
+                returncode=None,
+                launcher="unsupported-test",
+                error="no visible terminal",
+            )
+            child = {
+                "completed": True,
+                "returncode": 0,
+                "timed_out": False,
+                "interrupted": False,
+            }
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                mock.patch(
+                    "loopforge.engine.codex_workspace_preflight_blockers",
+                    return_value=[],
+                ),
+                mock.patch(
+                    "loopforge.engine.execute_readonly_adapter_command",
+                    return_value=(
+                        child,
+                        valid_research_markdown().encode("utf-8"),
+                        b"",
+                    ),
+                ) as execute,
+            ):
+                result = execute_readonly_stage(
+                    repo,
+                    stage="research",
+                    adapter="codex",
+                    execution_mode="auto",
+                    terminal_launcher=launcher,
+                )
+
+            self.assertTrue(result.ok)
+            execute.assert_called_once()
+            headless_prompt = execute.call_args.kwargs["prompt"].decode("utf-8")
+            self.assertIn("artifact on stdout", headless_prompt)
+            self.assertNotIn("research-candidate.md", headless_prompt)
 
     def test_run_no_input_does_not_execute_available_readonly_stage(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2871,35 +3203,19 @@ Only this section is present.
         self.assertTrue(fake.terminated)
         self.assertFalse(fake.killed)
 
-    def test_streaming_process_records_cooperative_cancellation(self) -> None:
-        class FakeProcess:
-            def __init__(self) -> None:
-                self.stdout = io.BytesIO()
-                self.stderr = io.BytesIO()
-                self.terminated = False
-
-            def wait(self, timeout=None):  # type: ignore[no-untyped-def]
-                return 130
-
-            def terminate(self) -> None:
-                self.terminated = True
-
-            def kill(self) -> None:
-                raise AssertionError("cooperative cancellation should terminate first")
-
-        fake = FakeProcess()
+    def test_streaming_process_honors_preflight_cancellation(self) -> None:
         cancelled = threading.Event()
         cancelled.set()
         with (
-            mock.patch("loopforge.engine.subprocess.Popen", return_value=fake),
+            mock.patch("loopforge.engine.subprocess.Popen") as popen,
             mock.patch("loopforge.engine.isolated_process_module") as isolated,
         ):
             isolated.return_value.load_policy.return_value = {"max_timeout_seconds": 60}
             isolated.return_value.build_child_environment.return_value = {}
             result = run_streaming_process(["fake"], Path.cwd(), 60, cancel_event=cancelled)
-        self.assertTrue(fake.terminated)
+        popen.assert_not_called()
         self.assertTrue(result["interrupted"])
-        self.assertEqual(result["returncode"], 130)
+        self.assertIsNone(result["returncode"])
 
     def test_readonly_adapter_streams_output_with_controlled_prompt_and_no_bytecode(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

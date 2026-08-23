@@ -117,6 +117,7 @@ class RunCommandHandler:
                 context.renderer,
                 adapter=selected_adapter,
                 adapter_args=selected_adapter_args,
+                execution_mode=args.execution_mode,
                 no_color=context.options.no_color,
             )
         return 0
@@ -138,7 +139,6 @@ class RunCockpitService:
         selected_adapter_args: list[str],
     ) -> int | None:
         context = self.context
-        del args
         api = context.api
         if can_prompt:
             print(
@@ -161,6 +161,7 @@ class RunCockpitService:
                 context.renderer,
                 adapter=selected_adapter,
                 adapter_args=selected_adapter_args,
+                execution_mode=args.execution_mode,
                 no_color=context.options.no_color,
             )
         api.render_run_cockpit(
@@ -300,6 +301,7 @@ class ContinueCommandHandler:
                 context.project_dir,
                 adapter=args.adapter,
                 adapter_args=adapter_args,
+                implementation_mode=args.execution_mode,
                 confirmed=api.confirmation_accepted(args.confirm),
                 stream_output=fmt != "json",
             )

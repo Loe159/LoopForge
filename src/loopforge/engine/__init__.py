@@ -19,6 +19,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from loopforge.adapters.commands import (
+    AGENT_COMMANDS,
+    InteractiveAdapterUnavailable,
+    adapter_command,
+    headless_implementation_command,
+    interactive_agent_command,
+    interactive_implementation_command,
+    interactive_stage_command,
+    redacted_interactive_command,
+    require_interactive_adapter,
+)
 from loopforge.adapters.kilo_code import (
     DEFAULT_IMPLEMENTATION_AGENT,
     DEFAULT_READONLY_AGENT,
@@ -64,6 +75,15 @@ from loopforge.engine.workspace import (
     prepare_run_workspace,
     run_workspace_path,
     run_workspace_state,
+)
+from loopforge.engine.workspace_observation import (
+    GitFingerprint,
+    git_commit_changes,
+    git_status_entry_paths,
+    git_status_paths,
+    gitlink_paths,
+    nested_git_fingerprints,
+    terminal_snapshot_change_visible,
 )
 from loopforge.engine.models.schema import (
     CURRENT_RUN_SCHEMA,
@@ -116,6 +136,8 @@ DEFAULT_PACK = "generic-code"
 DEFAULT_ADAPTER = "codex"
 WORKSPACE_MODE_GIT_WORKTREE = "git-worktree"
 WORKSPACE_MODE_SHARED_CHECKOUT = "shared-checkout"
+AGENT_EXECUTION_MODES = ("auto", "terminal", "headless")
+DEFAULT_AGENT_EXECUTION_MODE = "auto"
 READY_FOR_VERIFICATION = "ready_for_verification"
 ADAPTER_BLOCKED = "adapter_blocked"
 LOOP_CONTRACT_DRAFT = "loop_contract_draft"
@@ -131,15 +153,7 @@ DEFAULT_USER_PREFERENCES = {
     "keymap": "emacs",
 }
 
-SUPPORTED_ADAPTERS = (
-    "codex",
-    "claude-code",
-    "kilo-code",
-    "aider",
-    "opencode",
-    "mini-swe-agent",
-    "local-adapter-fixture",
-)
+SUPPORTED_ADAPTERS = (*AGENT_COMMANDS, "local-adapter-fixture")
 
 SUPPORTED_PROFILES = (
     "assist",
@@ -178,15 +192,6 @@ PROFILE_POLICIES: dict[str, dict[str, Any]] = {
         "attempts": "requires explicit confirmation before each adapter attempt",
         "memory": "approval plus --confirm is required for promotion",
     },
-}
-
-AGENT_COMMANDS = {
-    "codex": "codex",
-    "claude-code": "claude",
-    "kilo-code": "kilo",
-    "aider": "aider",
-    "opencode": "opencode",
-    "mini-swe-agent": "mini-swe-agent",
 }
 
 CONFIG_KEYS = (

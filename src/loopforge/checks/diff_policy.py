@@ -46,6 +46,41 @@ def has_path_traversal(path: str) -> bool:
     return PurePosixPath(path).is_absolute() or ".." in PurePosixPath(path).parts
 
 
+def parse_diff_git_paths(line: str) -> tuple[str, str] | None:
+    try:
+        parts = shlex.split(line)
+    except ValueError:
+        return None
+    if len(parts) == 4:
+        return parts[2], parts[3]
+
+    raw_paths = line.removeprefix("diff --git ")
+    separator = (len(raw_paths) - 1) // 2
+    before = raw_paths[:separator]
+    after = raw_paths[separator + 1 :]
+    if (
+        raw_paths[separator : separator + 1] == " "
+        and before.startswith("a/")
+        and after.startswith("b/")
+        and before[2:] == after[2:]
+    ):
+        return before, after
+    return None
+
+
+def parse_file_marker_path(raw_path: str) -> str | None:
+    raw_path = raw_path.removesuffix("\t")
+    if not raw_path:
+        return None
+    if not raw_path.startswith('"'):
+        return raw_path
+    try:
+        parts = shlex.split(raw_path)
+    except ValueError:
+        return None
+    return parts[0] if len(parts) == 1 else None
+
+
 def parse_patch(patch: str) -> PatchFacts:
     paths: set[str] = set()
     file_count = 0
@@ -88,15 +123,11 @@ def parse_patch(patch: str) -> PatchFacts:
             current_symlink = False
             current_deleted = False
             file_count += 1
-            try:
-                parts = shlex.split(line)
-            except ValueError:
+            diff_paths = parse_diff_git_paths(line)
+            if diff_paths is None:
                 malformed = True
                 continue
-            if len(parts) != 4:
-                malformed = True
-                continue
-            for raw_path in parts[2:]:
+            for raw_path in diff_paths:
                 if normalized := add_path(raw_path, strip_git_prefix=True):
                     current_paths.add(normalized)
             continue
@@ -111,15 +142,11 @@ def parse_patch(patch: str) -> PatchFacts:
             continue
 
         if not in_hunk and line.startswith(("+++ ", "--- ")):
-            try:
-                parts = shlex.split(line)
-            except ValueError:
+            raw_path = parse_file_marker_path(line[4:])
+            if raw_path is None:
                 malformed = True
                 continue
-            if len(parts) < 2:
-                malformed = True
-                continue
-            if normalized := add_path(parts[1], strip_git_prefix=True):
+            if normalized := add_path(raw_path, strip_git_prefix=True):
                 current_paths.add(normalized)
             continue
 

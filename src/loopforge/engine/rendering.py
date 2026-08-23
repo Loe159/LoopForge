@@ -368,6 +368,7 @@ def render_stage_prompt(
     run_dir: Path,
     workspace_dir: Path,
     adapter: str,
+    artifact_output_path: Path | None = None,
 ) -> str:
     from loopforge.engine import (
         READONLY_STAGE_INPUT_ARTIFACTS,
@@ -383,13 +384,41 @@ def render_stage_prompt(
     input_artifacts = READONLY_STAGE_INPUT_ARTIFACTS.get(stage, ())
     agent = pack_agent_for_stage(run, stage)
     permission = pack_permission_for_agent(run, agent)
+    rendered_permission = permission
+    if artifact_output_path is not None and isinstance(permission, dict):
+        rendered_permission = dict(permission)
+        filesystem = permission.get("filesystem")
+        if isinstance(filesystem, dict):
+            rendered_permission["filesystem"] = {
+                **filesystem,
+                "write": [str(artifact_output_path)],
+            }
+    if artifact_output_path is None:
+        output_instructions = [
+            "Produce exactly one complete portable Markdown artifact on stdout.",
+            "Start directly with YAML frontmatter. Do not use a fence, preface, or postscript.",
+            "Keep every required heading even when its only bounded conclusion is unknown.",
+            "Do not modify the workspace. Read project files and run artifacts only.",
+        ]
+    else:
+        output_instructions = [
+            "Produce exactly one complete portable Markdown artifact in this UTF-8 file:",
+            str(artifact_output_path),
+            (
+                "Start the file directly with YAML frontmatter. Do not add a fence, "
+                "preface, or postscript."
+            ),
+            "Keep every required heading even when its only bounded conclusion is unknown.",
+            "Do not only print the artifact in the terminal.",
+            (
+                "Do not modify, stage, or commit any other workspace file. The artifact "
+                "path above is the only permitted write."
+            ),
+        ]
     lines = [
         f"# LoopForge {stage.title()} Stage",
         "",
-        "Produce exactly one complete portable Markdown artifact on stdout.",
-        "Start directly with YAML frontmatter. Do not use a fence, preface, or postscript.",
-        "Keep every required heading even when its only bounded conclusion is unknown.",
-        "Do not modify the workspace. Read project files and run artifacts only.",
+        *output_instructions,
         "",
         "## Paths",
         "",
@@ -419,18 +448,34 @@ def render_stage_prompt(
     lines.append("")
     lines.extend(f"- {section}" for section in sections)
     lines.append("")
-    if permission is not None:
+    if rendered_permission is not None:
         lines.extend(
             [
                 "## Permission Boundary",
                 "",
-                json.dumps(permission, indent=2, sort_keys=True),
+                json.dumps(rendered_permission, indent=2, sort_keys=True),
                 "",
             ]
         )
     agent_prompt = pack_agent_prompt(agent)
     if agent_prompt:
         lines.extend(["## Pack Agent Instructions", "", agent_prompt.strip(), ""])
+    if artifact_output_path is not None:
+        lines.extend(
+            [
+                "## Interactive Harness Output Override",
+                "",
+                (
+                    "For this interactive session, any instruction to return the artifact "
+                    "on stdout means: write it to the artifact path above."
+                ),
+                (
+                    "The read-only boundary still applies to every other workspace path; "
+                    "only the controlled artifact file may be written."
+                ),
+                "",
+            ]
+        )
     return "\n".join(lines)
 
 

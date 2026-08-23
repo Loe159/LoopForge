@@ -1155,6 +1155,7 @@ def maybe_run_readonly_stage_from_cockpit(
     *,
     adapter: str,
     adapter_args: list[str],
+    execution_mode: str = "auto",
     no_color: bool,
 ) -> int:
     status = current_status(project_dir)
@@ -1210,6 +1211,7 @@ def maybe_run_readonly_stage_from_cockpit(
             stage=stage,
             adapter=adapter,
             adapter_args=adapter_args,
+            execution_mode=execution_mode,
         )
     render_stage_result(
         renderer if result.ok else TerminalRenderer(sys.stderr, no_color=no_color),

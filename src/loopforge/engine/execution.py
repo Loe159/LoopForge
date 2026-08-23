@@ -19,6 +19,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from loopforge.engine.terminal import (
+    TerminalLauncher,
+    launch_terminal_session,
+)
+
 @dataclass(frozen=True)
 class ContinueResult:
     project_dir: Path
@@ -501,49 +506,70 @@ def execute_attempt(
     operation_callback: OperationCallback | None = None,
     cancel_event: threading.Event | None = None,
     stream_output: bool = True,
+    implementation_mode: str = "auto",
+    terminal_launcher: TerminalLauncher | None = None,
 ) -> dict[str, Any]:
     from loopforge.engine import (
+        CONFIG_DIR,
+        AGENT_EXECUTION_MODES,
         SUPPORTED_ADAPTERS,
+        InteractiveAdapterUnavailable,
         adapter_protocol_command,
         adapter_result_stop_reasons,
         append_progress,
         command_for_attempt,
         decode_output,
+        detect_git_base_commit,
         emit_operation_event,
         execute_adapter_command,
         expected_session_for,
+        git_commit_changes,
         git_status_entries,
+        git_status_entry_paths,
+        git_status_paths,
+        interactive_implementation_command,
+        isolated_process_module,
+        nested_git_fingerprints,
         normalize_profile,
         parse_adapter_result,
         parse_adapter_result_file,
         relative_to_run,
         render_adapter_prompt,
+        redacted_interactive_command,
+        require_interactive_adapter,
         run_workspace_path,
         synthetic_adapter_result,
         utc_now,
         validate_attempt_result,
         workspace_snapshot,
         workspace_snapshot_changes,
+        terminal_snapshot_change_visible,
         write_bytes,
         write_json_atomic,
     )
-
     if adapter not in SUPPORTED_ADAPTERS:
         raise ValueError(f"unsupported adapter: {adapter}")
+    if implementation_mode not in AGENT_EXECUTION_MODES:
+        raise ValueError(f"unsupported implementation execution mode: {implementation_mode}")
+    if implementation_mode == "terminal":
+        require_interactive_adapter(adapter)
     workspace_dir = run_workspace_path(run, project_dir)
     if not workspace_dir.exists() or not workspace_dir.is_dir():
         raise ValueError(f"run workspace is not available: {workspace_dir}")
-    command = command_for_attempt(
-        adapter=adapter,
-        adapter_args=adapter_args,
-        workspace_dir=workspace_dir,
-        run_dir=run_dir,
-    )
     attempts = attempt_records(run)
     number = len(attempts) + 1
-    attempt_id = f"attempt-{number:03d}"
-    attempt_dir = run_dir / "attempts" / attempt_id
-    attempt_dir.mkdir(parents=True, exist_ok=False)
+    while True:
+        attempt_id = f"attempt-{number:03d}"
+        attempt_dir = run_dir / "attempts" / attempt_id
+        try:
+            attempt_dir.mkdir(parents=True, exist_ok=False)
+        except FileExistsError:
+            # A setup exception can leave diagnostic artifacts before an
+            # attempt record exists. Preserve them and allocate a fresh id so
+            # a repaired run can be retried instead of remaining poisoned.
+            number += 1
+            continue
+        break
 
     emit_operation_event(
         operation_callback,
@@ -554,72 +580,277 @@ def execute_attempt(
 
     started = utc_now()
     prompt_path = attempt_dir / "adapter-prompt.md"
-    prompt_path.write_text(
-        render_adapter_prompt(
-            run=run,
-            contract=contract,
-            run_dir=run_dir,
-            workspace_dir=workspace_dir,
-            adapter=adapter,
-            attempt_id=attempt_id,
-        ),
-        encoding="utf-8",
+    prompt = render_adapter_prompt(
+        run=run,
+        contract=contract,
+        run_dir=run_dir,
+        workspace_dir=workspace_dir,
+        adapter=adapter,
+        attempt_id=attempt_id,
     )
+    prompt_path.write_text(prompt, encoding="utf-8")
+    selected_execution_mode = implementation_mode
+    terminal_fallback_reason = ""
+    interactive_prompt_argument = ""
+    command: list[str] = []
+    if implementation_mode == "headless":
+        command = command_for_attempt(
+            adapter=adapter,
+            adapter_args=adapter_args,
+            workspace_dir=workspace_dir,
+            run_dir=run_dir,
+        )
+    else:
+        try:
+            require_interactive_adapter(adapter)
+            selected_execution_mode = "terminal"
+        except InteractiveAdapterUnavailable as error:
+            if implementation_mode == "terminal":
+                raise
+            terminal_fallback_reason = str(error)
+            selected_execution_mode = "headless"
+            command = command_for_attempt(
+                adapter=adapter,
+                adapter_args=adapter_args,
+                workspace_dir=workspace_dir,
+                run_dir=run_dir,
+            )
     session = expected_session_for(run, adapter, workspace_dir)
     expected_session_path = attempt_dir / "expected-session.json"
     write_json_atomic(expected_session_path, session)
     before_snapshot = workspace_snapshot(workspace_dir)
     before_git = git_status_entries(workspace_dir)
+    before_git_paths = (
+        git_status_paths(workspace_dir) if selected_execution_mode == "terminal" else None
+    )
+    before_head = (
+        detect_git_base_commit(workspace_dir)
+        if selected_execution_mode == "terminal"
+        else None
+    )
+    before_nested_git = (
+        nested_git_fingerprints(workspace_dir)
+        if selected_execution_mode == "terminal"
+        else {}
+    )
     timeout_seconds = attempt_timeout(run, contract)
 
     result_path = attempt_dir / "result.json"
     child_stderr_path = attempt_dir / "adapter-child.stderr"
-    protocol_command = adapter_protocol_command(
-        adapter=adapter,
-        command=command,
-        expected_session_path=expected_session_path,
-        workspace_dir=workspace_dir,
-        stdin_file=prompt_path,
-        result_output=result_path,
-        child_stderr_output=child_stderr_path,
-    )
-    child, stdout, stderr = execute_adapter_command(
-        adapter=adapter,
-        command=command,
-        expected_session_path=expected_session_path,
-        workspace_dir=workspace_dir,
-        stdin_file=prompt_path,
-        result_output=result_path,
-        child_stderr_output=child_stderr_path,
-        timeout_seconds=timeout_seconds,
-        operation_callback=operation_callback,
-        cancel_event=cancel_event,
-        stream_output=stream_output,
-    )
-    result = parse_adapter_result_file(result_path) or parse_adapter_result(stdout)
+    protocol_command: list[str] = []
+    terminal_launcher_name: str | None = None
+    cancelled_before_execution = cancel_event is not None and cancel_event.is_set()
+    if cancelled_before_execution:
+        child = {
+            "returncode": None,
+            "timed_out": False,
+            "interrupted": True,
+            "output_limit_exceeded": False,
+        }
+        stdout = b""
+        stderr = b""
+        result = None
+    elif selected_execution_mode == "terminal":
+        workspace_prompt_path = (
+            workspace_dir / CONFIG_DIR / "runtime-prompts" / f"{attempt_id}.md"
+        )
+        workspace_prompt_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with workspace_prompt_path.open("x", encoding="utf-8") as prompt_file:
+                prompt_file.write(prompt)
+        except FileExistsError:
+            raise FileExistsError(
+                f"interactive prompt staging path already exists: {workspace_prompt_path}"
+            ) from None
+        interactive_prompt_argument = (
+            "Read and follow the complete LoopForge implementation prompt in "
+            f"{workspace_prompt_path.relative_to(workspace_dir).as_posix()}. "
+            "Treat it as the initial instructions for this session."
+        )
+        try:
+            command = interactive_implementation_command(
+                adapter=adapter,
+                adapter_args=adapter_args,
+                workspace_dir=workspace_dir,
+                prompt=interactive_prompt_argument,
+            )
+            terminal = launch_terminal_session(
+                command=tuple(command),
+                cwd=workspace_dir,
+                title=f"LoopForge {run.get('run_id')} / {attempt_id} / {adapter}",
+                timeout_seconds=timeout_seconds,
+                artifacts_dir=attempt_dir,
+                cancel_event=cancel_event,
+                terminal_launcher=terminal_launcher,
+            )
+        finally:
+            workspace_prompt_path.unlink(missing_ok=True)
+        terminal_launcher_name = terminal.launcher
+        cancelled_before_fallback = terminal.interrupted or (
+            not terminal.launched
+            and cancel_event is not None
+            and cancel_event.is_set()
+        )
+        if (
+            not terminal.launched
+            and implementation_mode == "auto"
+            and not cancelled_before_fallback
+        ):
+            terminal_fallback_reason = terminal.error or "terminal launcher was unavailable"
+            selected_execution_mode = "headless"
+            command = command_for_attempt(
+                adapter=adapter,
+                adapter_args=adapter_args,
+                workspace_dir=workspace_dir,
+                run_dir=run_dir,
+            )
+        else:
+            protocol_command = list(terminal.launcher_command)
+            child = {
+                "returncode": terminal.returncode,
+                "timed_out": terminal.timed_out,
+                "interrupted": cancelled_before_fallback,
+                "output_limit_exceeded": False,
+            }
+            stdout = b""
+            stderr = terminal.error.encode("utf-8", errors="replace")
+            result = None
+    if selected_execution_mode == "headless" and not cancelled_before_execution:
+        protocol_command = adapter_protocol_command(
+            adapter=adapter,
+            command=command,
+            expected_session_path=expected_session_path,
+            workspace_dir=workspace_dir,
+            stdin_file=prompt_path,
+            result_output=result_path,
+            child_stderr_output=child_stderr_path,
+        )
+        child, stdout, stderr = execute_adapter_command(
+            adapter=adapter,
+            command=command,
+            expected_session_path=expected_session_path,
+            workspace_dir=workspace_dir,
+            stdin_file=prompt_path,
+            result_output=result_path,
+            child_stderr_output=child_stderr_path,
+            timeout_seconds=timeout_seconds,
+            operation_callback=operation_callback,
+            cancel_event=cancel_event,
+            stream_output=stream_output,
+        )
+        result = parse_adapter_result_file(result_path) or parse_adapter_result(stdout)
 
     finished = utc_now()
     after_snapshot = workspace_snapshot(workspace_dir)
     after_git = git_status_entries(workspace_dir)
-    workspace_changes = (
-        after_git
-        if after_git is not None
-        else workspace_snapshot_changes(before_snapshot, after_snapshot)
+    after_git_paths = (
+        git_status_paths(workspace_dir) if selected_execution_mode == "terminal" else None
     )
-    snapshot_changed = before_snapshot != after_snapshot
+    after_head = (
+        detect_git_base_commit(workspace_dir)
+        if selected_execution_mode == "terminal"
+        else None
+    )
+    after_nested_git = (
+        nested_git_fingerprints(workspace_dir)
+        if selected_execution_mode == "terminal"
+        else {}
+    )
+    snapshot_changes = workspace_snapshot_changes(before_snapshot, after_snapshot)
+    if (
+        selected_execution_mode == "terminal"
+        and before_git is not None
+        and after_git is not None
+    ):
+        visible_paths = (
+            before_git_paths
+            if before_git_paths is not None
+            else git_status_entry_paths(before_git)
+        ) | (
+            after_git_paths
+            if after_git_paths is not None
+            else git_status_entry_paths(after_git)
+        )
+        workspace_changes = [
+            change
+            for change in snapshot_changes
+            if terminal_snapshot_change_visible(
+                change[2:],
+                visible_paths,
+                before_nested_git,
+                after_nested_git,
+            )
+        ]
+        if before_head is not None and after_head is not None:
+            workspace_changes = list(
+                dict.fromkeys(
+                    [
+                        *workspace_changes,
+                        *git_commit_changes(workspace_dir, before_head, after_head),
+                    ]
+                )
+            )
+    elif selected_execution_mode == "terminal":
+        workspace_changes = snapshot_changes
+    else:
+        workspace_changes = after_git if after_git is not None else snapshot_changes
+
+    if (
+        selected_execution_mode == "terminal"
+        and not workspace_changes
+        and session.get("recovery_authorized") is True
+    ):
+        if after_git:
+            workspace_changes = list(after_git)
+        else:
+            base_commit = run.get("base_commit")
+            if isinstance(base_commit, str) and after_head is not None:
+                workspace_changes = git_commit_changes(
+                    workspace_dir,
+                    base_commit,
+                    after_head,
+                )
+    snapshot_changed = bool(snapshot_changes)
     returncode = child.get("returncode")
-    completed = bool(child.get("completed")) and returncode == 0
     timed_out = bool(child.get("timed_out"))
     output_limit_exceeded = bool(child.get("output_limit_exceeded"))
     interrupted = bool(child.get("interrupted"))
+    observed_workspace_changed = bool(workspace_changes)
 
     if interrupted:
-        status = "interrupted"
+        status = "failed"
         result = synthetic_adapter_result(
             session=session,
             status=status,
             summary="Adapter execution was interrupted.",
             workspace_changed=snapshot_changed,
+        )
+    elif selected_execution_mode == "terminal":
+        if timed_out:
+            status = "failed"
+            summary = "Interactive terminal session timed out."
+        elif returncode is None:
+            status = "failed"
+            summary = "Interactive terminal session could not start."
+        elif observed_workspace_changed:
+            status = "completed"
+            summary = (
+                "Interactive terminal session changed the workspace and ended "
+                f"with return code {returncode}; continuing to verification."
+                if returncode not in (0, None)
+                else "Interactive terminal session completed with workspace changes."
+            )
+        elif returncode != 0:
+            status = "failed"
+            summary = f"Interactive terminal session failed with return code {returncode}."
+        else:
+            status = "blocked"
+            summary = "Interactive terminal session completed without workspace changes."
+        result = synthetic_adapter_result(
+            session=session,
+            status=status,
+            summary=summary,
+            workspace_changed=observed_workspace_changed,
         )
     elif result is None:
         status = "failed"
@@ -682,8 +913,15 @@ def execute_attempt(
         "id": attempt_id,
         "number": number,
         "adapter": adapter,
-        "command": command,
+        "command": (
+            redacted_interactive_command(command, interactive_prompt_argument)
+            if selected_execution_mode == "terminal"
+            else command
+        ),
         "protocol_command": protocol_command,
+        "execution_mode": selected_execution_mode,
+        "terminal_launcher": terminal_launcher_name,
+        "terminal_fallback_reason": terminal_fallback_reason or None,
         "started_at": started,
         "finished_at": finished,
         "status": status,
@@ -783,6 +1021,7 @@ def continue_run(
     operation_callback: OperationCallback | None = None,
     cancel_event: threading.Event | None = None,
     stream_output: bool = True,
+    implementation_mode: str = "auto",
 ) -> ContinueResult:
     from loopforge.engine import (
         ADAPTER_BLOCKED,
@@ -935,6 +1174,7 @@ def continue_run(
             operation_callback=operation_callback,
             cancel_event=cancel_event,
             stream_output=stream_output,
+            implementation_mode=implementation_mode,
         )
         updated_run = update_run_after_attempt(
             project_dir=status.project_dir,

@@ -108,9 +108,21 @@ loopforge shell --script commands.loopforge
 
 Kilo Code is available as `kilo-code`. Install its `kilo` executable first,
 then select it with `loopforge shell --command "/adapter kilo-code"`. LoopForge
-uses Kilo's read-only `ask` agent for research, planning, and review, and its
-`code` agent for implementation; pass `--agent <name>` after `--` to override
-either default.
+uses Kilo's read-only `ask` agent for headless research, planning, and review,
+and its `code` agent for implementation. Interactive stages use a writable
+harness because the final structured artifact must be saved to LoopForge's
+controlled candidate path; LoopForge still rejects every other worktree change.
+
+All agentic stages use `--execution-mode auto` by default. On Windows, Codex,
+Claude Code, Kilo Code, and OpenCode open in a separate interactive terminal
+rooted in the run worktree for research, planning, implementation, and review.
+For research, planning, and review, the initial prompt tells the harness to save
+its final Markdown to a temporary candidate file. LoopForge removes that file,
+validates the artifact and the unchanged worktree, then resumes the normal
+pipeline. Use `loopforge run --execution-mode headless` for the read-only stages
+and `loopforge continue --execution-mode headless --adapter <adapter>` for
+implementation, or use `--execution-mode terminal` to require a visible launcher
+instead of allowing the automatic headless fallback.
 
 ## CLI Conventions
 

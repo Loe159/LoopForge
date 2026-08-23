@@ -24,7 +24,9 @@ except ImportError:  # pragma: no cover - exercised only in minimal installs.
 
 from loopforge.engine import (
     DEFAULT_ADAPTER,
+    DEFAULT_AGENT_EXECUTION_MODE,
     DEFAULT_PROFILE,
+    AGENT_EXECUTION_MODES,
     SUPPORTED_ADAPTERS,
     archive_current_run,
     archive_run,
@@ -1170,6 +1172,11 @@ class InteractiveShell:
     ) -> DispatchResult:
         parser = argparse.ArgumentParser(prog="/continue", add_help=False)
         parser.add_argument("--adapter", choices=SUPPORTED_ADAPTERS)
+        parser.add_argument(
+            "--execution-mode",
+            choices=AGENT_EXECUTION_MODES,
+            default=DEFAULT_AGENT_EXECUTION_MODE,
+        )
         parser.add_argument("--check", action="store_true")
         parser.add_argument("--confirm", action="store_true")
         parser.add_argument("adapter_args", nargs=argparse.REMAINDER)
@@ -1203,6 +1210,7 @@ class InteractiveShell:
             adapter,
             chosen_args,
             confirmed=confirmed,
+            implementation_mode=args.execution_mode,
             operation_callback=operation_callback,
             cancel_event=cancel_event,
         )
@@ -1213,6 +1221,7 @@ class InteractiveShell:
         adapter_args: list[str],
         *,
         confirmed: bool,
+        implementation_mode: str = DEFAULT_AGENT_EXECUTION_MODE,
         operation_callback=None,
         cancel_event: Event | None = None,
     ) -> DispatchResult:
@@ -1222,6 +1231,7 @@ class InteractiveShell:
                 adapter=adapter,
                 adapter_args=adapter_args,
                 confirmed=confirmed,
+                implementation_mode=implementation_mode,
                 operation_callback=operation_callback,
                 cancel_event=cancel_event,
                 stream_output=operation_callback is None,

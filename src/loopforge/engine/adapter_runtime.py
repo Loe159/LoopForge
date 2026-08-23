@@ -26,21 +26,13 @@ import time
 from pathlib import Path
 from typing import Any
 
+from loopforge.adapters.commands import adapter_command, headless_implementation_command
 from loopforge.engine.process_runner import ProcessRunner
 from loopforge.engine.execution import OperationCallback
 
 
 def command_for_adapter(adapter: str, adapter_args: list[str]) -> list[str]:
-    from loopforge.engine import AGENT_COMMANDS
-
-    if adapter == "local-adapter-fixture":
-        if not adapter_args:
-            raise ValueError("local-adapter-fixture requires a command after --")
-        return adapter_args
-    command = AGENT_COMMANDS.get(adapter)
-    if command is None:
-        raise ValueError(f"unsupported adapter: {adapter}")
-    return [command, *adapter_args]
+    return adapter_command(adapter, adapter_args)
 
 
 def command_for_readonly_stage(
@@ -153,31 +145,12 @@ def command_for_attempt(
     workspace_dir: Path | None = None,
     run_dir: Path | None = None,
 ) -> list[str]:
-    from loopforge.engine import DEFAULT_IMPLEMENTATION_AGENT, kilo_headless_run_command
-
-    if adapter == "codex":
-        args = list(adapter_args)
-        if not args:
-            args = ["exec"]
-        elif args[0] not in {"exec", "e"}:
-            args = ["exec", *args]
-        if "-s" not in args and "--sandbox" not in args:
-            args[1:1] = ["-s", "workspace-write"]
-        if workspace_dir is not None and "-C" not in args and "--cd" not in args:
-            args[1:1] = ["--cd", str(workspace_dir)]
-        if "--color" not in args:
-            args[1:1] = ["--color", "never"]
-        if "--json" not in args:
-            args[1:1] = ["--json"]
-        if "-" not in args:
-            args.append("-")
-        return ["codex", *args]
-    if adapter == "kilo-code":
-        return kilo_headless_run_command(
-            adapter_args,
-            default_agent=DEFAULT_IMPLEMENTATION_AGENT,
-        )
-    return command_for_adapter(adapter, adapter_args)
+    del run_dir
+    return headless_implementation_command(
+        adapter=adapter,
+        adapter_args=adapter_args,
+        workspace_dir=workspace_dir,
+    )
 
 
 def validate_attempt_result(
@@ -301,6 +274,17 @@ def run_streaming_process(
     # stderr/stdout). ProcessRunner is for bounded non-interactive subprocess
     # checks and Git queries. The low-level isolation policy is still enforced
     # via isolated_process.
+    if cancel_event is not None and cancel_event.is_set():
+        return {
+            "completed": False,
+            "returncode": None,
+            "timed_out": False,
+            "interrupted": True,
+            "output_limit_exceeded": False,
+            "stdout": b"",
+            "stderr": b"",
+        }
+
     from loopforge.engine import isolated_process_module
 
     isolated_process = isolated_process_module()

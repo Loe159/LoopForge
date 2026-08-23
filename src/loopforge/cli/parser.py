@@ -6,7 +6,12 @@ import argparse
 from pathlib import Path
 
 from loopforge.cli.errors import DOCS_URL, CliUsageError
-from loopforge.engine import DEFAULT_PROFILE, SUPPORTED_ADAPTERS
+from loopforge.engine import (
+    AGENT_EXECUTION_MODES,
+    DEFAULT_AGENT_EXECUTION_MODE,
+    DEFAULT_PROFILE,
+    SUPPORTED_ADAPTERS,
+)
 
 
 class LoopForgeArgumentParser(argparse.ArgumentParser):
@@ -203,6 +208,16 @@ class CliParserBuilder:
             help="Maximum wall-clock seconds allowed by the loop contract.",
         )
         run_parser.add_argument(
+            "--execution-mode",
+            choices=AGENT_EXECUTION_MODES,
+            default=DEFAULT_AGENT_EXECUTION_MODE,
+            help=(
+                "Use visible supervised harness terminals for agentic stages, use the "
+                "headless runners, or automatically fall back to headless when no "
+                "interactive launcher exists."
+            ),
+        )
+        run_parser.add_argument(
             "--rubric",
             default="",
             help="Subjective quality rubric required before autonomous subjective work.",
@@ -329,6 +344,15 @@ class CliParserBuilder:
             "--adapter",
             choices=SUPPORTED_ADAPTERS,
             help="Adapter to use for a bounded Phase 4 attempt.",
+        )
+        continue_parser.add_argument(
+            "--execution-mode",
+            choices=AGENT_EXECUTION_MODES,
+            default=DEFAULT_AGENT_EXECUTION_MODE,
+            help=(
+                "Use a supervised separate terminal, the existing headless runner, "
+                "or automatically fall back to headless when no interactive launcher exists."
+            ),
         )
         continue_parser.add_argument(
             "--confirm",

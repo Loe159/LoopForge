@@ -16,13 +16,27 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from loopforge.adapters.commands import (
+    InteractiveAdapterUnavailable,
+    interactive_stage_command,
+    redacted_interactive_command,
+    require_interactive_adapter,
+)
 from loopforge.engine.lifecycle import (
     RunStage,
     StageStatus,
 )
+from loopforge.engine.terminal import (
+    TerminalLauncher,
+    TerminalSessionResult,
+    launch_terminal_session,
+)
 from loopforge.engine.workflow import StageResult
 from loopforge.engine.path_resolvers import resolve_confined
 from loopforge.engine.execution import OperationCallback
+
+
+MAX_INTERACTIVE_STAGE_ARTIFACT_BYTES = 1_000_000
 
 
 def next_readonly_stage(run: dict[str, Any]) -> str | None:
@@ -250,10 +264,13 @@ def execute_readonly_stage(
     stage: str,
     adapter: str,
     adapter_args: list[str] | None = None,
+    execution_mode: str = "auto",
+    terminal_launcher: TerminalLauncher | None = None,
     operation_callback: OperationCallback | None = None,
     cancel_event: threading.Event | None = None,
 ) -> StageResult:
     from loopforge.engine import (
+        AGENT_EXECUTION_MODES,
         READONLY_STAGE_SUCCESS,
         attempt_timeout,
         codex_workspace_preflight_blockers,
@@ -276,6 +293,7 @@ def execute_readonly_stage(
         utc_now,
         workspace_snapshot,
         write_bytes,
+        write_json_atomic,
     )
 
     status = current_status(project_dir)
@@ -301,6 +319,26 @@ def execute_readonly_stage(
         )
     run = normalize_run_workflow_state(status.run)
     run_json_path = status.run_json_path or (status.run_dir / "run.json")
+    if execution_mode not in AGENT_EXECUTION_MODES:
+        blockers = [
+            "read-only stage execution_mode must be auto, terminal, or headless."
+        ]
+        updated = update_run_for_stage_blocker(
+            project_dir=status.project_dir,
+            run_json_path=run_json_path,
+            run=run,
+            stage=stage,
+            blockers=blockers,
+        )
+        return StageResult(
+            project_dir=status.project_dir,
+            run_dir=status.run_dir,
+            run=updated,
+            stage=stage,
+            ok=False,
+            message=f"LoopForge {stage} stage is blocked.",
+            blockers=blockers,
+        )
     blockers = readonly_stage_prerequisite_blockers(run, stage)
     if blockers:
         updated = update_run_for_stage_blocker(
@@ -377,6 +415,34 @@ def execute_readonly_stage(
             blockers=blockers,
         )
 
+    selected_execution_mode = execution_mode
+    terminal_fallback_reason = ""
+    if execution_mode != "headless":
+        try:
+            require_interactive_adapter(adapter)
+            selected_execution_mode = "terminal"
+        except InteractiveAdapterUnavailable as error:
+            if execution_mode == "terminal":
+                blockers = [f"interactive {stage} adapter is unavailable: {error}"]
+                updated = update_run_for_stage_blocker(
+                    project_dir=status.project_dir,
+                    run_json_path=run_json_path,
+                    run=run,
+                    stage=stage,
+                    blockers=blockers,
+                )
+                return StageResult(
+                    project_dir=status.project_dir,
+                    run_dir=status.run_dir,
+                    run=updated,
+                    stage=stage,
+                    ok=False,
+                    message=f"LoopForge {stage} stage is blocked.",
+                    blockers=blockers,
+                )
+            selected_execution_mode = "headless"
+            terminal_fallback_reason = str(error)
+
     stage_dir = status.run_dir / "artifacts" / "stages" / stage
     stage_dir.mkdir(parents=True, exist_ok=True)
     emit_operation_event(
@@ -385,14 +451,22 @@ def execute_readonly_stage(
         f"Starting read-only {stage} stage.",
         artifact=str(stage_dir),
     )
+    runtime_stage_dir = workspace_dir / ".loopforge" / "runtime-stages"
+    runtime_prompt_path = runtime_stage_dir / f"{stage}-prompt.md"
+    candidate_path = runtime_stage_dir / f"{stage}-candidate.md"
     prompt = render_stage_prompt(
         stage=stage,
         run=run,
         run_dir=status.run_dir,
         workspace_dir=workspace_dir,
         adapter=adapter,
+        artifact_output_path=(
+            candidate_path if selected_execution_mode == "terminal" else None
+        ),
     )
     (stage_dir / "prompt.md").write_text(prompt, encoding="utf-8")
+    runtime_prompt_path.unlink(missing_ok=True)
+    candidate_path.unlink(missing_ok=True)
     before_snapshot = workspace_snapshot(workspace_dir)
     before_git = git_status_entries(workspace_dir)
     if cancel_event is not None and cancel_event.is_set():
@@ -420,29 +494,114 @@ def execute_readonly_stage(
             message=f"LoopForge {stage} stage was interrupted.",
             blockers=blockers,
         )
+    timeout_seconds = attempt_timeout(run, status.loop_contract or {})
+    terminal_result: TerminalSessionResult | None = None
+    terminal_candidate_expected = False
+    terminal_candidate_present = False
+    terminal_candidate_limit_exceeded = False
+    command: list[str] = []
     try:
-        command = command_for_readonly_stage(
-            adapter=adapter,
-            adapter_args=adapter_args or [],
-            workspace_dir=workspace_dir,
-            run_dir=status.run_dir,
-        )
-        if adapter == "local-adapter-fixture":
-            child, stdout, stderr = execute_fixture_command(
-                command=command,
-                prompt=prompt.encode("utf-8"),
-                project_dir=workspace_dir,
-                timeout_seconds=attempt_timeout(run, status.loop_contract or {}),
+        if selected_execution_mode == "terminal":
+            runtime_stage_dir.mkdir(parents=True, exist_ok=True)
+            with runtime_prompt_path.open("x", encoding="utf-8") as prompt_file:
+                prompt_file.write(prompt)
+            prompt_reference = runtime_prompt_path.relative_to(workspace_dir).as_posix()
+            candidate_reference = candidate_path.relative_to(workspace_dir).as_posix()
+            interactive_prompt = (
+                "Read and follow the complete LoopForge "
+                f"{stage} prompt in {prompt_reference}. Before ending this session, "
+                f"write the complete final UTF-8 Markdown artifact to {candidate_reference}. "
+                "Do not only print the artifact in the terminal. Do not modify, stage, "
+                "or commit any other worktree file. The candidate file is the only "
+                "worktree write LoopForge permits for this stage."
             )
-        else:
-            child, stdout, stderr = execute_readonly_adapter_command(
-                command=command,
-                prompt=prompt.encode("utf-8"),
-                project_dir=workspace_dir,
-                timeout_seconds=attempt_timeout(run, status.loop_contract or {}),
-                operation_callback=operation_callback,
-                cancel_event=cancel_event,
+            command = interactive_stage_command(
+                adapter=adapter,
+                adapter_args=adapter_args or [],
+                workspace_dir=workspace_dir,
+                prompt=interactive_prompt,
             )
+            try:
+                terminal_result = launch_terminal_session(
+                    command=tuple(command),
+                    cwd=workspace_dir,
+                    title=f"LoopForge {run.get('run_id')} / {stage} / {adapter}",
+                    timeout_seconds=timeout_seconds,
+                    artifacts_dir=stage_dir,
+                    cancel_event=cancel_event,
+                    terminal_launcher=terminal_launcher,
+                )
+            finally:
+                runtime_prompt_path.unlink(missing_ok=True)
+
+            cancelled_before_fallback = terminal_result.interrupted or (
+                not terminal_result.launched
+                and cancel_event is not None
+                and cancel_event.is_set()
+            )
+            if (
+                not terminal_result.launched
+                and execution_mode == "auto"
+                and not cancelled_before_fallback
+            ):
+                terminal_fallback_reason = (
+                    terminal_result.error or "terminal launcher was unavailable"
+                )
+                selected_execution_mode = "headless"
+                prompt = render_stage_prompt(
+                    stage=stage,
+                    run=run,
+                    run_dir=status.run_dir,
+                    workspace_dir=workspace_dir,
+                    adapter=adapter,
+                )
+                (stage_dir / "prompt.md").write_text(prompt, encoding="utf-8")
+            else:
+                terminal_candidate_expected = terminal_result.launched
+                try:
+                    with candidate_path.open("rb") as candidate_file:
+                        terminal_candidate_present = True
+                        stdout = candidate_file.read(
+                            MAX_INTERACTIVE_STAGE_ARTIFACT_BYTES + 1
+                        )
+                except FileNotFoundError:
+                    stdout = b""
+                if len(stdout) > MAX_INTERACTIVE_STAGE_ARTIFACT_BYTES:
+                    terminal_candidate_limit_exceeded = True
+                    stdout = stdout[:MAX_INTERACTIVE_STAGE_ARTIFACT_BYTES]
+                stderr = terminal_result.error.encode("utf-8", errors="replace")
+                child = {
+                    "completed": terminal_result.launched
+                    and not terminal_result.timed_out,
+                    "returncode": terminal_result.returncode,
+                    "timed_out": terminal_result.timed_out,
+                    "interrupted": cancelled_before_fallback,
+                    "output_limit_exceeded": False,
+                }
+
+        if selected_execution_mode == "headless":
+            command = command_for_readonly_stage(
+                adapter=adapter,
+                adapter_args=adapter_args or [],
+                workspace_dir=workspace_dir,
+                run_dir=status.run_dir,
+            )
+            if adapter == "local-adapter-fixture":
+                child, stdout, stderr = execute_fixture_command(
+                    command=command,
+                    prompt=prompt.encode("utf-8"),
+                    project_dir=workspace_dir,
+                    timeout_seconds=timeout_seconds,
+                )
+            else:
+                child, stdout, stderr = execute_readonly_adapter_command(
+                    command=command,
+                    prompt=prompt.encode("utf-8"),
+                    project_dir=workspace_dir,
+                    timeout_seconds=timeout_seconds,
+                    operation_callback=operation_callback,
+                    cancel_event=cancel_event,
+                )
     except (OSError, RuntimeError, ValueError) as error:
         blockers = [f"read-only {stage} adapter execution could not start: {error}"]
         updated = update_run_for_stage_blocker(
@@ -461,6 +620,31 @@ def execute_readonly_stage(
             message=f"LoopForge {stage} stage is blocked.",
             blockers=blockers,
         )
+    finally:
+        runtime_prompt_path.unlink(missing_ok=True)
+        candidate_path.unlink(missing_ok=True)
+
+    write_json_atomic(
+        stage_dir / "execution.json",
+        {
+            "execution_mode": selected_execution_mode,
+            "terminal_launcher": (
+                terminal_result.launcher if terminal_result is not None else None
+            ),
+            "terminal_launched": (
+                terminal_result.launched if terminal_result is not None else False
+            ),
+            "terminal_fallback_reason": terminal_fallback_reason,
+            "candidate_present": terminal_candidate_present,
+            "candidate_limit_exceeded": terminal_candidate_limit_exceeded,
+            "returncode": child.get("returncode"),
+            "command": (
+                redacted_interactive_command(command, interactive_prompt)
+                if terminal_candidate_expected
+                else command
+            ),
+        },
+    )
     after_snapshot = workspace_snapshot(workspace_dir)
     after_git = git_status_entries(workspace_dir)
     write_bytes(stage_dir / "adapter.stdout", stdout)
@@ -477,11 +661,27 @@ def execute_readonly_stage(
         after_git=after_git,
     )
     returncode = child.get("returncode")
-    if cancel_event is not None and cancel_event.is_set():
+    execution_interrupted = bool(child.get("interrupted")) or (
+        selected_execution_mode == "headless"
+        and cancel_event is not None
+        and cancel_event.is_set()
+    )
+    if (
+        selected_execution_mode == "terminal"
+        and terminal_result is not None
+        and not terminal_result.launched
+    ):
+        blockers = [
+            f"interactive {stage} terminal could not start: "
+            + (terminal_result.error or "launcher unavailable")
+        ]
+    elif execution_interrupted:
         blockers = [f"read-only {stage} stage was interrupted; its evidence was retained."]
-    elif not bool(child.get("completed")):
+    elif bool(child.get("timed_out")):
         blockers = [f"read-only {stage} adapter timed out."]
-    elif returncode != 0:
+    elif not bool(child.get("completed")):
+        blockers = [f"read-only {stage} adapter did not complete."]
+    elif returncode != 0 and not (terminal_candidate_expected and stdout):
         blockers = [f"read-only {stage} adapter failed with return code {returncode}."]
     else:
         blockers = []
@@ -491,6 +691,15 @@ def execute_readonly_stage(
             + "; ".join(worktree_changes[:10])
         )
     artifact_validation_blockers: list[str] = []
+    if terminal_candidate_limit_exceeded:
+        artifact_validation_blockers.append(
+            f"interactive {stage} candidate exceeded "
+            f"{MAX_INTERACTIVE_STAGE_ARTIFACT_BYTES} bytes."
+        )
+    elif terminal_candidate_expected and not terminal_candidate_present:
+        artifact_validation_blockers.append(
+            f"interactive {stage} terminal did not produce its candidate artifact."
+        )
     try:
         artifact_text = stdout.decode("utf-8")
     except UnicodeDecodeError:
@@ -520,10 +729,10 @@ def execute_readonly_stage(
         )
         emit_operation_event(
             operation_callback,
-            "cancelled" if cancel_event is not None and cancel_event.is_set() else "blocked",
+            "cancelled" if execution_interrupted else "blocked",
             f"Read-only {stage} stage is blocked.",
             artifact=str(stage_dir),
-            status="cancelled" if cancel_event is not None and cancel_event.is_set() else "blocked",
+            status="cancelled" if execution_interrupted else "blocked",
         )
         return StageResult(
             project_dir=status.project_dir,
