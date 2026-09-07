@@ -476,31 +476,28 @@ def list_registered_projects(home: Path | None = None) -> ProjectListResult:
     from loopforge.engine import (
         attention_order,
         loopforge_home,
-        project_registry_summary,
     )
 
     home_root = loopforge_home(home=home)
     projects: list[dict[str, Any]] = []
-    blockers: list[str] = []
     for record in project_registry.registered_projects(home_root):
-        if record.get("summary_revision") == 1:
-            summary, summary_blockers = dict(record), []
-        else:
-            # One compatibility scan upgrades registries created before the
-            # compact summary existed. Normal Home reads never enter projects.
-            summary, summary_blockers = project_registry_summary(record)
-            if summary.get("project_id"):
-                try:
-                    project_registry.update_project_summary(home_root, str(summary["project_id"]), summary)
-                except OSError:
-                    summary_blockers.append("project summary registry is unavailable")
+        # Home is an index view: it must never probe every registered path.
+        # Legacy rows remain useful immediately and are refreshed through the
+        # normal selected-project load when the operator opens one.
+        summary = record
+        summary.setdefault("initialized", False)
+        summary.setdefault("run_count", 0)
+        summary.setdefault("attention", "ready")
+        summary.setdefault("last_activity", summary.get("last_opened_at") or "")
+        summary.setdefault("branch", summary.get("last_known_branch"))
+        summary.setdefault("default_adapter", "")
+        summary.setdefault("latest_pack", "")
         projects.append(summary)
-        blockers.extend(summary_blockers)
     projects.sort(key=lambda value: (attention_order(value.get("attention")), str(value.get("last_activity") or "")), reverse=False)
     # Recent activity is descending within the same attention family.
     projects.sort(key=lambda value: str(value.get("last_activity") or ""), reverse=True)
     projects.sort(key=lambda value: attention_order(value.get("attention")))
-    return ProjectListResult(home_root, projects, blockers)
+    return ProjectListResult(home_root, projects, [])
 
 
 def list_runs_all_projects(home: Path | None = None) -> GlobalRunListResult:

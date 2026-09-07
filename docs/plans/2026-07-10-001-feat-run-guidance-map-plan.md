@@ -150,7 +150,6 @@ flowchart TB
 
 ### Sources / Research
 
-- `docs/cli-ux-command-plan.md` defines the existing command-by-command UX principle.
 - `docs/product-architecture.md` states that the CLI should explain next action without exposing receipt chains unless requested.
 - `docs/implementation-plan.md` defines the target loop: trigger, intake, loop design, attempt, verification, memory, next action or review.
 - `src/loopforge/engine.py` defines lifecycle statuses and current guidance actions.

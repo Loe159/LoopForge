@@ -471,7 +471,7 @@ flowchart TB
 ### Primary source map
 
 - Architecture et modules: `docs/agent/01-modules.md`, `docs/agent/02-architecture.md`, `docs/agent/04-reuse-catalog.md`.
-- Contrats UX: `docs/cli-ux-command-plan.md`, `src/loopforge/cli/actions.py`, `src/loopforge/cli/state_store.py`, `src/loopforge/cli/textual_app/app.py`.
+- Contrats UX: `DESIGN.md` pour l'ecran principal, `src/loopforge/cli/actions.py`, `src/loopforge/cli/state_store.py`, `src/loopforge/cli/textual_app/app.py`.
 - Lifecycle et verification: `src/loopforge/engine/__init__.py`, `src/loopforge/engine/packs.py`, `src/loopforge/checks/`.
 - Persistance: `src/loopforge/engine/storage.py`, `src/loopforge/engine/projects.py`, `src/loopforge/engine/indexes.py`.
 - Packaging et release: `pyproject.toml`, `README.md`, `CONTRIBUTING.md`, `docs/agent/06-build-test-run.md`.

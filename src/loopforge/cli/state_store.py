@@ -155,14 +155,20 @@ class StateStore:
     def invalidate(self, reason: str) -> None:
         self._pending_reasons.add(reason)
 
-    def refresh(self, project: Path | None = None, *, reason: str = "refresh") -> UiSnapshot:
+    def refresh(
+        self,
+        project: Path | None = None,
+        *,
+        reason: str = "refresh",
+        include_global_runs: bool = True,
+    ) -> UiSnapshot:
         if project is not None and project.resolve() != self._selected_project:
             self.select_project(project)
         identity = self.begin_load()
         status = self._status_loader(identity.project)
         runs_result = self._runs_loader(status)
         projects_result = self._projects_loader()
-        global_runs_result = self._global_runs_loader()
+        global_runs_result = self._global_runs_loader() if include_global_runs else None
         return self.publish_loaded(
             identity,
             status,
@@ -171,6 +177,26 @@ class StateStore:
             global_runs_result=global_runs_result,
             reason=reason,
         )
+
+    def refresh_global_runs(
+        self,
+        identity: LoadIdentity | None = None,
+        *,
+        reason: str = "global-runs-load",
+    ) -> UiSnapshot:
+        """Publish the global run index after the primary project snapshot."""
+
+        identity = identity or self.begin_load()
+        if not self.accepts(identity):
+            return self._snapshot
+        result = self._global_runs_loader()
+        if not self.accepts(identity):
+            return self._snapshot
+        self._global_runs = tuple(
+            _frozen_row(row) for row in getattr(result, "runs", ())
+        )
+        self.invalidate(reason)
+        return self.flush()
 
     def publish_loaded(
         self,

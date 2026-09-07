@@ -854,6 +854,11 @@ def _project_summary_from_index(
         (entry for entry in runs if str(entry.get("run_id") or "") == current_id),
         None,
     )
+    latest = max(
+        runs,
+        key=lambda entry: str(entry.get("updated_at") or entry.get("created_at") or ""),
+        default={},
+    )
     last_activity = max(
         (str(entry.get("updated_at") or entry.get("created_at") or "") for entry in runs),
         default="",
@@ -865,6 +870,8 @@ def _project_summary_from_index(
         "name": str(config.get("project_name") or project_dir.name),
         "path": str(project_dir.resolve()),
         "profile": str(config.get("profile") or ""),
+        "default_adapter": str(config.get("default_adapter") or ""),
+        "latest_pack": str((current or latest).get("pack") or ""),
         "run_root": str(config.get("run_root") or ""),
         "current_run_id": current_id or None,
         "run_count": len(runs),
@@ -873,7 +880,7 @@ def _project_summary_from_index(
         "branch": branch,
         "last_known_branch": branch,
         "git_head_signature": head_signature,
-        "summary_revision": 1,
+        "summary_revision": 2,
         "summary_source_timestamp": now,
         "index_state": index_state,
         "updated_at": now,
@@ -1942,6 +1949,9 @@ def project_registry_summary(record: dict[str, Any]) -> tuple[dict[str, Any], li
             "last_activity": last_activity or record.get("last_opened_at") or "",
             "branch": project_registry.git_branch(project_dir),
             "current_run_id": runs.current_run_id,
+            "default_adapter": str((status.config or {}).get("default_adapter") or ""),
+            "latest_pack": str((current or (runs.runs[0] if runs.runs else {})).get("pack") or ""),
+            "summary_revision": 2,
         },
         list(runs.blockers),
     )

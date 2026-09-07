@@ -10,7 +10,11 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from rich.text import Text
+from textual.app import ComposeResult
+from textual.containers import Container, Horizontal, Vertical
 from textual.widgets import OptionList
+from textual.widgets import Input, Static
 from textual.widgets.option_list import Option
 
 
@@ -36,7 +40,7 @@ class ScreenList(OptionList):
 
     # ── population ──────────────────────────────────────────────────────
 
-    def populate(self, items: list[Any], formatter: Callable[[Any], str]) -> None:
+    def populate(self, items: list[Any], formatter: Callable[[Any], Any]) -> None:
         """Replace all options, preserving the cursor when possible."""
 
         previous = self.highlighted or 0
@@ -75,3 +79,128 @@ class ScreenList(OptionList):
     @property
     def item_count(self) -> int:
         return len(self._items)
+
+
+class HomeHeader(Horizontal):
+    """Persistent LoopForge identity and global attention summary."""
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="home-brand"):
+            yield Static("LoopForge", id="home-product-name")
+            yield Static("", id="home-version")
+        yield Static("", id="home-summary")
+
+    def update_content(self, *, version: str, project_count: int, attention_count: int) -> None:
+        self.query_one("#home-version", Static).update(f"v{version}")
+        summary = Text(f"{project_count} projects · ")
+        start = len(summary)
+        summary.append(f"{attention_count} need attention")
+        summary.stylize("#FFB869", start)
+        self.query_one("#home-summary", Static).update(summary)
+
+
+class HomeMetrics(Container):
+    """Four factual metrics whose content follows the selected project row."""
+
+    _FIELD_IDS = ("primary", "secondary", "tertiary", "quaternary")
+
+    def __init__(self) -> None:
+        super().__init__(id="home-metrics", classes="home-panel")
+        self.border_title = "METRICS"
+
+    def compose(self) -> ComposeResult:
+        for field_id in self._FIELD_IDS:
+            with Vertical(classes="home-metric"):
+                yield Static("", id=f"home-metric-{field_id}-label", classes="home-metric-label")
+                yield Static("", id=f"home-metric-{field_id}-value", classes="home-metric-value")
+
+    def update_values(self, values: tuple[tuple[str, str], ...]) -> None:
+        for field_id, (label, value) in zip(self._FIELD_IDS, values, strict=True):
+            self.query_one(f"#home-metric-{field_id}-label", Static).update(label)
+            self.query_one(f"#home-metric-{field_id}-value", Static).update(value)
+
+
+class HomeListPanel(Container):
+    """Bordered dashboard list with an explicit active-panel treatment."""
+
+    def __init__(self, title: str, *, panel_id: str, list_id: str) -> None:
+        super().__init__(id=panel_id, classes="home-panel home-list-panel")
+        self.border_title = title
+        self.list_id = list_id
+
+    def compose(self) -> ComposeResult:
+        yield ScreenList(id=self.list_id)
+
+    def set_active(self, active: bool) -> None:
+        self.set_class(active, "focused")
+
+
+class HomeCommandInput(Input):
+    """Command field that stays out of Textual's automatic focus chain."""
+
+    can_focus = False
+
+    def set_command_active(self, active: bool) -> None:
+        self.can_focus = active
+        if not active and self.has_focus:
+            self.blur()
+
+
+class HomeCommandBar(Container):
+    """Persistent command-only input using the existing slash dispatcher."""
+
+    def __init__(self) -> None:
+        super().__init__(id="home-command-bar", classes="home-panel")
+        self.border_title = "Command Input"
+
+    def compose(self) -> ComposeResult:
+        yield HomeCommandInput(placeholder="› Type / for commands", id="home-command-input")
+        yield Static("/run   /status   /pack   /config", id="home-command-hint")
+
+    def update_hint(self, value: str) -> None:
+        self.query_one("#home-command-hint", Static).update(
+            value or "/run   /status   /pack   /config"
+        )
+
+
+class HomeHotkeyBar(Horizontal):
+    """Contextual keyboard guidance matching the selected dashboard state."""
+
+    def compose(self) -> ComposeResult:
+        yield Static("", id="home-hotkeys-left")
+        yield Static("", id="home-hotkeys-center")
+        yield Static("^q Quit", id="home-hotkeys-right")
+
+    def update_state(self, *, project_selected: bool, focus: str) -> None:
+        left = "^n New Run" if project_selected else ""
+        center = (
+            "Enter Focus runs   → Runs"
+            if focus == "projects"
+            else "Enter Open run   ← Projects"
+        )
+        self.query_one("#home-hotkeys-left", Static).update(left)
+        self.query_one("#home-hotkeys-center", Static).update(center)
+
+
+class HomeDashboard(Vertical):
+    """The assembled main screen; all other Textual screens remain untouched."""
+
+    def __init__(self) -> None:
+        super().__init__(id="home-dashboard")
+
+    def compose(self) -> ComposeResult:
+        yield HomeHeader(id="home-header")
+        yield HomeMetrics()
+        with Horizontal(id="home-columns"):
+            yield HomeListPanel(
+                "Projects",
+                panel_id="home-project-panel",
+                list_id="home-project-list",
+            )
+            yield HomeListPanel(
+                "Active runs",
+                panel_id="home-run-panel",
+                list_id="home-run-list",
+            )
+        yield HomeCommandBar()
+        yield HomeHotkeyBar(id="home-hotkeys")

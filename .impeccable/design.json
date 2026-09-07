@@ -1,0 +1,255 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-07T15:18:19.6077788+02:00",
+  "title": "Design System: LoopForge",
+  "extensions": {
+    "colorMeta": {
+      "inverse-black": {
+        "role": "neutral",
+        "displayName": "Inverse Black",
+        "canonical": "#0A0A0A",
+        "tonalRamp": ["oklch(15% 0.000 89.9)", "oklch(27% 0.000 89.9)", "oklch(39% 0.000 89.9)", "oklch(51% 0.000 89.9)", "oklch(63% 0.000 89.9)", "oklch(75% 0.000 89.9)", "oklch(87% 0.000 89.9)", "oklch(95% 0.000 89.9)"]
+      },
+      "metrics-recess": {
+        "role": "neutral",
+        "displayName": "Metrics Recess",
+        "canonical": "#0F0D15",
+        "tonalRamp": ["oklch(15% 0.017 296.0)", "oklch(27% 0.017 296.0)", "oklch(39% 0.017 296.0)", "oklch(51% 0.017 296.0)", "oklch(63% 0.017 296.0)", "oklch(75% 0.017 296.0)", "oklch(87% 0.017 296.0)", "oklch(95% 0.017 296.0)"]
+      },
+      "panel-ink": {
+        "role": "neutral",
+        "displayName": "Panel Ink",
+        "canonical": "#15121B",
+        "tonalRamp": ["oklch(15% 0.019 299.9)", "oklch(27% 0.019 299.9)", "oklch(39% 0.019 299.9)", "oklch(51% 0.019 299.9)", "oklch(63% 0.019 299.9)", "oklch(75% 0.019 299.9)", "oklch(87% 0.019 299.9)", "oklch(95% 0.019 299.9)"]
+      },
+      "command-slate": {
+        "role": "neutral",
+        "displayName": "Command Slate",
+        "canonical": "#1D1A23",
+        "tonalRamp": ["oklch(15% 0.018 300.2)", "oklch(27% 0.018 300.2)", "oklch(39% 0.018 300.2)", "oklch(51% 0.018 300.2)", "oklch(63% 0.018 300.2)", "oklch(75% 0.018 300.2)", "oklch(87% 0.018 300.2)", "oklch(95% 0.018 300.2)"]
+      },
+      "quiet-selection": {
+        "role": "neutral",
+        "displayName": "Quiet Selection",
+        "canonical": "#2C2832",
+        "tonalRamp": ["oklch(15% 0.019 303.4)", "oklch(27% 0.019 303.4)", "oklch(39% 0.019 303.4)", "oklch(51% 0.019 303.4)", "oklch(63% 0.019 303.4)", "oklch(75% 0.019 303.4)", "oklch(87% 0.019 303.4)", "oklch(95% 0.019 303.4)"]
+      },
+      "divider-violet": {
+        "role": "neutral",
+        "displayName": "Divider Violet",
+        "canonical": "#494454",
+        "tonalRamp": ["oklch(15% 0.027 299.4)", "oklch(27% 0.027 299.4)", "oklch(39% 0.027 299.4)", "oklch(51% 0.027 299.4)", "oklch(63% 0.027 299.4)", "oklch(75% 0.027 299.4)", "oklch(87% 0.027 299.4)", "oklch(95% 0.027 299.4)"]
+      },
+      "idle-border": {
+        "role": "neutral",
+        "displayName": "Idle Border",
+        "canonical": "#808080",
+        "tonalRamp": ["oklch(15% 0.000 89.9)", "oklch(27% 0.000 89.9)", "oklch(39% 0.000 89.9)", "oklch(51% 0.000 89.9)", "oklch(63% 0.000 89.9)", "oklch(75% 0.000 89.9)", "oklch(87% 0.000 89.9)", "oklch(95% 0.000 89.9)"]
+      },
+      "focus-violet": {
+        "role": "primary",
+        "displayName": "Focus Violet",
+        "canonical": "#8B5CF6",
+        "tonalRamp": ["oklch(15% 0.219 292.7)", "oklch(27% 0.219 292.7)", "oklch(39% 0.219 292.7)", "oklch(51% 0.219 292.7)", "oklch(63% 0.219 292.7)", "oklch(75% 0.219 292.7)", "oklch(87% 0.219 292.7)", "oklch(95% 0.219 292.7)"]
+      },
+      "muted-lilac-gray": {
+        "role": "neutral",
+        "displayName": "Muted Lilac Gray",
+        "canonical": "#958EA0",
+        "tonalRamp": ["oklch(15% 0.027 303.3)", "oklch(27% 0.027 303.3)", "oklch(39% 0.027 303.3)", "oklch(51% 0.027 303.3)", "oklch(63% 0.027 303.3)", "oklch(75% 0.027 303.3)", "oklch(87% 0.027 303.3)", "oklch(95% 0.027 303.3)"]
+      },
+      "quiet-text": {
+        "role": "neutral",
+        "displayName": "Quiet Text",
+        "canonical": "#C7C6C6",
+        "tonalRamp": ["oklch(15% 0.001 17.2)", "oklch(27% 0.001 17.2)", "oklch(39% 0.001 17.2)", "oklch(51% 0.001 17.2)", "oklch(63% 0.001 17.2)", "oklch(75% 0.001 17.2)", "oklch(87% 0.001 17.2)", "oklch(95% 0.001 17.2)"]
+      },
+      "secondary-text": {
+        "role": "neutral",
+        "displayName": "Secondary Text",
+        "canonical": "#CBC3D7",
+        "tonalRamp": ["oklch(15% 0.029 303.8)", "oklch(27% 0.029 303.8)", "oklch(39% 0.029 303.8)", "oklch(51% 0.029 303.8)", "oklch(63% 0.029 303.8)", "oklch(75% 0.029 303.8)", "oklch(87% 0.029 303.8)", "oklch(95% 0.029 303.8)"]
+      },
+      "focus-lavender": {
+        "role": "primary",
+        "displayName": "Focus Lavender",
+        "canonical": "#D0BCFF",
+        "tonalRamp": ["oklch(15% 0.095 298.0)", "oklch(27% 0.095 298.0)", "oklch(39% 0.095 298.0)", "oklch(51% 0.095 298.0)", "oklch(63% 0.095 298.0)", "oklch(75% 0.095 298.0)", "oklch(87% 0.095 298.0)", "oklch(95% 0.095 298.0)"]
+      },
+      "primary-text": {
+        "role": "neutral",
+        "displayName": "Primary Text",
+        "canonical": "#E7E0ED",
+        "tonalRamp": ["oklch(15% 0.019 309.8)", "oklch(27% 0.019 309.8)", "oklch(39% 0.019 309.8)", "oklch(51% 0.019 309.8)", "oklch(63% 0.019 309.8)", "oklch(75% 0.019 309.8)", "oklch(87% 0.019 309.8)", "oklch(95% 0.019 309.8)"]
+      },
+      "attention-amber": {
+        "role": "secondary",
+        "displayName": "Attention Amber",
+        "canonical": "#FFB869",
+        "tonalRamp": ["oklch(15% 0.126 67.5)", "oklch(27% 0.126 67.5)", "oklch(39% 0.126 67.5)", "oklch(51% 0.126 67.5)", "oklch(63% 0.126 67.5)", "oklch(75% 0.126 67.5)", "oklch(87% 0.126 67.5)", "oklch(95% 0.126 67.5)"]
+      },
+      "blocked-coral": {
+        "role": "secondary",
+        "displayName": "Blocked Coral",
+        "canonical": "#FFB4AB",
+        "tonalRamp": ["oklch(15% 0.089 26.8)", "oklch(27% 0.089 26.8)", "oklch(39% 0.089 26.8)", "oklch(51% 0.089 26.8)", "oklch(63% 0.089 26.8)", "oklch(75% 0.089 26.8)", "oklch(87% 0.089 26.8)", "oklch(95% 0.089 26.8)"]
+      },
+      "complete-mint": {
+        "role": "secondary",
+        "displayName": "Complete Mint",
+        "canonical": "#A8E6B0",
+        "tonalRamp": ["oklch(15% 0.097 148.1)", "oklch(27% 0.097 148.1)", "oklch(39% 0.097 148.1)", "oklch(51% 0.097 148.1)", "oklch(63% 0.097 148.1)", "oklch(75% 0.097 148.1)", "oklch(87% 0.097 148.1)", "oklch(95% 0.097 148.1)"]
+      }
+    },
+    "typographyMeta": {
+      "product": {
+        "displayName": "Product",
+        "purpose": "Persistent product identity in the header."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Terminal-native content, state, metrics, and commands."
+      },
+      "label": {
+        "displayName": "Muted Label",
+        "purpose": "Secondary labels, placeholders, version text, and hints."
+      }
+    },
+    "shadows": [],
+    "motion": [],
+    "breakpoints": [
+      {
+        "name": "compact-terminal",
+        "value": "60 columns",
+        "purpose": "Stacks project and run panels, contracts side margins, and removes secondary summary text."
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Home Header",
+      "kind": "custom",
+      "description": "Persistent identity and global attention summary.",
+      "html": "<header class=\"ds-home-header\"><div><strong>LoopForge</strong><span>v0.1.0</span></div><p>3 projects &middot; <b>1 need attention</b></p></header>",
+      "css": ".ds-home-header { display: flex; justify-content: space-between; align-items: center; min-height: 3em; padding: 0 2ch; border-bottom: 1px solid #494454; background: #15121B; color: #CBC3D7; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; } .ds-home-header div { display: grid; } .ds-home-header strong { color: #D0BCFF; } .ds-home-header span { color: #C7C6C6; } .ds-home-header p { margin: 0; } .ds-home-header b { color: #FFB869; font-weight: 400; }"
+    },
+    {
+      "name": "Metrics Panel",
+      "kind": "card",
+      "refersTo": "panel",
+      "description": "A compact two-by-two factual summary that follows project selection.",
+      "html": "<section class=\"ds-metrics\"><span class=\"ds-metrics-title\">METRICS</span><dl><div><dt>Projects</dt><dd>3</dd></div><div><dt>Active runs</dt><dd>6</dd></div><div><dt>Need attention</dt><dd>1</dd></div><div><dt>Default adapter</dt><dd>codex</dd></div></dl></section>",
+      "css": ".ds-metrics { position: relative; padding: 1.1em 2ch .6em; border: 1px solid #494454; border-radius: 0; background: #0F0D15; color: #E7E0ED; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; } .ds-metrics-title { position: absolute; top: -.65em; left: 1.5ch; padding: 0 .5ch; background: #0F0D15; color: #808080; } .ds-metrics dl { display: grid; grid-template-columns: 1fr 1fr; gap: .45em 4ch; margin: 0; } .ds-metrics dt { color: #958EA0; } .ds-metrics dd { margin: 0; color: #D0BCFF; }"
+    },
+    {
+      "name": "List Panel",
+      "kind": "card",
+      "refersTo": "panel",
+      "description": "A project or run list whose border and title make keyboard ownership explicit.",
+      "html": "<section class=\"ds-list-panel\" tabindex=\"0\"><span class=\"ds-list-title\">Projects</span><div class=\"ds-list-row ds-list-row-active\">All projects <span>6 runs</span></div><div class=\"ds-list-row\"><i>&#9670;</i> mobile-app <span>3 runs</span></div><div class=\"ds-list-row\"><i>&#9679;</i> design-system <span>2 runs</span></div></section>",
+      "css": ".ds-list-panel { position: relative; min-height: 10em; padding: 1em 1ch .5em; border: 1px solid #808080; border-radius: 0; outline: none; background: #15121B; color: #E7E0ED; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; } .ds-list-title { position: absolute; top: -.65em; left: 1.5ch; padding: 0 .5ch; background: #15121B; color: #808080; } .ds-list-panel:hover, .ds-list-panel:focus-visible, .ds-list-panel:focus-within { border-color: #8B5CF6; } .ds-list-panel:hover .ds-list-title, .ds-list-panel:focus-visible .ds-list-title, .ds-list-panel:focus-within .ds-list-title { color: #D0BCFF; } .ds-list-row { display: flex; gap: 1ch; padding: 0 1ch; } .ds-list-row-active { background: #2C2832; color: #E7E0ED; } .ds-list-row span { margin-left: auto; } .ds-list-row i { color: #FFB869; font-style: normal; } .ds-list-panel:hover .ds-list-row-active, .ds-list-panel:focus-visible .ds-list-row-active, .ds-list-panel:focus-within .ds-list-row-active { background: #D0BCFF; color: #0A0A0A; }"
+    },
+    {
+      "name": "Quiet Selection Row",
+      "kind": "custom",
+      "refersTo": "selection-row-quiet",
+      "description": "The visible cursor in a list that does not currently own keyboard focus.",
+      "html": "<div class=\"ds-selection-quiet\" tabindex=\"0\">mobile-app <span>3 runs</span></div>",
+      "css": ".ds-selection-quiet { display: flex; padding: 0 1ch; border-radius: 0; background: #2C2832; color: #E7E0ED; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; } .ds-selection-quiet span { margin-left: auto; } .ds-selection-quiet:hover, .ds-selection-quiet:focus-visible { outline: 1px solid #8B5CF6; outline-offset: -1px; }"
+    },
+    {
+      "name": "Focused Selection Row",
+      "kind": "custom",
+      "refersTo": "selection-row-focused",
+      "description": "The high-contrast row in the list that owns keyboard focus.",
+      "html": "<div class=\"ds-selection-focused\" tabindex=\"0\">All projects <span>6 runs</span></div>",
+      "css": ".ds-selection-focused { display: flex; padding: 0 1ch; border-radius: 0; background: #D0BCFF; color: #0A0A0A; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; } .ds-selection-focused span { margin-left: auto; } .ds-selection-focused:hover, .ds-selection-focused:focus-visible { outline: 1px solid #8B5CF6; outline-offset: -1px; } .ds-selection-focused:active { background: #E7E0ED; }"
+    },
+    {
+      "name": "Command Input",
+      "kind": "input",
+      "refersTo": "command-input",
+      "description": "A persistent command-only field with examples directly beneath it and a title cutout matching the home canvas.",
+      "html": "<label class=\"ds-command\"><span>Command Input</span><input type=\"text\" placeholder=\"&#8250; Type / for commands\"><small>/run&nbsp;&nbsp; /status&nbsp;&nbsp; /pack&nbsp;&nbsp; /config</small></label>",
+      "css": ".ds-command { position: relative; display: grid; gap: .2em; padding: .75em 1ch .5em; border: 1px solid #D0BCFF; border-radius: 0; background: #1D1A23; color: #D0BCFF; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; } .ds-command > span { position: absolute; top: -.65em; left: 1.5ch; padding: 0 .5ch; background: #15121B; } .ds-command input { padding: 0 1ch; border: 0; border-radius: 0; outline: none; background: #1D1A23; color: #E7E0ED; font: inherit; } .ds-command input::placeholder { color: #958EA0; } .ds-command input:hover::placeholder { color: #CBC3D7; } .ds-command input:focus-visible { color: #D0BCFF; } .ds-command small { padding: 0 1ch; color: #D0BCFF; font: inherit; }"
+    },
+    {
+      "name": "Hotkey Bar",
+      "kind": "nav",
+      "description": "Contextual keyboard guidance on the recessed footer surface, aligned to the left, center, and right edges.",
+      "html": "<nav class=\"ds-hotkeys\"><span>^n New Run</span><span>Enter Focus runs&nbsp;&nbsp; &rarr; Runs</span><span>^q Quit</span></nav>",
+      "css": ".ds-hotkeys { display: grid; grid-template-columns: 1fr 2fr 1fr; padding: .45em 2ch 0; border-top: 1px solid #494454; background: #0F0D15; color: #CBC3D7; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; } .ds-hotkeys span:nth-child(2) { text-align: center; color: #958EA0; } .ds-hotkeys span:last-child { text-align: right; } .ds-hotkeys span:hover, .ds-hotkeys span:focus-visible { color: #D0BCFF; outline: none; }"
+    },
+    {
+      "name": "Status Markers",
+      "kind": "chip",
+      "description": "Compact semantic glyphs that communicate row state without filling the row.",
+      "html": "<div class=\"ds-statuses\"><span class=\"ds-attention\">&#9670; Attention</span><span class=\"ds-running\">&#9679; Running</span><span class=\"ds-complete\">&#10003; Complete</span><span class=\"ds-blocked\">&times; Blocked</span></div>",
+      "css": ".ds-statuses { display: flex; flex-wrap: wrap; gap: .5em 2ch; padding: .6em 1ch; background: #15121B; color: #C7C6C6; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; } .ds-statuses span { background: transparent; } .ds-attention { color: #FFB869; } .ds-running { color: #D0BCFF; } .ds-complete { color: #A8E6B0; } .ds-blocked { color: #FFB4AB; } .ds-statuses span:hover, .ds-statuses span:focus-visible { text-decoration: underline; outline: none; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Quiet Control Room",
+    "overview": "LoopForge is a nocturnal, terminal-native operations surface: dense enough to keep the state of several projects in view, calm enough that a developer can scan it for long sessions. It feels like a purpose-built instrument rather than a decorated application. A restrained violet cast ties its black and graphite surfaces together, while lavender appears only where the current focus or next action must be unmistakable.\n\nThe interface stays flat, rectangular, and grid-bound. Hierarchy comes from tonal layers, borders, alignment, and a single inverted selection row rather than large type, illustration, or dimensional effects. Color is evidence: warm amber signals attention, coral signals a blocker, mint signals completion, and quiet gray carries neutral state.",
+    "keyCharacteristics": [
+      "Dense two-panel scanning in a full-screen terminal frame.",
+      "Flat graphite layers with a subtle violet undertone.",
+      "Lavender focus treatments that are rare and unambiguous.",
+      "Monospaced alignment as both typography and layout infrastructure.",
+      "Contextual hotkey guidance that changes with the selected project and panel."
+    ],
+    "rules": [
+      {
+        "name": "The Focus Is Lavender Rule",
+        "body": "Lavender identifies current keyboard ownership or command affordance; it is not a decorative wash.",
+        "section": "colors"
+      },
+      {
+        "name": "The Status Is Sparse Rule",
+        "body": "Semantic colors belong on markers and short attention phrases, not across entire panels or rows.",
+        "section": "colors"
+      },
+      {
+        "name": "The One Grid Rule",
+        "body": "Keep every label, value, marker, and timestamp on the terminal's monospaced character grid so columns remain scannable without extra rules.",
+        "section": "typography"
+      },
+      {
+        "name": "The Persistent Console Rule",
+        "body": "Identity, current metrics, project/run context, command entry, and the relevant hotkeys remain visible together whenever terminal space permits.",
+        "section": "layout"
+      },
+      {
+        "name": "The Cursor First Rule",
+        "body": "Cursor movement is immediate; dependent project details are coalesced behind a 150 millisecond trailing delay, while Enter and Right commit them synchronously before changing focus.",
+        "section": "layout"
+      },
+      {
+        "name": "The Flat By Default Rule",
+        "body": "Do not add shadows, gradients, glow, translucency, or simulated physical elevation to the terminal workspace.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Cell Edge Rule",
+        "body": "Containers, focus states, and dividers align to terminal cells; no floating or partially inset geometry is used.",
+        "section": "shapes"
+      }
+    ],
+    "dos": [
+      "Do keep the initial selection on `All projects` with the project panel focused.",
+      "Do use focus lavender for the active row and focus violet for the active panel border.",
+      "Do keep project counts, run ages, and metric pairs aligned to the terminal grid.",
+      "Do update metrics, filtered runs, and hotkey guidance together when project selection changes.",
+      "Do move the project cursor immediately, then render runs, metrics, adapter, and status once 150 milliseconds after the last Up or Down input.",
+      "Do cancel the pending detail delay and synchronize project details immediately before Enter or Right transfers focus to runs.",
+      "Do keep plain text inert in the command field and dispatch slash-prefixed commands only."
+    ],
+    "donts": [
+      "Don't show `New Run` or `Ctrl+N` while `All projects` is selected.",
+      "Don't add a `New Project` action or shortcut to this surface.",
+      "Don't use whole-panel warning, error, or success fills; status color stays local to its marker or phrase.",
+      "Don't add rounded cards, shadows, gradients, decorative imagery, or proportional typography to the terminal workspace.",
+      "Don't introduce a second navigation or command path that diverges from the shared LoopForge behavior."
+    ]
+  }
+}

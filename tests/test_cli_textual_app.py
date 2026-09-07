@@ -50,12 +50,15 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
             "the StateStore home snapshot",
         )
         await pilot.press("enter")
-        await wait_for_condition(pilot, lambda: app._screen == "project", "the Project screen")
-        await wait_for_condition(
-            pilot,
-            lambda: bool(app.snapshot.project.runs),
-            "the StateStore project runs snapshot",
-        )
+        self.assertEqual(app._home_focus, "runs")
+        shell = app.snapshot.run.shell
+        current_id = str(shell.run.id) if shell and shell.run else ""
+        for _ in range(app._home_run_list().item_count):
+            item = app._home_run_list().selected_item
+            row = dict(item) if item is not None and hasattr(item, "items") else {}
+            if not current_id or str(row.get("run_id") or "") == current_id:
+                break
+            await pilot.press("down")
         await pilot.press("enter")
         await wait_for_condition(pilot, lambda: app._screen == "run", "the Run screen")
         await wait_for_condition(
@@ -213,6 +216,7 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
                 app = LoopForgeApp(shell, load_on_mount=False)
                 async with app.run_test() as pilot:
                     app.action_show_settings()
+                    await pilot.pause()
                     await pilot.press("enter")
                     await wait_for_condition(
                         pilot,
@@ -253,7 +257,7 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
     async def test_pilot_opens_slash_command_entry_and_uses_shell_dispatch(self) -> None:
         from loopforge.cli.interactive import InteractiveShell
         from loopforge.cli.textual_app import LoopForgeApp
-        from loopforge.cli.textual_app.screens import TextEntryScreen
+        from textual.widgets import Input
 
         with tempfile.TemporaryDirectory() as temp_dir:
             project = Path(temp_dir) / "project"
@@ -263,7 +267,9 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
             async with app.run_test() as pilot:
                 await pilot.press("/")
                 await pilot.pause()
-                self.assertIsInstance(app.screen, TextEntryScreen)
+                command_input = app.query_one("#home-command-input", Input)
+                self.assertTrue(command_input.has_focus)
+                self.assertEqual(command_input.value, "/")
 
                 result = app._dispatch_slash_command("/status")
                 self.assertEqual(result.exit_code, 0)
@@ -516,6 +522,7 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
                     app.query_one("#screen-list", ScreenList).highlighted = non_current_index
                     highlighted_id = app._target_run_id()
 
+                    await pilot.pause()
                     await pilot.press("a")
                     from loopforge.cli.textual_app.screens import ConfirmationScreen
 
@@ -665,6 +672,8 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
     async def test_home_screen_body_renders_projects_and_recent_runs(self) -> None:
         from loopforge.cli.interactive import InteractiveShell
         from loopforge.cli.textual_app import LoopForgeApp
+        from loopforge.cli.textual_app.widgets import ScreenList
+        from textual.widgets import Footer, Header
 
         with tempfile.TemporaryDirectory() as temp_dir:
             project = Path(temp_dir) / "project"
@@ -685,11 +694,192 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
                     app.select_project(project)
                     await wait_for_condition(pilot, lambda: bool(app.snapshot.home.projects), "home projects")
                     self._paint(app, "home")
-                    self.assertEqual(str(app.query_one("#screen-title").render()), "LoopForge")
-                    body = self._body_text(app)
-                    self.assertIn("Projects", body)
-                    after = str(app.query_one("#screen-after").render())
-                    self.assertIn("Recent runs", after)
+                    self.assertFalse(app.query_one(Header).display)
+                    self.assertFalse(app.query_one(Footer).display)
+                    self.assertEqual(str(app.query_one("#home-product-name").render()), "LoopForge")
+                    project_list = app.query_one("#home-project-list", ScreenList)
+                    run_list = app.query_one("#home-run-list", ScreenList)
+                    self.assertEqual(dict(project_list.selected_item)["name"], "All projects")
+                    self.assertGreaterEqual(run_list.item_count, 1)
+                    labels = " ".join(
+                        str(app.query_one(f"#home-metric-{field}-label").render())
+                        for field in ("primary", "secondary", "tertiary", "quaternary")
+                    )
+                    for label in ("Projects", "Active runs", "Need attention", "Default adapter"):
+                        self.assertIn(label, labels)
+                    self.assertEqual(str(app.query_one("#home-hotkeys-left").render()), "")
+                    await pilot.press("ctrl+n")
+                    self.assertEqual(
+                        len(app.screen_stack),
+                        1,
+                        "All projects must not expose or execute New Run.",
+                    )
+
+                    await pilot.press("down")
+                    self.assertEqual(
+                        dict(project_list.selected_item)["name"],
+                        project.name,
+                    )
+                    self.assertIn("New Run", str(app.query_one("#home-hotkeys-left").render()))
+                    await pilot.pause(LoopForgeApp.HOME_DETAILS_DELAY + 0.1)
+                    self.assertEqual(
+                        str(app.query_one("#home-metric-primary-label").render()),
+                        "Project",
+                    )
+                    await pilot.press("enter")
+                    self.assertEqual(app._home_focus, "runs")
+                    await pilot.press("left")
+                    self.assertEqual(app._home_focus, "projects")
+                    self.assertEqual(dict(project_list.selected_item)["name"], project.name)
+                    await pilot.press("left")
+                    self.assertEqual(dict(project_list.selected_item)["name"], "All projects")
+                    await pilot.press("right")
+                    self.assertEqual(app._home_focus, "runs")
+
+    async def test_home_lists_show_scrollbars_only_when_content_overflows(self) -> None:
+        from loopforge.cli.models import HomeSnapshot
+        from loopforge.cli.textual_app import LoopForgeApp
+
+        projects = tuple(
+            {
+                "project_id": f"project-{index}",
+                "name": f"project-{index}",
+                "path": f"C:/work/project-{index}",
+                "run_count": 1,
+                "attention": "ready",
+            }
+            for index in range(40)
+        )
+        runs = tuple(
+            {
+                "run_id": f"run-{index}",
+                "project": f"project-{index}",
+                "project_path": f"C:/work/project-{index}",
+                "task": f"Task {index}",
+                "attention": "ready",
+            }
+            for index in range(40)
+        )
+        app = LoopForgeApp(SimpleNamespace(project_dir=Path.cwd()), load_on_mount=False)
+        app._snapshot = replace(
+            app.snapshot,
+            home=HomeSnapshot("ready", projects, (), runs),
+        )
+
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            self.assertTrue(app._home_project_list().show_vertical_scrollbar)
+            self.assertTrue(app._home_run_list().show_vertical_scrollbar)
+
+            app._snapshot = replace(
+                app.snapshot,
+                home=HomeSnapshot("ready", projects[:1], (), runs[:1]),
+            )
+            app._render_snapshot(app._snapshot)
+            await pilot.pause()
+            self.assertFalse(app._home_project_list().show_vertical_scrollbar)
+            self.assertFalse(app._home_run_list().show_vertical_scrollbar)
+
+    async def test_home_project_navigation_debounces_detail_rendering(self) -> None:
+        from loopforge.cli.models import HomeSnapshot
+        from loopforge.cli.textual_app import LoopForgeApp
+
+        projects = tuple(
+            {
+                "project_id": f"project-{index}",
+                "name": f"project-{index}",
+                "path": f"C:/work/project-{index}",
+                "run_count": 1,
+                "attention": "ready",
+                "default_adapter": "codex",
+            }
+            for index in range(40)
+        )
+        runs = tuple(
+            {
+                "run_id": f"run-{index}",
+                "project_id": f"project-{index}",
+                "project": f"project-{index}",
+                "project_path": f"C:/work/project-{index}",
+                "task": f"Task {index}",
+                "attention": "ready",
+            }
+            for index in range(40)
+        )
+        app = LoopForgeApp(SimpleNamespace(project_dir=Path.cwd()), load_on_mount=False)
+        app._snapshot = replace(
+            app.snapshot,
+            home=HomeSnapshot("ready", projects, (), runs),
+        )
+
+        async with app.run_test(size=(80, 24)) as pilot:
+            project_list = app._home_project_list()
+            run_list = app._home_run_list()
+            with (
+                mock.patch.object(project_list, "populate", wraps=project_list.populate) as project_populate,
+                mock.patch.object(run_list, "populate", wraps=run_list.populate) as run_populate,
+            ):
+                for _ in range(12):
+                    app.action_move_down()
+
+                self.assertEqual(dict(project_list.selected_item)["name"], "project-11")
+                self.assertEqual(project_populate.call_count, 0)
+                self.assertEqual(run_populate.call_count, 0)
+                self.assertEqual(run_list.item_count, 40)
+
+                await pilot.pause(LoopForgeApp.HOME_DETAILS_DELAY + 0.1)
+
+                self.assertEqual(project_populate.call_count, 0)
+                self.assertEqual(run_populate.call_count, 1)
+                self.assertEqual(run_list.item_count, 1)
+                self.assertEqual(dict(run_list.selected_item)["project"], "project-11")
+
+                app.action_move_right()
+                self.assertEqual(app._home_focus, "runs")
+                self.assertEqual(
+                    run_populate.call_count,
+                    1,
+                    "Focusing synchronized run details must not rebuild them.",
+                )
+                app.action_move_left()
+                self.assertEqual(app._home_focus, "projects")
+
+                app.action_move_down()
+                app.action_open_selected()
+                self.assertEqual(app._home_focus, "runs")
+                self.assertEqual(run_populate.call_count, 2)
+                self.assertEqual(dict(run_list.selected_item)["project"], "project-12")
+                await pilot.pause(LoopForgeApp.HOME_DETAILS_DELAY + 0.1)
+                self.assertEqual(
+                    run_populate.call_count,
+                    2,
+                    "An immediate Enter refresh must cancel the pending debounce.",
+                )
+
+    async def test_home_command_input_ignores_plain_text_and_dispatches_slash_commands(self) -> None:
+        from textual.widgets import Input
+
+        from loopforge.cli.textual_app import LoopForgeApp
+
+        app = LoopForgeApp(SimpleNamespace(project_dir=Path.cwd()), load_on_mount=False)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            command_input = app.query_one("#home-command-input", Input)
+            self.assertEqual(command_input.placeholder, "› Type / for commands")
+            await pilot.press("slash")
+            self.assertIs(app.focused, command_input)
+            command_input.value = "plain text"
+            await pilot.press("enter")
+            await pilot.pause()
+            self.assertEqual(command_input.value, "plain text")
+
+            with mock.patch.object(app, "_run_slash_command") as dispatch:
+                command_input.value = "/status"
+                self.assertIs(app.focused, command_input)
+                await pilot.press("enter")
+                await pilot.pause()
+                dispatch.assert_called_once_with("/status")
+                self.assertEqual(command_input.value, "")
 
     async def test_project_screen_body_renders_runs_count(self) -> None:
         from loopforge.cli.interactive import InteractiveShell

@@ -35,8 +35,8 @@
   `skills/<name>/SKILL.md` definitions and, when overriding the base workflow,
   keep `agents.json`, agent prompts, `permissions.json`, and `workflow.json`
   internally consistent. Use only shell-free command lists in `checks.json`.
-- Before changing navigation or command presentation, read
-  `docs/cli-ux-command-plan.md`. Reuse `TerminalRenderer`, `shell_snapshot`,
+- Before changing landing-screen navigation or command presentation, read
+  `DESIGN.md`. Reuse `TerminalRenderer`, `shell_snapshot`,
   `ActionDescriptor`, `workflow_progress`, and hydrated pack workflow data.
 - For the current shell, add slash commands to the `SUPPORTED_COMMANDS`
   registry and a matching `InteractiveShell.cmd_<name>` method in

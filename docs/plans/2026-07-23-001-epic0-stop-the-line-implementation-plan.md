@@ -270,5 +270,5 @@ for f in .agent/checks/*.py; do python "$f" --help 2>&1; done
 - Coding patterns: `docs/agent/03-coding-patterns.md`
 - Build and test: `docs/agent/06-build-test-run.md`
 - Danger zones: `docs/agent/07-danger-zones.md`
-- UX contracts: `docs/cli-ux-command-plan.md`
+- Landing-screen UX contract: `DESIGN.md`
 - Parent roadmap: `docs/plans/2026-07-22-001-refactor-loopforge-product-hardening-plan.md`

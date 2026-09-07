@@ -319,6 +319,55 @@ class RunWorkspaceTests(unittest.TestCase):
 
 
 class ProjectRegistryTests(unittest.TestCase):
+    def test_legacy_registry_listing_uses_cached_rows_without_project_scans(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            home = Path(temp_dir) / "home"
+            home_root = home / "LoopForge"
+            records = {
+                f"project-{index}": {
+                    "project_id": f"project-{index}",
+                    "name": f"Project {index}",
+                    "path": str(Path(temp_dir) / "unavailable" / str(index)),
+                    "summary_revision": 1,
+                    "initialized": False,
+                    "run_count": 0,
+                    "attention": "blocked",
+                    "last_activity": "",
+                }
+                for index in range(20)
+            }
+            write_json_atomic(
+                home_root / "projects" / "registry.json",
+                {"schema_version": 2, "registry_version": 1, "projects": records},
+            )
+
+            with mock.patch(
+                "loopforge.engine.project_registry_summary",
+                side_effect=AssertionError("Home listing must not scan project paths"),
+            ):
+                result = list_registered_projects(home)
+
+            self.assertEqual(len(result.projects), 20)
+            self.assertEqual(result.projects[0]["summary_revision"], 1)
+
+    @mock.patch.dict(os.environ, {"LOOPFORGE_SNAPSHOT_BACKEND": "1"})
+    def test_compact_project_summary_exposes_home_metric_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            home = root / "home"
+            project = root / "project"
+            project.mkdir()
+            initialized = initialize_project(project, home=home)
+            created = create_run(project, "Render the main screen", success_checks=["tests pass"])
+
+            result = list_registered_projects(home)
+
+            self.assertEqual(len(result.projects), 1)
+            summary = result.projects[0]
+            self.assertEqual(summary["summary_revision"], 2)
+            self.assertEqual(summary["default_adapter"], initialized.config["default_adapter"])
+            self.assertEqual(summary["latest_pack"], created.run["pack"])
+
     def test_same_named_projects_get_distinct_id_scoped_storage_and_global_rows(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

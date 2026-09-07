@@ -7,8 +7,8 @@ autonomy: verification is evidence, never review or publication authority.
 
 - Read `docs/agent/01-modules.md`, `03-coding-patterns.md`, and
   `04-reuse-catalog.md`.
-- Before shell, terminal rendering, project navigation, or command UX work,
-  read `docs/cli-ux-command-plan.md`.
+- Before terminal rendering, project navigation, or command UX work on the
+  landing screen, read `DESIGN.md`.
 - Reuse the public `loopforge.cli` facade, engine APIs, `CliContext`, handlers,
   `JsonStore`, `PackRegistry`, `MetricsService`, UI helpers, and packaged
   checks. Do not create parallel variants.

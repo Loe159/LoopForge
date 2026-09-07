@@ -6,7 +6,7 @@ Tester LoopForge comme un utilisateur, recueillir des preuves reproductibles et 
 
 ## Règles impératives
 
-- Lire le `AGENTS.md` racine du dépôt et les documents `docs/agent/00-overview.md`, `docs/agent/06-build-test-run.md` et `docs/cli-ux-command-plan.md`.
+- Lire le `AGENTS.md` racine du dépôt et les documents `docs/agent/00-overview.md`, `docs/agent/06-build-test-run.md` et, pour l'écran principal, `DESIGN.md`.
 - Utiliser uniquement les interfaces publiques : binaire `loopforge`, façade `loopforge.cli`, `LoopForgeApp.run_test()`, fichiers d'artefacts documentés et APIs de lecture du moteur.
 - Réutiliser `local-adapter-fixture` et `src/loopforge/adapters/local_implementation_adapter.py`; ne créer aucun adaptateur parallèle.
 - Ne jamais écrire manuellement un statut, une approbation ou un champ de cycle de vie dans `run.json`.

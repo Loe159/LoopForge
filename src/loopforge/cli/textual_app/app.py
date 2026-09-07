@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import io
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Callable, Iterable
 
+from rich.text import Text
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.css.query import NoMatches
@@ -15,8 +17,10 @@ from textual.binding import Binding
 from textual.command import DiscoveryHit, Hit, Hits, Provider
 from textual.containers import Container
 from textual.events import Resize
-from textual.widgets import Footer, Header, Static
+from textual.timer import Timer
+from textual.widgets import Footer, Header, Input, Static
 
+from loopforge import __version__
 from loopforge.cli.actions import ActionDescriptor
 from loopforge.cli.evidence import EvidenceIndex, EvidenceItem, approval_summary
 from loopforge.cli.models import UiSnapshot
@@ -24,7 +28,16 @@ from loopforge.cli.operations import OperationController
 from loopforge.cli.presentation import FAMILY_PRESENTATION
 from loopforge.cli.state_store import StateStore
 from loopforge.cli.textual_app.messages import LoadFailed, SnapshotPublished
-from loopforge.cli.textual_app.widgets import ScreenList
+from loopforge.cli.textual_app.widgets import (
+    HomeCommandBar,
+    HomeCommandInput,
+    HomeDashboard,
+    HomeHeader,
+    HomeHotkeyBar,
+    HomeListPanel,
+    HomeMetrics,
+    ScreenList,
+)
 from loopforge.cli.textual_app.screens import (
     AdapterSelectionScreen,
     ConfirmationScreen,
@@ -114,6 +127,8 @@ class LoopForgeActionProvider(Provider):
 
 
 class LoopForgeApp(App[None]):
+    HOME_DETAILS_DELAY = 0.15
+
     """Keyboard-first Textual migration with no engine work in render callbacks."""
 
     TITLE = "LoopForge"
@@ -122,10 +137,30 @@ class LoopForgeApp(App[None]):
     BINDINGS = [
         Binding("ctrl+k", "command_palette", "Actions", show=True),
         Binding("ctrl+p", "show_home", "Projects", show=True),
+        Binding("enter", "home_open_selected", show=False, priority=True),
+        Binding("up,k", "home_move_up", show=False, priority=True),
+        Binding("down,j", "home_move_down", show=False, priority=True),
+        Binding("left,h", "home_move_left", show=False, priority=True),
+        Binding("right,l", "home_move_right", show=False, priority=True),
+        Binding("n,ctrl+n", "home_new_run", show=False, priority=True),
+        Binding("slash", "home_command", show=False, priority=True),
+        Binding("enter", "root_open_selected", show=False, priority=True),
+        Binding("up,k", "root_move_up", show=False, priority=True),
+        Binding("down,j", "root_move_down", show=False, priority=True),
+        Binding("n,ctrl+n", "root_new_run", show=False, priority=True),
+        Binding("a", "root_archive", show=False, priority=True),
+        Binding("e", "root_show_evidence", show=False, priority=True),
+        Binding("s", "root_show_settings", show=False, priority=True),
+        Binding("slash", "root_command", show=False, priority=True),
+        Binding("escape", "root_go_back", show=False, priority=True),
+        Binding("ctrl+c", "root_cancel_or_exit", show=False, priority=True),
         Binding("enter", "open_selected", "Open", show=True),
         Binding("up,k", "move_up", "Up", show=False),
         Binding("down,j", "move_down", "Down", show=False),
-        Binding("n", "new_run", "New run", show=True),
+        Binding("left,h", "move_left", "Projects", show=False),
+        Binding("right,l", "move_right", "Runs", show=False),
+        Binding("n,ctrl+n", "new_run", "New run", show=True),
+        Binding("ctrl+q", "quit", "Quit", show=False, priority=True),
         Binding("a", "archive", "Archive", show=False),
         Binding("e", "show_evidence", "Evidence", show=False),
         Binding("s", "show_settings", "Settings", show=False),
@@ -134,7 +169,7 @@ class LoopForgeApp(App[None]):
         Binding("c", "copy_evidence", "Copy", show=False),
         Binding("x", "export_evidence", "Export", show=False),
         Binding("escape", "go_back", "Back", show=True),
-        Binding("ctrl+c", "cancel_or_exit", "Cancel / exit", show=True),
+        Binding("ctrl+c", "cancel_or_exit", "Cancel / exit", show=True, priority=True),
         Binding("pageup", "evidence_page_up", "Page up", show=False),
         Binding("pagedown", "evidence_page_down", "Page down", show=False),
     ]
@@ -158,6 +193,9 @@ class LoopForgeApp(App[None]):
         self._operation_run_label = "current run"
         self._refreshing_after_operation = False
         self._screen = "home"
+        self._home_focus = "projects"
+        self._home_new_run_project: Path | None = None
+        self._home_details_timer: Timer | None = None
         self._filter = ""
         self._evidence_index: EvidenceIndex | None = None
         self._evidence_preview = ""
@@ -179,8 +217,29 @@ class LoopForgeApp(App[None]):
         shell = self._snapshot.run.shell
         return shell.actions if shell is not None else ()
 
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        """Enable the dashboard's priority bindings only on its own surface."""
+
+        if action.startswith("home_"):
+            return self._screen == "home" and not isinstance(self.focused, Input)
+        if action.startswith("root_"):
+            return (
+                self._screen != "home"
+                and len(self.screen_stack) == 1
+            ) or (
+                action in {
+                    "root_go_back",
+                    "root_cancel_or_exit",
+                    "root_show_evidence",
+                }
+                and self._screen == "home"
+                and len(self.screen_stack) == 1
+            )
+        return super().check_action(action, parameters)
+
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
+        yield HomeDashboard()
         with Container(id="main-content"):
             yield Static(id="screen-title")
             yield Static(id="screen-state", classes="secondary")
@@ -209,6 +268,7 @@ class LoopForgeApp(App[None]):
         self._render_operation_panel(self._snapshot)
 
     def on_unmount(self) -> None:
+        self._cancel_home_details_timer()
         if self._unsubscribe is not None:
             self._unsubscribe()
             self._unsubscribe = None
@@ -230,12 +290,24 @@ class LoopForgeApp(App[None]):
     @work(thread=True, exclusive=True, group="project-load", exit_on_error=False)
     def load_selected_project(self, project: Path | None = None) -> None:
         try:
-            load_project_snapshot(self.store, project)
+            load_project_snapshot(
+                self.store,
+                project,
+                lazy_global_runs=self._screen == "home",
+            )
         except Exception as error:
             self.post_message(LoadFailed(str(error)))
 
     def select_project(self, project: Path) -> None:
         """Navigate immediately; its project read remains a worker operation."""
+
+        project = self._select_project_context(project)
+        self._screen = "project"
+        self._reset_list_cursor()
+        self.load_selected_project(project)
+
+    def _select_project_context(self, project: Path) -> Path:
+        """Adopt a project through the existing session and StateStore seams."""
 
         project = project.resolve()
         self.shell.project_dir = project
@@ -243,9 +315,16 @@ class LoopForgeApp(App[None]):
         if hasattr(self.shell, "refresh_session_config"):
             self.shell.refresh_session_config()
         self.store.select_project(project)
-        self._screen = "project"
+        return project
+
+    def _open_home_run(self, project: Path, run_id: str) -> None:
+        """Open a dashboard run without inserting the legacy Project screen."""
+
+        self._select_project_context(project)
+        self._screen = "run"
         self._reset_list_cursor()
-        self.load_selected_project(project)
+        self._render_snapshot(self._snapshot)
+        self._open_run_worker(run_id)
 
     @work(thread=True, exclusive=True, group="run-load", exit_on_error=False)
     def _open_run_worker(self, run_id: str) -> None:
@@ -264,7 +343,11 @@ class LoopForgeApp(App[None]):
                 message = result.errors[0].message if result.errors else "LoopForge resume failed."
                 raise RuntimeError(message)
             self.store.select_run(run_id)
-            load_project_snapshot(self.store, project_dir)
+            load_project_snapshot(
+                self.store,
+                project_dir,
+                lazy_global_runs=False,
+            )
         except Exception as error:
             self.post_message(LoadFailed(str(error)))
 
@@ -330,15 +413,70 @@ class LoopForgeApp(App[None]):
     def action_move_up(self) -> None:
         self._move(-1)
 
+    def action_home_move_up(self) -> None:
+        self.action_move_up()
+
+    def action_root_move_up(self) -> None:
+        self.action_move_up()
+
     def action_move_down(self) -> None:
         self._move(1)
 
+    def action_home_move_down(self) -> None:
+        self.action_move_down()
+
+    def action_root_move_down(self) -> None:
+        self.action_move_down()
+
+    def action_move_left(self) -> None:
+        if self._screen == "home":
+            if self._home_focus == "runs":
+                self._home_focus = "projects"
+            else:
+                self._home_project_list().reset_cursor()
+                self._home_run_list().reset_cursor()
+                self._schedule_home_details_render()
+            self._render_home_interaction()
+
+    def action_home_move_left(self) -> None:
+        self.action_move_left()
+
+    def action_move_right(self) -> None:
+        if self._screen == "home":
+            self._commit_home_details()
+            if self._home_run_list().item_count:
+                self._home_focus = "runs"
+                self._render_home_interaction()
+
+    def action_home_move_right(self) -> None:
+        self.action_move_right()
+
     def _move(self, delta: int) -> None:
+        if self._screen == "home":
+            if isinstance(self.focused, Input):
+                return
+            if self._home_focus == "runs":
+                self._home_run_list().move_cursor(delta)
+                return
+            target = self._home_project_list()
+            before = self._home_project_key()
+            target.move_cursor(delta)
+            if self._home_project_key() != before:
+                self._home_run_list().reset_cursor()
+                self._schedule_home_details_render()
+                self._render_home_interaction()
+            return
         self._screen_list().move_cursor(delta)
 
     def action_show_home(self) -> None:
         self._screen = "home"
+        self._home_focus = "projects"
         self._reset_list_cursor()
+        try:
+            self._home_project_list().reset_cursor()
+            self._home_run_list().reset_cursor()
+        except NoMatches:
+            pass
         self._render_snapshot(self._snapshot)
 
     def action_show_evidence(self) -> None:
@@ -352,10 +490,16 @@ class LoopForgeApp(App[None]):
         self._load_evidence_worker(self._snapshot.evidence.query)
         self._render_snapshot(self._snapshot)
 
+    def action_root_show_evidence(self) -> None:
+        self.action_show_evidence()
+
     def action_show_settings(self) -> None:
         self._screen = "settings"
         self._reset_list_cursor()
         self._render_snapshot(self._snapshot)
+
+    def action_root_show_settings(self) -> None:
+        self.action_show_settings()
 
     def show_adapter_selector(self) -> None:
         """Open the adapter control without routing through the slash shell."""
@@ -386,6 +530,16 @@ class LoopForgeApp(App[None]):
         self.load_selected_project(self.shell.project_dir)
 
     def action_go_back(self) -> None:
+        if self._screen == "home":
+            command_input = self.query_one("#home-command-input", Input)
+            if command_input.has_focus:
+                if isinstance(command_input, HomeCommandInput):
+                    command_input.set_command_active(False)
+                else:
+                    command_input.blur()
+                self._home_focus = "projects"
+                self._render_home(self._snapshot)
+            return
         if self._screen == "evidence" and self._evidence_preview:
             self._evidence_preview = ""
         else:
@@ -393,12 +547,28 @@ class LoopForgeApp(App[None]):
             self._reset_list_cursor()
         self._render_snapshot(self._snapshot)
 
+    def action_root_go_back(self) -> None:
+        self.action_go_back()
+
     def action_open_selected(self) -> None:
         if self._screen == "home":
-            item = self._screen_list().selected_item
+            if isinstance(self.focused, Input):
+                self._submit_home_command(self.focused)
+                return
+            if self._home_focus == "projects":
+                self._commit_home_details()
+                if self._home_run_list().item_count:
+                    self._home_focus = "runs"
+                    self._home_run_list().reset_cursor()
+                    self._render_home_interaction()
+                return
+            item = self._home_run_list().selected_item
             if item is not None:
                 value = dict(item) if hasattr(item, "items") else {}
-                self.select_project(Path(str(value.get("path") or self.shell.project_dir)))
+                run_id = str(value.get("run_id") or "")
+                project = Path(str(value.get("project_path") or self.shell.project_dir))
+                if run_id:
+                    self._open_home_run(project, run_id)
             return
         if self._screen == "project":
             item = self._screen_list().selected_item
@@ -424,15 +594,36 @@ class LoopForgeApp(App[None]):
         if self._screen == "settings":
             self.show_adapter_selector()
 
+    def action_home_open_selected(self) -> None:
+        self.action_open_selected()
+
+    def action_root_open_selected(self) -> None:
+        self.action_open_selected()
+
     def action_new_run(self) -> None:
+        if self._screen == "home":
+            project = self._home_selected_project()
+            if project is None:
+                return
+            self._home_new_run_project = Path(str(project.get("path") or self.shell.project_dir))
         self.push_screen(
             TextEntryScreen("Create run", "Describe the task for this supervised workflow.", submit_label="Create"),
             self._create_run,
         )
 
+    def action_home_new_run(self) -> None:
+        self.action_new_run()
+
+    def action_root_new_run(self) -> None:
+        self.action_new_run()
+
     def _create_run(self, task: str | None) -> None:
+        project = self._home_new_run_project
+        self._home_new_run_project = None
         if task is None or not task.strip():
             return
+        if project is not None:
+            self._select_project_context(project)
         self._run_shell_operation(
             "Create run",
             lambda _emit, _cancelled: self._capture_shell_result(
@@ -463,6 +654,14 @@ class LoopForgeApp(App[None]):
     def action_command(self) -> None:
         """Open the existing slash-command surface from the full-screen UI."""
 
+        if self._screen == "home":
+            command_input = self.query_one("#home-command-input", HomeCommandInput)
+            if not command_input.value:
+                command_input.value = "/"
+                command_input.cursor_position = 1
+            command_input.set_command_active(True)
+            self.set_focus(command_input)
+            return
         if self._screen in {"project", "evidence"}:
             self.action_filter()
             return
@@ -475,6 +674,33 @@ class LoopForgeApp(App[None]):
             ),
             self._run_slash_command,
         )
+
+    def action_home_command(self) -> None:
+        self.action_command()
+
+    def action_root_command(self) -> None:
+        self.action_command()
+
+    @on(Input.Submitted, "#home-command-input")
+    def _on_home_command_submitted(self, event: Input.Submitted) -> None:
+        self._submit_home_command(event.input)
+
+    def _submit_home_command(self, command_input: Input) -> None:
+        """Dispatch slash commands; leave plain text untouched and inert."""
+
+        line = command_input.value.strip()
+        if not line.startswith("/"):
+            return
+        command_input.value = ""
+        if isinstance(command_input, HomeCommandInput):
+            command_input.set_command_active(False)
+        else:
+            command_input.blur()
+        self._home_focus = "projects"
+        self._run_slash_command(line)
+
+    def action_quit(self) -> None:
+        self.exit()
 
     def _run_slash_command(self, command: str | None) -> None:
         if command is None or not command.strip():
@@ -590,6 +816,9 @@ class LoopForgeApp(App[None]):
             "The run remains available in history and can be inspected later.",
         )
         self.push_screen(ConfirmationScreen("Archive run", lines, approve_label="Archive"), lambda approved: self._archive_confirmed(approved, run_id))
+
+    def action_root_archive(self) -> None:
+        self.action_archive()
 
     def _archive_confirmed(self, approved: bool, run_id: str) -> None:
         if approved:
@@ -752,6 +981,9 @@ class LoopForgeApp(App[None]):
             return
         self.exit()
 
+    def action_root_cancel_or_exit(self) -> None:
+        self.action_cancel_or_exit()
+
     def action_copy_evidence(self) -> None:
         if not self._evidence_preview:
             self._notice = "Open an evidence item before copying it."
@@ -834,9 +1066,244 @@ class LoopForgeApp(App[None]):
         except NoMatches:
             pass
 
+    def _home_project_list(self) -> ScreenList:
+        return self._base_query_one("#home-project-list", ScreenList)
+
+    def _home_run_list(self) -> ScreenList:
+        return self._base_query_one("#home-run-list", ScreenList)
+
+    def _base_query_one(self, selector: str, expect_type):
+        """Query the default application screen even while a modal is active."""
+
+        return self.screen_stack[0].query_one(selector, expect_type)
+
+    def _home_project_key(self) -> str:
+        item = self._home_project_list().selected_item
+        value = dict(item) if item is not None and hasattr(item, "items") else {}
+        return str(value.get("path") or "__all__")
+
+    def _home_selected_project(self) -> dict[str, object] | None:
+        item = self._home_project_list().selected_item
+        if item is None or not hasattr(item, "items"):
+            return None
+        value = dict(item)
+        return None if value.get("all_projects") else value
+
+    def _home_active_runs(
+        self,
+        project: dict[str, object] | None,
+        rows: tuple[object, ...] | None = None,
+    ) -> tuple[object, ...]:
+        if rows is None:
+            rows = tuple(
+                row
+                for row in self._snapshot.home.runs
+                if not bool(row.get("archived"))
+            )
+        if project is None:
+            return rows
+        project_id = str(project.get("project_id") or "")
+        project_path = Path(str(project.get("path") or ""))
+        return tuple(
+            row
+            for row in rows
+            if (
+                str(row.get("project_id") or "") == project_id
+                if project_id and row.get("project_id")
+                else _same_path(Path(str(row.get("project_path") or "")), project_path)
+            )
+        )
+
+    def _home_metrics(
+        self,
+        projects: tuple[object, ...],
+        project: dict[str, object] | None,
+        runs: tuple[object, ...],
+    ) -> tuple[tuple[str, str], ...]:
+        if project is None:
+            attention = sum(
+                1
+                for row in projects
+                if str(dict(row).get("attention") or "") in {"needs_human", "blocked"}
+            )
+            adapters = {
+                str(dict(row).get("default_adapter") or "").strip()
+                for row in projects
+                if str(dict(row).get("default_adapter") or "").strip()
+            }
+            if not adapters:
+                adapter = str(getattr(self.shell, "selected_adapter", "unknown"))
+            elif len(adapters) == 1:
+                adapter = next(iter(adapters))
+            else:
+                adapter = "mixed"
+            return (
+                ("Projects", str(len(projects))),
+                ("Active runs", str(len(runs))),
+                ("Need attention", str(attention)),
+                ("Default adapter", adapter),
+            )
+
+        latest = max(
+            (dict(row) for row in runs),
+            key=lambda row: str(row.get("updated_at") or row.get("created_at") or ""),
+            default={},
+        )
+        adapter = str(project.get("default_adapter") or "").strip()
+        if not adapter and _same_path(
+            Path(str(project.get("path") or "")), Path(self.shell.project_dir)
+        ):
+            adapter = str(getattr(self.shell, "selected_adapter", "unknown"))
+        return (
+            ("Project", str(project.get("name") or "unknown")),
+            ("Git", str(project.get("branch") or "no branch")),
+            (
+                "Pack",
+                str(
+                    latest.get("pack")
+                    or project.get("latest_pack")
+                    or project.get("profile")
+                    or "none"
+                ),
+            ),
+            ("Adapter", adapter or "unknown"),
+        )
+
+    def _render_home(self, snapshot: UiSnapshot) -> None:
+        self._cancel_home_details_timer()
+        project_rows = tuple(snapshot.home.projects)
+        active_runs = tuple(row for row in snapshot.home.runs if not bool(row.get("archived")))
+        total_runs = sum(int(row.get("run_count") or 0) for row in project_rows)
+        all_projects = {
+            "all_projects": True,
+            "name": "All projects",
+            "run_count": total_runs,
+            "attention": "",
+        }
+        project_list = self._home_project_list()
+        list_width = max(
+            28,
+            self.size.width - 10 if self.size.width <= 60 else self.size.width // 2 - 12,
+        )
+        project_list.populate(
+            [all_projects, *project_rows],
+            lambda row: _home_project_line(row, width=list_width),
+        )
+        attention_count = sum(
+            1
+            for row in project_rows
+            if str(row.get("attention") or "") in {"needs_human", "blocked"}
+        )
+        self._base_query_one("#home-header", HomeHeader).update_content(
+            version=__version__,
+            project_count=len(project_rows),
+            attention_count=attention_count,
+        )
+        self._render_home_details(
+            snapshot,
+            project_rows=project_rows,
+            active_runs=active_runs,
+            list_width=list_width,
+        )
+        hint = self._notice
+        if snapshot.operation.state != "empty":
+            hint = self._operation_status(snapshot)
+        self._base_query_one("#home-command-bar", HomeCommandBar).update_hint(hint)
+        self._render_home_interaction()
+
+    def _render_home_details(
+        self,
+        snapshot: UiSnapshot,
+        *,
+        project_rows: tuple[object, ...] | None = None,
+        active_runs: tuple[object, ...] | None = None,
+        list_width: int | None = None,
+    ) -> None:
+        if project_rows is None:
+            project_rows = tuple(snapshot.home.projects)
+        if active_runs is None:
+            active_runs = tuple(
+                row for row in snapshot.home.runs if not bool(row.get("archived"))
+            )
+        if list_width is None:
+            list_width = max(
+                28,
+                self.size.width - 10 if self.size.width <= 60 else self.size.width // 2 - 12,
+            )
+        selected_project = self._home_selected_project()
+        runs = self._home_active_runs(selected_project, active_runs)
+        self._home_run_list().populate(
+            list(runs),
+            lambda row: _home_run_line(
+                row,
+                aggregate=selected_project is None,
+                width=list_width,
+            ),
+        )
+        if self._home_focus == "runs" and not runs:
+            self._home_focus = "projects"
+        self._base_query_one("#home-metrics", HomeMetrics).update_values(
+            self._home_metrics(project_rows, selected_project, runs if selected_project else active_runs)
+        )
+
+    def _render_home_interaction(self) -> None:
+        selected_project = self._home_selected_project()
+        self._base_query_one("#home-project-panel", HomeListPanel).set_active(
+            self._home_focus == "projects"
+        )
+        self._base_query_one("#home-run-panel", HomeListPanel).set_active(
+            self._home_focus == "runs"
+        )
+        self._base_query_one("#home-hotkeys", HomeHotkeyBar).update_state(
+            project_selected=selected_project is not None,
+            focus=self._home_focus,
+        )
+
+    def _cancel_home_details_timer(self) -> None:
+        if self._home_details_timer is not None:
+            self._home_details_timer.stop()
+            self._home_details_timer = None
+
+    def _schedule_home_details_render(self) -> None:
+        self._cancel_home_details_timer()
+        self._home_details_timer = self.set_timer(
+            self.HOME_DETAILS_DELAY,
+            self._render_pending_home_details,
+        )
+
+    def _render_pending_home_details(self) -> None:
+        self._home_details_timer = None
+        if self._screen != "home" or not self.screen_stack:
+            return
+        self._render_home_details(self._snapshot)
+        self._render_home_interaction()
+
+    def _commit_home_details(self) -> None:
+        if self._home_details_timer is None:
+            return
+        self._cancel_home_details_timer()
+        self._render_home_details(self._snapshot)
+
+    def _sync_screen_surface(self) -> None:
+        home = self._base_query_one("#home-dashboard", HomeDashboard)
+        main = self._base_query_one("#main-content", Container)
+        legacy_header = self._base_query_one("Header", Header)
+        legacy_footer = self._base_query_one("Footer", Footer)
+        is_home = self._screen == "home"
+        home.display = is_home
+        main.display = not is_home
+        legacy_header.display = not is_home
+        legacy_footer.display = not is_home
+
     def _render_snapshot(self, snapshot: UiSnapshot) -> None:
         self._apply_shell_theme()
         self._snapshot = snapshot
+        if not self.screen_stack:
+            return
+        self._sync_screen_surface()
+        if self._screen == "home":
+            self._render_home(snapshot)
+            return
         title, before, items, formatter, after, help_text = self._screen_layout(snapshot)
         try:
             title_widget = self.query_one("#screen-title", Static)
@@ -1041,6 +1508,95 @@ def _project_line(row: object) -> str:
 def _run_line(row: object) -> str:
     value = dict(row) if hasattr(row, "items") else {}
     return f"{value.get('attention', value.get('status', 'ready'))}  {value.get('task') or value.get('run_id', 'Untitled run')}"
+
+
+def _same_path(left: Path, right: Path) -> bool:
+    try:
+        return left.resolve() == right.resolve()
+    except OSError:
+        return str(left) == str(right)
+
+
+def _clip(value: object, width: int) -> str:
+    text = str(value or "")
+    if width <= 0:
+        return ""
+    if len(text) <= width:
+        return text
+    return text[: max(0, width - 1)] + "…"
+
+
+def _home_marker(attention: object) -> tuple[str, str]:
+    return {
+        "needs_human": ("◆", "#FFB869"),
+        "blocked": ("×", "#FFB4AB"),
+        "running": ("●", "#D0BCFF"),
+        "complete": ("✓", "#A8E6B0"),
+        "ready": ("•", "#C7C6C6"),
+        "waiting": ("○", "#C7C6C6"),
+        "archived": ("–", "#958EA0"),
+    }.get(str(attention or ""), ("", "#C7C6C6"))
+
+
+def _home_project_line(row: object, *, width: int) -> Text:
+    value = dict(row) if hasattr(row, "items") else {}
+    marker, marker_color = _home_marker(value.get("attention"))
+    prefix = f"{marker} " if marker else "  "
+    count = f"{int(value.get('run_count') or 0)} runs"
+    name_width = max(8, width - len(prefix) - len(count) - 1)
+    name = _clip(value.get("name") or "unknown", name_width)
+    line = f"{prefix}{name:<{name_width}} {count}"
+    text = Text(line)
+    if marker:
+        text.stylize(marker_color, 0, 1)
+    return text
+
+
+def _home_run_line(row: object, *, aggregate: bool, width: int) -> Text:
+    value = dict(row) if hasattr(row, "items") else {}
+    marker, marker_color = _home_marker(value.get("attention"))
+    prefix = f"{marker} " if marker else "  "
+    leading = (
+        str(value.get("project") or "unknown")
+        if aggregate
+        else str(value.get("status") or value.get("attention") or "ready")
+        .replace("_", " ")
+        .title()
+    )
+    age = _relative_age(value.get("updated_at") or value.get("created_at"))
+    usable = max(12, width - len(prefix) - len(age) - 2)
+    leading_width = min(18, max(10, usable // 3))
+    task_width = max(1, usable - leading_width - 1)
+    leading = _clip(leading, leading_width)
+    task = _clip(value.get("task") or value.get("run_id") or "Untitled run", task_width)
+    line = f"{prefix}{leading:<{leading_width}} {task:<{task_width}}  {age}"
+    text = Text(line)
+    if marker:
+        text.stylize(marker_color, 0, 1)
+    return text
+
+
+def _relative_age(value: object) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return "—"
+    try:
+        stamp = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=timezone.utc)
+        seconds = max(0, int((datetime.now(timezone.utc) - stamp).total_seconds()))
+    except ValueError:
+        return "—"
+    if seconds < 60:
+        return "now"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}m ago"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours}h ago"
+    days = hours // 24
+    return f"{days}d ago"
 
 
 def _evidence_line(item: object) -> str:

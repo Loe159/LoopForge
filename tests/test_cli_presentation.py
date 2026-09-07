@@ -12,6 +12,7 @@ from loopforge.cli.models import UiSnapshot
 from loopforge.cli.operations import OperationController
 from loopforge.cli.presentation import shell_snapshot, shell_snapshot_from_status, state_family, workflow_progress
 from loopforge.cli.state_store import StateStore
+from loopforge.cli.textual_app.workers import load_project_snapshot
 from loopforge.engine import GuidedAction, GuidanceResult, StatusResult, current_guidance, current_status, guidance_from_status
 
 
@@ -144,6 +145,55 @@ class CliPresentationTests(unittest.TestCase):
 
         self.assertEqual(discarded.selected_project, other_project.resolve())
         self.assertEqual(discarded.revision, after_navigation.revision)
+
+    def test_textual_worker_publishes_projects_before_loading_global_runs(self) -> None:
+        project = Path("/workspace/LoopForge")
+        status = current_status(project)
+        projects = SimpleNamespace(
+            projects=[
+                {
+                    "name": "LoopForge",
+                    "path": str(project),
+                    "initialized": False,
+                    "run_count": 0,
+                    "attention": "ready",
+                }
+            ]
+        )
+        publications: list[UiSnapshot] = []
+        publication_count_at_global_load: list[int] = []
+
+        def load_global_runs() -> SimpleNamespace:
+            publication_count_at_global_load.append(len(publications))
+            return SimpleNamespace(runs=[{"run_id": "recent", "task": "Recent work"}])
+
+        store = StateStore(
+            project,
+            status_loader=lambda _: status,
+            runs_loader=lambda _: SimpleNamespace(runs=[], blockers=[]),
+            projects_loader=lambda: projects,
+            global_runs_loader=load_global_runs,
+            branch_loader=lambda _: "main",
+        )
+        store.subscribe(publications.append)
+
+        final = load_project_snapshot(store, lazy_global_runs=True)
+
+        self.assertEqual(publication_count_at_global_load, [1])
+        self.assertGreaterEqual(len(publications), 2)
+        self.assertEqual(publications[0].home.projects[0]["name"], "LoopForge")
+        self.assertEqual(publications[0].home.runs, ())
+        self.assertEqual(final.home.runs[0]["run_id"], "recent")
+
+        stale_identity = store.begin_load()
+        store.select_project(Path("/workspace/other"))
+        loads_before_stale_refresh = len(publication_count_at_global_load)
+        store.refresh_global_runs(stale_identity)
+        self.assertEqual(
+            len(publication_count_at_global_load),
+            loads_before_stale_refresh,
+            "A stale worker must not start the global run scan.",
+        )
 
     def test_state_store_coalesces_operation_events_until_the_ui_turn_flushes(self) -> None:
         project = Path("/workspace/LoopForge")

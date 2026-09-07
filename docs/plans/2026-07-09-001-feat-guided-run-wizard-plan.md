@@ -171,6 +171,5 @@ flowchart TB
 
 - `README.md` describes the current CLI shape, shell, adapters, and product principle.
 - `docs/product-architecture.md` frames the CLI as the user experience and the engine as the owner of run state.
-- `docs/cli-ux-command-plan.md` already names conversational `run` behavior as a desired CLI improvement.
 - `docs/implementation-plan.md` records the completed run, worktree, contract, adapter, verification, memory, profile, metrics, and dashboard phases.
 - `src/loopforge/cli.py`, `src/loopforge/interactive.py`, and `src/loopforge/engine.py` confirm the current command surface and run lifecycle.
