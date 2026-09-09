@@ -255,6 +255,7 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(restarted.selected_adapter, "kilo-code")
 
     async def test_pilot_opens_slash_command_entry_and_uses_shell_dispatch(self) -> None:
+        from loopforge.cli.actions import ActionDescriptor
         from loopforge.cli.interactive import InteractiveShell
         from loopforge.cli.textual_app import LoopForgeApp
         from textual.widgets import Input
@@ -271,10 +272,49 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(command_input.has_focus)
                 self.assertEqual(command_input.value, "/")
 
-                result = app._dispatch_slash_command("/status")
-                self.assertEqual(result.exit_code, 0)
-                self.assertIn("Current loop", result.message)
+                status_result = app._dispatch_slash_command("/status")
+                self.assertEqual(status_result.exit_code, 0)
+                self.assertIn("Current loop", status_result.message)
                 self.assertEqual(shell.output.getvalue(), "")
+
+                with mock.patch.object(
+                    shell,
+                    "cmd_continue",
+                    return_value=SimpleNamespace(exit_code=0, should_exit=False),
+                ) as continue_run:
+                    result = app._dispatch_slash_command("/continue --confirm")
+
+                self.assertEqual(result.exit_code, 0)
+                self.assertEqual(
+                    continue_run.call_args.kwargs["default_execution_mode"],
+                    "auto",
+                )
+
+                action = ActionDescriptor(
+                    "continue",
+                    "Continue run",
+                    "Start the next harness step.",
+                    "low",
+                    False,
+                    True,
+                    "/continue",
+                    "continue",
+                )
+                with mock.patch.object(
+                    shell,
+                    "execute_guided_action",
+                    return_value=SimpleNamespace(exit_code=0, should_exit=False),
+                ) as execute_guided, mock.patch.object(
+                    app,
+                    "_run_shell_operation",
+                    side_effect=lambda _label, runner: runner(None, mock.Mock()),
+                ):
+                    app._execute_action(action)
+
+                self.assertEqual(
+                    execute_guided.call_args.kwargs["implementation_mode"],
+                    "auto",
+                )
 
     async def test_pilot_slash_filters_runs_from_project(self) -> None:
         from loopforge.cli.textual_app import LoopForgeApp
@@ -908,7 +948,7 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn("runs", body)
                     self.assertIn("Runs", body)
 
-    async def test_run_screen_body_renders_pipeline_and_next_action(self) -> None:
+    async def test_run_screen_renders_activity_context_and_required_action(self) -> None:
         from loopforge.cli.interactive import InteractiveShell
         from loopforge.cli.textual_app import LoopForgeApp
 
@@ -928,13 +968,65 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
                 shell = InteractiveShell(project, output=io.StringIO(), error=io.StringIO())
                 app = LoopForgeApp(shell)
                 async with app.run_test(size=(80, 24)) as pilot:
-                    await self.open_current_run_with_pilot(app, pilot)
-                    body = self._body_text(app)
-                    self.assertIn("Pipeline", body)
-                    self.assertIn("Next action", body)
+                    action = await self.open_current_run_with_pilot(app, pilot)
+                    self.assertTrue(app.query_one("#run-dashboard").display)
+                    self.assertFalse(app.query_one("#main-content").display)
 
-    async def test_run_screen_shows_project_adapter_and_revision_identity(self) -> None:
-        """S1.4: the run screen displays project name, adapter, and revision."""
+                    heading = str(app.query_one("#run-attempt-heading").render())
+                    prompt = str(app.query_one("#run-system-prompt").render())
+                    output = str(app.query_one("#run-agent-output").render())
+                    contract = str(app.query_one("#run-implementation-contract").render())
+                    self.assertIn("Validate task", heading)
+                    self.assertIn("System prompt will appear", prompt)
+                    self.assertIn("Agent messages", output)
+                    self.assertEqual(contract, "")
+                    self.assertFalse(app.query_one("#run-implementation-panel").display)
+
+                    app._snapshot = replace(
+                        app.snapshot,
+                        run=replace(
+                            app.snapshot.run,
+                            agent=replace(
+                                app.snapshot.run.agent,
+                                implementation_contract='{\n  "status": "completed"\n}',
+                            ),
+                        ),
+                    )
+                    app._render_run_activity(app.snapshot)
+                    self.assertTrue(app.query_one("#run-implementation-panel").display)
+                    self.assertIn(
+                        '"status": "completed"',
+                        str(app.query_one("#run-implementation-contract").render()),
+                    )
+
+                    metrics = str(app.query_one("#run-context-metrics").render())
+                    self.assertIn("Status", metrics)
+                    self.assertIn("Progress", metrics)
+                    self.assertIn("Uptime", metrics)
+                    self.assertIn("Tokens", metrics)
+
+                    steps = str(app.query_one("#run-context-steps").render())
+                    self.assertIn("Validate task", steps)
+                    self.assertIn("Research repository", steps)
+                    self.assertIn("Plan implementation", steps)
+
+                    action_dock = app.query_one("#run-required-action")
+                    self.assertTrue(action_dock.display)
+                    self.assertIn("REQUIRED ACTION", str(app.query_one("#run-action-title").render()))
+                    self.assertIn(action.label, str(app.query_one("#run-action-controls").render()))
+                    self.assertFalse(app.query_one("#run-command-bar").display)
+
+                    await pilot.resize_terminal(60, 24)
+                    await pilot.pause()
+                    self.assertFalse(app.query_one("#run-context").display)
+                    compact_tabs = app.query_one("#run-compact-tabs")
+                    self.assertTrue(compact_tabs.display)
+                    self.assertIn("Live", str(compact_tabs.render()))
+                    self.assertIn("Changes unavailable", str(compact_tabs.render()))
+                    self.assertIn("Evidences unavailable", str(compact_tabs.render()))
+
+    async def test_run_screen_shows_project_adapter_and_run_identity(self) -> None:
+        """The fixed run context keeps project, adapter, and run identity visible."""
         from loopforge.cli.interactive import InteractiveShell
         from loopforge.cli.textual_app import LoopForgeApp
 
@@ -955,12 +1047,174 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
                 app = LoopForgeApp(shell)
                 async with app.run_test(size=(80, 24)) as pilot:
                     await self.open_current_run_with_pilot(app, pilot)
-                    body = self._body_text(app)
-                    self.assertIn("adapter:", body)
-                    self.assertIn("revision", body)
-                    state = str(app.query_one("#screen-state").render())
-                    self.assertIn("project", state.lower())
-                    self.assertIn("revision", state.lower())
+                    brand = str(app.query_one("#run-header-brand").render())
+                    header = str(app.query_one("#run-header-identity").render())
+                    branch = str(app.query_one("#run-header-branch").render())
+                    configuration = str(app.query_one("#run-context-configuration").render())
+                    self.assertRegex(brand, r"LoopForge\nv\d")
+                    self.assertIn(project.name, header)
+                    self.assertIn("Run #1", header)
+                    self.assertIn("Identity task", header)
+                    self.assertIn("git:", branch)
+                    self.assertIn(project.name, configuration)
+                    self.assertIn("Adapter", configuration)
+                    self.assertIn(shell.selected_adapter, configuration)
+
+    async def test_run_activity_streams_harness_events_and_scrolls(self) -> None:
+        from loopforge.cli.interactive import InteractiveShell
+        from loopforge.cli.operations import OperationController
+        from loopforge.cli.textual_app import LoopForgeApp
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            project = Path(temp_dir) / "project"
+            project.mkdir()
+            subprocess.run(["git", "init"], cwd=project, check=True, capture_output=True, text=True)
+            (project / "README.md").write_text("# Project\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=project, check=True, capture_output=True, text=True)
+            subprocess.run(
+                ["git", "-c", "user.name=T", "-c", "user.email=t@t", "commit", "-m", "init"],
+                cwd=project, check=True, capture_output=True, text=True,
+            )
+            loopforge_home = Path(temp_dir) / "home"
+            with mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}):
+                self._seed_project_with_run(project, loopforge_home, "Live activity task")
+                shell = InteractiveShell(project, output=io.StringIO(), error=io.StringIO())
+                app = LoopForgeApp(shell)
+                async with app.run_test(size=(80, 24)) as pilot:
+                    await self.open_current_run_with_pilot(app, pilot)
+                    app._snapshot = replace(
+                        app.snapshot,
+                        run=replace(
+                            app.snapshot.run,
+                            attempts=(
+                                {
+                                    "number": 1,
+                                    "status": "completed",
+                                    "summary": "persisted-private-summary-marker",
+                                },
+                            ),
+                        ),
+                    )
+                    app._render_run_activity(app.snapshot)
+                    recorded = str(app.query_one("#run-attempt-heading").render())
+                    self.assertIn("Attempt 01", recorded)
+                    self.assertNotIn(
+                        "persisted-private-summary-marker",
+                        str(app.query_one("#run-agent-output").render()),
+                    )
+
+                    operation = OperationController("Implementation")
+                    for index in range(39):
+                        operation.emit(
+                            {
+                                "kind": "tool_started",
+                                "message": f"observable harness update {index}",
+                            }
+                        )
+                    operation.emit(
+                        {
+                            "kind": "adapter_output",
+                            "message": (
+                                "adapter stdout: Reasoning\n"
+                                "  Inspect configuration state and current tests."
+                            ),
+                        }
+                    )
+                    operation.emit(
+                        {
+                            "kind": "adapter_output",
+                            "message": (
+                                "adapter stdout: Tool call (in_progress)\n"
+                                "  $ python -m unittest"
+                            ),
+                        }
+                    )
+                    operation.emit(
+                        {
+                            "kind": "completed",
+                            "message": "completion-secret-marker",
+                        }
+                    )
+                    app._notice = "stale-private-notice-marker"
+                    app.begin_operation(operation)
+                    self.assertEqual(app._notice, "")
+                    await wait_for_condition(
+                        pilot,
+                        lambda: "Inspect configuration state"
+                        in str(app.query_one("#run-agent-output").render()),
+                        "the live Activity event stream",
+                    )
+                    rendered = str(app.query_one("#run-agent-output").render())
+                    self.assertNotIn("completion-secret-marker", rendered)
+                    self.assertIn("Reasoning", rendered)
+                    self.assertIn("Inspect configuration state and current tests.", rendered)
+                    self.assertIn("Tool call (in_progress)", rendered)
+                    self.assertIn("$ python -m unittest", rendered)
+                    self.assertEqual(app._notice, "")
+
+                    feed = app.query_one("#run-activity-feed")
+                    await wait_for_condition(
+                        pilot,
+                        lambda: feed.scroll_y == feed.max_scroll_y,
+                        "Activity to follow the newest harness event",
+                    )
+                    self.assertGreater(feed.max_scroll_y, 0)
+                    self.assertEqual(feed.scroll_y, feed.max_scroll_y)
+                    before = feed.scroll_y
+                    await pilot.press("up")
+                    await pilot.pause()
+                    self.assertLess(feed.scroll_y, before)
+                    off_tail = feed.scroll_y
+
+                    operation.emit(
+                        {
+                            "kind": "adapter_output",
+                            "message": (
+                                "adapter stdout: Tool call (completed, exit 0)\n"
+                                "  $ pytest --quiet\n"
+                                "  Output\n"
+                                "    12 passed"
+                            ),
+                        }
+                    )
+                    app._poll_operation()
+                    await wait_for_condition(
+                        pilot,
+                        lambda: "12 passed"
+                        in str(app.query_one("#run-agent-output").render()),
+                        "an off-tail Activity update",
+                    )
+                    self.assertEqual(feed.scroll_y, off_tail)
+
+                    for _ in range(80):
+                        if app._run_follow_tail:
+                            break
+                        await pilot.press("down")
+                    self.assertTrue(app._run_follow_tail)
+                    operation.emit(
+                        {
+                            "kind": "adapter_output",
+                            "message": "adapter stdout: Agent message\n  Final update",
+                        }
+                    )
+                    app._poll_operation()
+                    await wait_for_condition(
+                        pilot,
+                        lambda: "Final update"
+                        in str(app.query_one("#run-agent-output").render()),
+                        "the resumed tail update",
+                    )
+                    self.assertEqual(feed.scroll_y, feed.max_scroll_y)
+
+                    app._snapshot = replace(
+                        app.snapshot,
+                        selected_project=project.parent / "another-project",
+                    )
+                    app._render_run_activity(app.snapshot)
+                    self.assertNotIn(
+                        "Inspect configuration state",
+                        str(app.query_one("#run-agent-output").render()),
+                    )
 
     async def test_evidence_screen_body_renders_empty_state(self) -> None:
         from loopforge.cli.interactive import InteractiveShell

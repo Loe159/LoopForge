@@ -36,6 +36,7 @@ from loopforge.adapters.kilo_code import (
     command_without_windows_batch_launcher as kilo_command_without_windows_batch_launcher,
     command_with_prompt as kilo_command_with_prompt,
     headless_run_command as kilo_headless_run_command,
+    is_kilo_json_stream,
     is_kilo_run_command,
 )
 from loopforge.checks import validate_implementation_result

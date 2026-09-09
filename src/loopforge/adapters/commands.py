@@ -192,20 +192,24 @@ def interactive_agent_command(
                 "--interactive",
                 "--auto",
                 "--dangerously-skip-permissions",
+                "--thinking",
+                "--no-thinking",
             },
             value_options={"--attach", "--dir", "--format"},
             variadic_value_options={"--file", "-f"},
         )
-        prepared = headless_run_command(
-            args,
-            default_agent=DEFAULT_IMPLEMENTATION_AGENT,
-        )
+        if not any(
+            argument == "--agent" or argument.startswith("--agent=")
+            for argument in args
+        ):
+            args.extend(["--agent", DEFAULT_IMPLEMENTATION_AGENT])
         return [
-            *prepared[:2],
+            AGENT_COMMANDS[adapter],
+            "run",
             "--interactive",
             "--dir",
             str(workspace_dir),
-            *prepared[2:],
+            *args,
             prompt,
         ]
     if adapter == "opencode":

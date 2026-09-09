@@ -53,6 +53,7 @@ from loopforge.cli.interactive import (
     tui_dependency_state,
 )
 from loopforge.cli.ui import TerminalRenderer
+from loopforge.adapters.local_implementation_adapter import kilo_final_message
 
 
 @contextlib.contextmanager
@@ -2465,8 +2466,12 @@ Only this section is present.
                 task="Research in a visible harness",
             )
             launcher = mock.Mock()
+            events: list[dict[str, object]] = []
+            console_output = b"Reading repository context.\r\nTool call: inspect files\r\n"
 
             def launch(request: TerminalLaunchRequest) -> TerminalSessionResult:
+                self.assertIsNotNone(request.output_chunk_callback)
+                request.output_chunk_callback("stdout", console_output)
                 candidate = (
                     request.cwd
                     / ".loopforge"
@@ -2479,6 +2484,7 @@ Only this section is present.
                     launched=True,
                     returncode=0xC000013A,
                     launcher="test-terminal",
+                    output=console_output,
                 )
 
             launcher.launch.side_effect = launch
@@ -2495,6 +2501,7 @@ Only this section is present.
                     adapter="codex",
                     execution_mode="terminal",
                     terminal_launcher=launcher,
+                    operation_callback=events.append,
                 )
 
             request = launcher.launch.call_args.args[0]
@@ -2505,6 +2512,23 @@ Only this section is present.
             self.assertEqual(
                 (run_dir / "research.md").read_text(encoding="utf-8"),
                 valid_research_markdown(),
+            )
+            self.assertEqual(
+                (
+                    run_dir
+                    / "artifacts"
+                    / "stages"
+                    / "research"
+                    / "adapter.stdout"
+                ).read_bytes(),
+                console_output,
+            )
+            self.assertTrue(
+                any(
+                    event.get("kind") == "adapter_output"
+                    and "Reading repository context." in str(event.get("message"))
+                    for event in events
+                )
             )
             stage_prompt = (
                 run_dir / "artifacts" / "stages" / "research" / "prompt.md"
@@ -2758,6 +2782,79 @@ Only this section is present.
             headless_prompt = execute.call_args.kwargs["prompt"].decode("utf-8")
             self.assertIn("artifact on stdout", headless_prompt)
             self.assertNotIn("research-candidate.md", headless_prompt)
+
+    def test_readonly_headless_codex_streams_json_and_uses_last_message_artifact(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            self.initialize_git_project(repo)
+            loopforge_home = workspace / "home"
+            run_dir = self.create_approved_run(
+                repo,
+                loopforge_home,
+                task="Stream read-only Codex output into the run page",
+            )
+            events: list[dict[str, object]] = []
+            raw_jsonl = (
+                json.dumps(
+                    {
+                        "type": "item.completed",
+                        "item": {
+                            "type": "reasoning",
+                            "text": "Inspect the current implementation.",
+                        },
+                    }
+                )
+                + "\n"
+            ).encode("utf-8")
+            child = {
+                "completed": True,
+                "returncode": 0,
+                "timed_out": False,
+                "interrupted": False,
+                "output_limit_exceeded": False,
+            }
+
+            def execute(**kwargs):  # type: ignore[no-untyped-def]
+                command = kwargs["command"]
+                self.assertIn("--json", command)
+                output_flag = command.index("--output-last-message")
+                Path(command[output_flag + 1]).write_text(
+                    valid_research_markdown(),
+                    encoding="utf-8",
+                )
+                return child, raw_jsonl, b""
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                mock.patch(
+                    "loopforge.engine.codex_workspace_preflight_blockers",
+                    return_value=[],
+                ),
+                mock.patch(
+                    "loopforge.engine.execute_readonly_adapter_command",
+                    side_effect=execute,
+                ),
+            ):
+                result = execute_readonly_stage(
+                    repo,
+                    stage="research",
+                    adapter="codex",
+                    execution_mode="headless",
+                    operation_callback=events.append,
+                )
+
+            stage_dir = run_dir / "artifacts" / "stages" / "research"
+            self.assertTrue(result.ok, result.blockers)
+            self.assertEqual((run_dir / "research.md").read_text(encoding="utf-8"), valid_research_markdown())
+            self.assertEqual((stage_dir / "adapter.stdout").read_bytes(), raw_jsonl)
+            execution = json.loads((stage_dir / "execution.json").read_text(encoding="utf-8"))
+            self.assertEqual(execution["adapter"], "codex")
+            self.assertEqual(execution["stream_format"], "codex-jsonl")
+            self.assertFalse((stage_dir / "last-message.md").exists())
 
     def test_run_no_input_does_not_execute_available_readonly_stage(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -3196,12 +3293,51 @@ Only this section is present.
             mock.patch("loopforge.engine.subprocess.Popen", return_value=fake),
             mock.patch("loopforge.engine.isolated_process_module") as isolated,
         ):
-            isolated.return_value.load_policy.return_value = {"max_timeout_seconds": 60}
+            isolated.return_value.load_policy.return_value = {
+                "max_timeout_seconds": 60,
+                "max_captured_output_bytes": 1024,
+            }
             isolated.return_value.build_child_environment.return_value = {}
             with self.assertRaises(KeyboardInterrupt):
                 run_streaming_process(["fake"], Path.cwd(), 60)
         self.assertTrue(fake.terminated)
         self.assertFalse(fake.killed)
+
+    def test_streaming_process_stops_and_bounds_child_on_output_limit(self) -> None:
+        class FakeProcess:
+            def __init__(self) -> None:
+                self.stdout = io.BytesIO(b"x" * 32)
+                self.stderr = io.BytesIO()
+                self.terminated = False
+
+            def wait(self, timeout=None):  # type: ignore[no-untyped-def]
+                if not self.terminated:
+                    raise subprocess.TimeoutExpired(["fake"], timeout)
+                return -15
+
+            def terminate(self) -> None:
+                self.terminated = True
+
+            def kill(self) -> None:
+                self.terminated = True
+
+        fake = FakeProcess()
+        with (
+            mock.patch("loopforge.engine.subprocess.Popen", return_value=fake),
+            mock.patch("loopforge.engine.isolated_process_module") as isolated,
+        ):
+            isolated.return_value.load_policy.return_value = {
+                "max_timeout_seconds": 60,
+                "max_captured_output_bytes": 8,
+            }
+            isolated.return_value.build_child_environment.return_value = {}
+            result = run_streaming_process(["fake"], Path.cwd(), 60)
+
+        self.assertTrue(fake.terminated)
+        self.assertTrue(result["output_limit_exceeded"])
+        self.assertFalse(result["completed"])
+        self.assertEqual(result["stdout"], b"x" * 8)
+        self.assertEqual(result["stderr"], b"")
 
     def test_streaming_process_honors_preflight_cancellation(self) -> None:
         cancelled = threading.Event()
@@ -3210,7 +3346,10 @@ Only this section is present.
             mock.patch("loopforge.engine.subprocess.Popen") as popen,
             mock.patch("loopforge.engine.isolated_process_module") as isolated,
         ):
-            isolated.return_value.load_policy.return_value = {"max_timeout_seconds": 60}
+            isolated.return_value.load_policy.return_value = {
+                "max_timeout_seconds": 60,
+                "max_captured_output_bytes": 1024,
+            }
             isolated.return_value.build_child_environment.return_value = {}
             result = run_streaming_process(["fake"], Path.cwd(), 60, cancel_event=cancelled)
         popen.assert_not_called()
@@ -3246,6 +3385,219 @@ Only this section is present.
             self.assertIn(b"prompt=review input", stdout)
             self.assertIn(b"reviewing patch", stderr)
             self.assertTrue(any(event["kind"] == "adapter_output" for event in events))
+
+    def test_readonly_codex_json_stream_uses_observable_event_projection(self) -> None:
+        events: list[dict[str, object]] = []
+        reasoning = json.dumps(
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "reasoning",
+                    "text": "Inspect the run state before planning.",
+                },
+            }
+        ).encode("utf-8") + b"\n"
+        tool = json.dumps(
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "command_execution",
+                    "command": "rg --files",
+                    "aggregated_output": "DESIGN.md",
+                    "exit_code": 0,
+                    "status": "completed",
+                },
+            }
+        ).encode("utf-8") + b"\n"
+        stdout = reasoning + tool
+        child = {
+            "completed": True,
+            "returncode": 0,
+            "timed_out": False,
+            "interrupted": False,
+            "output_limit_exceeded": False,
+            "stdout": stdout,
+            "stderr": b"adapter diagnostic\n",
+        }
+
+        def run(*args, **kwargs):  # type: ignore[no-untyped-def]
+            publish = kwargs["output_chunk_callback"]
+            self.assertIsNotNone(publish)
+            split = len(reasoning) // 2
+            publish("stdout", reasoning[:split])
+            publish("stdout", reasoning[split:] + tool)
+            publish("stderr", b"adapter diagnostic\n")
+            return child
+
+        with (
+            mock.patch(
+                "loopforge.engine.adapter_runtime.resolve_child_executable",
+                return_value=["codex", "exec", "--json", "-"],
+            ),
+            mock.patch("loopforge.engine.isolated_process_module") as isolated,
+            mock.patch(
+                "loopforge.engine.adapter_runtime.run_streaming_process",
+                side_effect=run,
+            ),
+        ):
+            isolated.return_value.load_policy.return_value = {}
+            result, captured_stdout, captured_stderr = execute_readonly_adapter_command(
+                command=["codex", "exec", "--json", "-"],
+                prompt=b"Plan the implementation.",
+                project_dir=Path.cwd(),
+                timeout_seconds=10,
+                operation_callback=events.append,
+            )
+
+        rendered = "\n".join(str(event["message"]) for event in events)
+        self.assertIs(result, child)
+        self.assertEqual(captured_stdout, stdout)
+        self.assertEqual(captured_stderr, b"adapter diagnostic\n")
+        self.assertIn("Reasoning", rendered)
+        self.assertIn("Inspect the run state before planning.", rendered)
+        self.assertIn("Tool call (completed, exit 0)", rendered)
+        self.assertIn("$ rg --files", rendered)
+        self.assertIn("DESIGN.md", rendered)
+        self.assertIn("adapter diagnostic", rendered)
+        self.assertNotIn('"type": "item.completed"', rendered)
+
+    def test_readonly_kilo_json_stream_projects_events_and_extracts_final_message(self) -> None:
+        events: list[dict[str, object]] = []
+        reasoning = {
+            "type": "reasoning",
+            "sessionID": "session-1",
+            "part": {
+                "id": "reason-1",
+                "type": "reasoning",
+                "text": "Inspecting the repository.",
+            },
+        }
+        tool = {
+            "type": "tool_use",
+            "sessionID": "session-1",
+            "part": {
+                "id": "tool-1",
+                "type": "tool",
+                "tool": "glob",
+                "state": {
+                    "status": "completed",
+                    "input": {"pattern": "*"},
+                    "output": "README.md",
+                },
+            },
+        }
+        answer = {
+            "type": "text",
+            "sessionID": "session-1",
+            "part": {
+                "id": "text-1",
+                "type": "text",
+                "text": "Final Markdown artifact.",
+                "metadata": {"openai": {"phase": "final_answer"}},
+            },
+        }
+        json_lines = [
+            reasoning,
+            {**reasoning, "time": {"created": 1}},
+            tool,
+            {
+                "type": "step_finish",
+                "sessionID": "session-1",
+                "part": {"id": "step-1", "type": "step-finish"},
+            },
+            {**tool, "time": {"created": 2}},
+            answer,
+            {**answer, "time": {"created": 3}},
+        ]
+        stdout = ("\n".join(json.dumps(value) for value in json_lines) + "\n").encode()
+        child = {
+            "completed": True,
+            "returncode": 0,
+            "timed_out": False,
+            "interrupted": False,
+            "output_limit_exceeded": False,
+            "stdout": stdout,
+            "stderr": b"",
+        }
+
+        def run(*args, **kwargs):  # type: ignore[no-untyped-def]
+            publish = kwargs["output_chunk_callback"]
+            self.assertIsNotNone(publish)
+            publish("stdout", stdout[: len(stdout) // 2])
+            publish("stdout", stdout[len(stdout) // 2 :])
+            return child
+
+        with (
+            mock.patch(
+                "loopforge.engine.adapter_runtime.resolve_child_executable",
+                return_value=["kilo", "run", "--format", "json", "--thinking"],
+            ),
+            mock.patch("loopforge.engine.isolated_process_module") as isolated,
+            mock.patch(
+                "loopforge.engine.adapter_runtime.run_streaming_process",
+                side_effect=run,
+            ),
+        ):
+            isolated.return_value.load_policy.return_value = {}
+            result, captured_stdout, captured_stderr = execute_readonly_adapter_command(
+                command=["kilo", "run", "--format", "json", "--thinking"],
+                prompt=b"Plan the implementation.",
+                project_dir=Path.cwd(),
+                timeout_seconds=10,
+                operation_callback=events.append,
+            )
+
+        rendered = "\n".join(str(event["message"]) for event in events)
+        self.assertEqual(captured_stdout, stdout)
+        self.assertEqual(captured_stderr, b"")
+        self.assertEqual(result["artifact_output"], b"Final Markdown artifact.")
+        self.assertEqual(rendered.count("Inspecting the repository."), 1)
+        self.assertEqual(rendered.count("Tool call (completed)"), 1)
+        self.assertIn("glob", rendered)
+        self.assertIn("README.md", rendered)
+        self.assertEqual(rendered.count("Final Markdown artifact."), 1)
+
+    def test_kilo_final_message_uses_last_unique_text_without_final_phase(self) -> None:
+        jsonl = b"\n".join(
+            (
+                b"not-json",
+                json.dumps(
+                    {
+                        "type": "text",
+                        "sessionID": "session-1",
+                        "part": {
+                            "id": "text-1",
+                            "type": "text",
+                            "text": "Intermediate answer.",
+                        },
+                    }
+                ).encode("utf-8"),
+                json.dumps(
+                    {
+                        "type": "text",
+                        "sessionID": "session-1",
+                        "part": {
+                            "id": "text-1",
+                            "type": "text",
+                            "text": "Duplicated envelope.",
+                        },
+                    }
+                ).encode("utf-8"),
+                json.dumps(
+                    {
+                        "type": "text",
+                        "sessionID": "session-1",
+                        "part": {
+                            "id": "text-2",
+                            "type": "text",
+                            "text": "Last complete answer.",
+                        },
+                    }
+                ).encode("utf-8"),
+            )
+        )
+
+        self.assertEqual(kilo_final_message(jsonl), b"Last complete answer.")
 
     def test_guidance_reports_not_initialized_and_cli_guide(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -5152,6 +5504,23 @@ Only this section is present.
         self.assertIn("workspace", readonly_command)
         self.assertIn("--add-dir", readonly_command)
         self.assertIn("run", readonly_command)
+        streamed_artifact = Path("run") / "artifacts" / "stages" / "plan" / "last-message.md"
+        streamed_readonly_command = command_for_readonly_stage(
+            adapter="codex",
+            adapter_args=[],
+            workspace_dir=Path("workspace"),
+            run_dir=Path("run"),
+            json_output=True,
+            output_last_message_path=streamed_artifact,
+        )
+        self.assertIn("--json", streamed_readonly_command)
+        self.assertIn("--output-last-message", streamed_readonly_command)
+        self.assertEqual(
+            streamed_readonly_command[
+                streamed_readonly_command.index("--output-last-message") + 1
+            ],
+            str(streamed_artifact),
+        )
 
     def test_codex_preflight_requires_git_before_readonly_or_implementation_execution(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -5288,11 +5657,21 @@ Only this section is present.
     def test_kilo_code_commands_use_documented_headless_run_mode(self) -> None:
         self.assertEqual(
             command_for_attempt(adapter="kilo-code", adapter_args=[]),
-            ["kilo", "run", "--agent", "code"],
+            ["kilo", "run", "--agent", "code", "--format", "json", "--thinking"],
         )
         self.assertEqual(
             command_for_attempt(adapter="kilo-code", adapter_args=["--model", "openai/gpt-5"]),
-            ["kilo", "run", "--model", "openai/gpt-5", "--agent", "code"],
+            [
+                "kilo",
+                "run",
+                "--model",
+                "openai/gpt-5",
+                "--agent",
+                "code",
+                "--format",
+                "json",
+                "--thinking",
+            ],
         )
         self.assertEqual(
             command_for_readonly_stage(
@@ -5300,7 +5679,7 @@ Only this section is present.
                 adapter_args=[],
                 workspace_dir=Path("workspace"),
             ),
-            ["kilo", "run", "--agent", "ask"],
+            ["kilo", "run", "--agent", "ask", "--format", "json", "--thinking"],
         )
         self.assertEqual(
             command_for_readonly_stage(
@@ -5308,7 +5687,15 @@ Only this section is present.
                 adapter_args=["--agent", "architect"],
                 workspace_dir=Path("workspace"),
             ),
-            ["kilo", "run", "--agent", "architect"],
+            [
+                "kilo",
+                "run",
+                "--agent",
+                "architect",
+                "--format",
+                "json",
+                "--thinking",
+            ],
         )
 
     def test_continue_fixture_adapter_failure_blocks_readably(self) -> None:
@@ -6340,14 +6727,44 @@ Only this section is present.
         presenter = module.StreamPresenter(output, parse_codex_json=True)
         presenter.write(
             (
-                json.dumps({"type": "item.started", "item": {"type": "reasoning"}})
-                + "\n"
-                + json.dumps({"type": "function_call", "name": "exec_command"})
+                json.dumps(
+                    {
+                        "type": "item.completed",
+                        "item": {
+                            "type": "reasoning",
+                            "text": "Inspecting repository structure.",
+                        },
+                    }
+                )
                 + "\n"
                 + json.dumps(
                     {
-                        "type": "message",
-                        "content": [{"type": "output_text", "text": "Done cleanly."}],
+                        "type": "item.started",
+                        "item": {
+                            "type": "command_execution",
+                            "command": "python -m unittest",
+                            "status": "in_progress",
+                        },
+                    }
+                )
+                + "\n"
+                + json.dumps(
+                    {
+                        "type": "item.completed",
+                        "item": {
+                            "type": "command_execution",
+                            "command": "python -m unittest",
+                            "aggregated_output": "Ran 4 tests\nOK",
+                            "exit_code": 0,
+                            "status": "completed",
+                        },
+                    }
+                )
+                + "\n"
+                + json.dumps(
+                    {
+                        "type": "item.completed",
+                        "item": {"type": "agent_message", "text": "Done cleanly."},
                     }
                 )
                 + "\n"
@@ -6356,10 +6773,54 @@ Only this section is present.
         presenter.close()
 
         text = output.getvalue()
-        self.assertIn("Reflexion en cours", text)
-        self.assertIn("Outil: exec_command", text)
-        self.assertIn("Message", text)
+        self.assertIn("Reasoning", text)
+        self.assertIn("Inspecting repository structure.", text)
+        self.assertIn("Tool call (in_progress)", text)
+        self.assertIn("$ python -m unittest", text)
+        self.assertIn("Ran 4 tests", text)
+        self.assertIn("Agent message", text)
         self.assertIn("Done cleanly.", text)
+
+    def test_shell_guided_actions_accept_a_frontend_execution_mode_default(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            shell = InteractiveShell(
+                Path(temp_dir),
+                output=io.StringIO(),
+                error=io.StringIO(),
+            )
+            with mock.patch.object(
+                shell,
+                "_continue_with_adapter",
+                return_value=mock.Mock(exit_code=0),
+            ) as execute:
+                shell.cmd_continue("--confirm", default_execution_mode="headless")
+                self.assertEqual(execute.call_args.kwargs["implementation_mode"], "headless")
+
+                shell.cmd_continue(
+                    "--confirm --execution-mode terminal",
+                    default_execution_mode="headless",
+                )
+                self.assertEqual(execute.call_args.kwargs["implementation_mode"], "terminal")
+
+                shell.execute_guided_action(
+                    mock.Mock(executor_key="continue"),
+                    implementation_mode="headless",
+                )
+                self.assertEqual(execute.call_args.kwargs["implementation_mode"], "headless")
+
+            with mock.patch.object(
+                shell,
+                "execute_readonly_guided_stage",
+                return_value=mock.Mock(exit_code=0),
+            ) as execute_readonly:
+                shell.execute_guided_action(
+                    mock.Mock(executor_key="run-readonly-stage"),
+                    implementation_mode="headless",
+                )
+                self.assertEqual(
+                    execute_readonly.call_args.kwargs["execution_mode"],
+                    "headless",
+                )
 
     def test_imported_adapter_streams_before_child_exits(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -6858,6 +7319,15 @@ Only this section is present.
                 f"{action_id} should be available (has executor), got executor_key={descriptor.executor_key}",
             )
             self.assertNotEqual(descriptor.executor_key, "command")
+
+    def test_run_activity_command_dock_only_advertises_supported_commands(self) -> None:
+        from loopforge.cli.textual_app.widgets import RunCommandBar
+
+        supported = available_commands()
+        advertised = {token.removeprefix("/") for token in RunCommandBar.COMMAND_HINT.split()}
+
+        self.assertEqual(advertised, {"run", "status", "actions", "config"})
+        self.assertTrue(advertised.issubset(supported))
 
 
 if __name__ == "__main__":

@@ -38,9 +38,24 @@ class ProjectSnapshot:
 
 
 @dataclass(frozen=True)
+class RunAgentSnapshot:
+    """Bounded, presentation-safe artifacts for the visible attempt."""
+
+    attempt_number: int | None = None
+    adapter: str = ""
+    system_prompt: str = ""
+    agent_output: str = ""
+    implementation_contract: str = ""
+
+
+@dataclass(frozen=True)
 class RunSnapshot:
     state: str
     shell: "ShellSnapshot | None" = None
+    created_at: str = ""
+    attempts: tuple[Mapping[str, Any], ...] = ()
+    total_tokens: int | None = None
+    agent: RunAgentSnapshot = RunAgentSnapshot()
 
 
 @dataclass(frozen=True)

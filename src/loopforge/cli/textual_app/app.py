@@ -28,6 +28,18 @@ from loopforge.cli.operations import OperationController
 from loopforge.cli.presentation import FAMILY_PRESENTATION
 from loopforge.cli.state_store import StateStore
 from loopforge.cli.textual_app.messages import LoadFailed, SnapshotPublished
+from loopforge.cli.textual_app.run_presenter import (
+    ascii_only as _ascii_only,
+    compact_count as _compact_count,
+    event_color as _event_color,
+    event_marker as _event_marker,
+    family_color as _family_color,
+    run_activity_text as _run_activity_text,
+    run_attempt_heading as _run_attempt_heading,
+    run_glyph,
+    run_progress as _run_progress,
+    run_uptime as _run_uptime,
+)
 from loopforge.cli.textual_app.widgets import (
     HomeCommandBar,
     HomeCommandInput,
@@ -36,6 +48,12 @@ from loopforge.cli.textual_app.widgets import (
     HomeHotkeyBar,
     HomeListPanel,
     HomeMetrics,
+    RunActivityFeed,
+    RunCommandBar,
+    RunContextSidebar,
+    RunDashboard,
+    RunHeader,
+    RunRequiredAction,
     ScreenList,
 )
 from loopforge.cli.textual_app.screens import (
@@ -46,7 +64,12 @@ from loopforge.cli.textual_app.screens import (
 )
 from loopforge.cli.textual_app.workers import load_project_snapshot, _identity_stale
 from loopforge.cli.ui import TerminalRenderer
-from loopforge.engine import AGENT_COMMANDS, SUPPORTED_ADAPTERS, set_default_adapter
+from loopforge.engine import (
+    AGENT_COMMANDS,
+    DEFAULT_AGENT_EXECUTION_MODE,
+    SUPPORTED_ADAPTERS,
+    set_default_adapter,
+)
 
 if TYPE_CHECKING:
     from loopforge.cli.interactive import InteractiveShell
@@ -191,7 +214,13 @@ class LoopForgeApp(App[None]):
         self._operation_completion_handled = False
         self._operation_spinner_phase = 0
         self._operation_run_label = "current run"
+        self._operation_run_identity = (
+            _snapshot_run_identity(self._snapshot)
+            if self._snapshot.operation.state != "empty"
+            else None
+        )
         self._refreshing_after_operation = False
+        self._run_follow_tail = True
         self._screen = "home"
         self._home_focus = "projects"
         self._home_new_run_project: Path | None = None
@@ -223,7 +252,7 @@ class LoopForgeApp(App[None]):
         if action.startswith("home_"):
             return self._screen == "home" and not isinstance(self.focused, Input)
         if action.startswith("root_"):
-            return (
+            owns_root = (
                 self._screen != "home"
                 and len(self.screen_stack) == 1
             ) or (
@@ -235,11 +264,17 @@ class LoopForgeApp(App[None]):
                 and self._screen == "home"
                 and len(self.screen_stack) == 1
             )
+            if not owns_root:
+                return False
+            if isinstance(self.focused, Input):
+                return action in {"root_go_back", "root_cancel_or_exit"}
+            return True
         return super().check_action(action, parameters)
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
         yield HomeDashboard()
+        yield RunDashboard()
         with Container(id="main-content"):
             yield Static(id="screen-title")
             yield Static(id="screen-state", classes="secondary")
@@ -311,7 +346,7 @@ class LoopForgeApp(App[None]):
 
         project = project.resolve()
         self.shell.project_dir = project
-        # S3.4: reload config + adapter + args atomically (like /cd does).
+        # Keep project selection and its adapter configuration in one session update.
         if hasattr(self.shell, "refresh_session_config"):
             self.shell.refresh_session_config()
         self.store.select_project(project)
@@ -322,6 +357,7 @@ class LoopForgeApp(App[None]):
 
         self._select_project_context(project)
         self._screen = "run"
+        self._run_follow_tail = True
         self._reset_list_cursor()
         self._render_snapshot(self._snapshot)
         self._open_run_worker(run_id)
@@ -331,12 +367,11 @@ class LoopForgeApp(App[None]):
         try:
             from loopforge.commands import CommandContext, ResumeRun
 
-            # S3.1: capture identity BEFORE any side effect.
+            # Freshness must span the resume side effect as well as the later read.
             identity = self.store.begin_load()
             project_dir = self.shell.project_dir
             ctx = CommandContext(project_dir=project_dir)
             result = ResumeRun(ctx, run_id=run_id)
-            # Check freshness AFTER the effect but BEFORE publishing.
             if _identity_stale(self.store, identity):
                 return
             if not result.ok:
@@ -466,6 +501,18 @@ class LoopForgeApp(App[None]):
                 self._schedule_home_details_render()
                 self._render_home_interaction()
             return
+        if self._screen == "run":
+            activity = self.query_one("#run-activity-feed", RunActivityFeed)
+            activity.scroll_relative(
+                y=delta,
+                animate=False,
+                force=True,
+                immediate=True,
+            )
+            self._run_follow_tail = (
+                delta > 0 and activity.scroll_y >= activity.max_scroll_y
+            )
+            return
         self._screen_list().move_cursor(delta)
 
     def action_show_home(self) -> None:
@@ -540,6 +587,12 @@ class LoopForgeApp(App[None]):
                 self._home_focus = "projects"
                 self._render_home(self._snapshot)
             return
+        if self._screen == "run":
+            command_input = self.query_one("#run-command-input", HomeCommandInput)
+            if command_input.has_focus:
+                command_input.set_command_active(False)
+                self._render_run(self._snapshot)
+                return
         if self._screen == "evidence" and self._evidence_preview:
             self._evidence_preview = ""
         else:
@@ -577,6 +630,7 @@ class LoopForgeApp(App[None]):
                 run_id = str(value.get("run_id") or "")
                 if run_id:
                     self._screen = "run"
+                    self._run_follow_tail = True
                     self._reset_list_cursor()
                     self._render_snapshot(self._snapshot)
                     self._open_run_worker(run_id)
@@ -662,6 +716,16 @@ class LoopForgeApp(App[None]):
             command_input.set_command_active(True)
             self.set_focus(command_input)
             return
+        if self._screen == "run":
+            command_bar = self.query_one("#run-command-bar", RunCommandBar)
+            if command_bar.display:
+                command_input = self.query_one("#run-command-input", HomeCommandInput)
+                if not command_input.value:
+                    command_input.value = "/"
+                    command_input.cursor_position = 1
+                command_input.set_command_active(True)
+                self.set_focus(command_input)
+                return
         if self._screen in {"project", "evidence"}:
             self.action_filter()
             return
@@ -685,19 +749,38 @@ class LoopForgeApp(App[None]):
     def _on_home_command_submitted(self, event: Input.Submitted) -> None:
         self._submit_home_command(event.input)
 
+    @on(Input.Submitted, "#run-command-input")
+    def _on_run_command_submitted(self, event: Input.Submitted) -> None:
+        self._submit_run_command(event.input)
+
     def _submit_home_command(self, command_input: Input) -> None:
         """Dispatch slash commands; leave plain text untouched and inert."""
 
+        line = self._consume_slash_input(command_input)
+        if line is None:
+            return
+        self._home_focus = "projects"
+        self._run_slash_command(line)
+
+    def _submit_run_command(self, command_input: Input) -> None:
+        """Keep plain text inert and route slash commands through the shared shell."""
+
+        line = self._consume_slash_input(command_input)
+        if line is None:
+            return
+        self._run_slash_command(line)
+
+    @staticmethod
+    def _consume_slash_input(command_input: Input) -> str | None:
         line = command_input.value.strip()
         if not line.startswith("/"):
-            return
+            return None
         command_input.value = ""
         if isinstance(command_input, HomeCommandInput):
             command_input.set_command_active(False)
         else:
             command_input.blur()
-        self._home_focus = "projects"
-        self._run_slash_command(line)
+        return line
 
     def action_quit(self) -> None:
         self.exit()
@@ -734,6 +817,7 @@ class LoopForgeApp(App[None]):
             return self._capture_shell_result(
                 lambda: self.shell.cmd_continue(
                     args,
+                    default_execution_mode=DEFAULT_AGENT_EXECUTION_MODE,
                     operation_callback=operation_callback,
                     cancel_event=cancel_event,
                 )
@@ -834,8 +918,8 @@ class LoopForgeApp(App[None]):
 
         On the 'run' screen this is the opened run from the immutable snapshot;
         on the 'project' screen this is the ScreenList cursor's selected item.
-        This replaces the old screen-agnostic ``_highlighted_run_id`` that could
-        target ``runs[0]`` when a run was already open.
+        Keeping these sources separate prevents an open run from inheriting the
+        project list's cursor.
         """
 
         if self._screen == "run":
@@ -914,6 +998,7 @@ class LoopForgeApp(App[None]):
             lambda emit, cancelled: self._capture_shell_result(
                 lambda: self.shell.execute_guided_action(
                     action,
+                    implementation_mode=DEFAULT_AGENT_EXECUTION_MODE,
                     operation_callback=emit,
                     cancel_event=cancelled,
                 )
@@ -937,9 +1022,13 @@ class LoopForgeApp(App[None]):
 
     def begin_operation(self, operation: OperationController) -> None:
         self._operation_run_label = _snapshot_run_label(self._snapshot)
+        self._operation_run_identity = _snapshot_run_identity(self._snapshot)
         self._operation = operation
         self._operation_completion_handled = False
         self._operation_spinner_phase = 0
+        self._notice = ""
+        if self._screen == "run":
+            self._run_follow_tail = True
         self._snapshot = self.store.set_operation(operation)
 
     def _poll_operation(self) -> None:
@@ -956,8 +1045,10 @@ class LoopForgeApp(App[None]):
             # completed operation with the stale pre-action guidance.
             self.store.record_operation_events(operation)
             self._operation_completion_handled = True
-            self._notice = str(
-                getattr(operation.result, "message", operation.label)
+            self._notice = (
+                "Operation completed."
+                if bool(getattr(operation.result, "ok", False))
+                else "Operation blocked; inspect retained evidence."
             )
             if bool(getattr(operation.result, "should_exit", False)):
                 self.exit()
@@ -969,7 +1060,8 @@ class LoopForgeApp(App[None]):
         if has_new_events:
             self._snapshot = self.store.record_operation_events(operation)
             self._snapshot = self.store.flush()
-            self._render_operation_panel(self._snapshot)
+            if self._screen != "run":
+                self._render_operation_panel(self._snapshot)
         self._operation_spinner_phase = (self._operation_spinner_phase + 1) % 10
         self._refresh_operation_status()
 
@@ -1286,14 +1378,17 @@ class LoopForgeApp(App[None]):
 
     def _sync_screen_surface(self) -> None:
         home = self._base_query_one("#home-dashboard", HomeDashboard)
+        run = self._base_query_one("#run-dashboard", RunDashboard)
         main = self._base_query_one("#main-content", Container)
         legacy_header = self._base_query_one("Header", Header)
         legacy_footer = self._base_query_one("Footer", Footer)
         is_home = self._screen == "home"
+        is_run = self._screen == "run"
         home.display = is_home
-        main.display = not is_home
-        legacy_header.display = not is_home
-        legacy_footer.display = not is_home
+        run.display = is_run
+        main.display = not is_home and not is_run
+        legacy_header.display = not is_home and not is_run
+        legacy_footer.display = not is_home and not is_run
 
     def _render_snapshot(self, snapshot: UiSnapshot) -> None:
         self._apply_shell_theme()
@@ -1303,6 +1398,9 @@ class LoopForgeApp(App[None]):
         self._sync_screen_surface()
         if self._screen == "home":
             self._render_home(snapshot)
+            return
+        if self._screen == "run":
+            self._render_run(snapshot)
             return
         title, before, items, formatter, after, help_text = self._screen_layout(snapshot)
         try:
@@ -1323,6 +1421,124 @@ class LoopForgeApp(App[None]):
         self._render_operation_panel(snapshot)
         self.query_one("#screen-notice", Static).update(self._notice)
         self.query_one("#screen-help", Static).update(help_text)
+
+    def _render_run(self, snapshot: UiSnapshot) -> None:
+        """Render the dedicated live surface from immutable run state."""
+
+        shell = snapshot.run.shell
+        header = self.query_one("#run-header", RunHeader)
+        sidebar = self.query_one("#run-context", RunContextSidebar)
+        action_dock = self.query_one("#run-required-action", RunRequiredAction)
+        command_bar = self.query_one("#run-command-bar", RunCommandBar)
+        compact_context = self.query_one("#run-compact-context", Static)
+        separator = run_glyph(" · ", " - ")
+
+        if shell is None or shell.run is None:
+            unknown = run_glyph("—", "-")
+            header.update_content(
+                version=__version__,
+                project=self.shell.project_dir.name,
+                run_number=None,
+                title="Loading run",
+                branch=snapshot.project.branch,
+                status="Loading",
+                status_color="#958EA0",
+            )
+            sidebar.update_content(
+                status="Loading",
+                status_color="#958EA0",
+                progress=unknown,
+                uptime=unknown,
+                tokens=unknown,
+                steps=(),
+                current_stage="",
+                project=self.shell.project_dir.name,
+                branch=snapshot.project.branch,
+                pack=unknown,
+                adapter=str(getattr(self.shell, "selected_adapter", "default")),
+            )
+            compact_context.update(
+                "Loading run context..." if unknown == "-" else "Loading run context…"
+            )
+            self._render_run_activity(snapshot)
+            action_dock.update_action(None)
+            command_bar.display = True
+            return
+
+        label, _, _ = FAMILY_PRESENTATION[shell.family]
+        status_color = _family_color(shell.family)
+        progress = _run_progress(shell.stages)
+        uptime = _run_uptime(snapshot.run.created_at)
+        tokens = _compact_count(snapshot.run.total_tokens)
+        adapter = snapshot.run.agent.adapter or str(
+            getattr(self.shell, "selected_adapter", "default")
+        )
+        project_name = shell.project.name
+        pack = shell.project.pack or "none"
+        branch = snapshot.project.branch
+        header_status = "Waiting for approval" if shell.family == "needs_human" else label
+
+        header.update_content(
+            version=__version__,
+            project=project_name,
+            run_number=_run_sequence_number(snapshot),
+            title=shell.run.task,
+            branch=branch,
+            status=header_status,
+            status_color=status_color,
+        )
+        sidebar.update_content(
+            status=label,
+            status_color=status_color,
+            progress=progress,
+            uptime=uptime,
+            tokens=tokens,
+            steps=shell.stages,
+            current_stage=shell.run.current_stage,
+            project=project_name,
+            branch=branch,
+            pack=pack,
+            adapter=adapter,
+        )
+        compact_context.update(
+            separator.join((label, progress, project_name, branch, adapter))
+        )
+        self._render_run_activity(snapshot)
+
+        required_action = (
+            shell.run.next_action
+            if shell.family in {"needs_human", "blocked"}
+            else None
+        )
+        action_dock.update_action(required_action, blocked=shell.family == "blocked")
+        command_bar.display = required_action is None
+        command_input = self.query_one("#run-command-input", HomeCommandInput)
+        if required_action is not None and command_input.has_focus:
+            command_input.set_command_active(False)
+
+    def _render_run_activity(self, snapshot: UiSnapshot) -> None:
+        """Refresh only the widgets that change with streamed harness events."""
+
+        activity = self.query_one("#run-activity-feed", RunActivityFeed)
+        owns_operation = self._operation_run_identity == _snapshot_run_identity(snapshot)
+        activity.update_content(
+            heading=_run_attempt_heading(snapshot),
+            system_prompt=snapshot.run.agent.system_prompt,
+            agent_output=_run_activity_text(
+                snapshot,
+                include_operation_events=owns_operation,
+            ),
+            implementation_contract=snapshot.run.agent.implementation_contract,
+            adapter=snapshot.run.agent.adapter
+            or str(getattr(self.shell, "selected_adapter", "default")),
+        )
+        if self._run_follow_tail and owns_operation and snapshot.operation.events:
+            activity.scroll_end(animate=False, force=True, x_axis=False)
+        self.query_one("#run-command-bar", RunCommandBar).update_hint(
+            self._operation_status(snapshot)
+            if owns_operation and snapshot.operation.state != "empty"
+            else ""
+        )
 
     def _render_operation_panel(self, snapshot: UiSnapshot) -> None:
         """Render factual operation state while preserving literal adapter output."""
@@ -1347,6 +1563,14 @@ class LoopForgeApp(App[None]):
 
         if self._snapshot.operation.state == "empty":
             return
+        if self._screen == "run":
+            try:
+                self.query_one("#run-command-bar", RunCommandBar).update_hint(
+                    self._operation_status(self._snapshot)
+                )
+            except NoMatches:
+                pass
+            return
         try:
             self.query_one("#operation-status", Static).update(self._operation_status(self._snapshot))
         except NoMatches:
@@ -1355,23 +1579,24 @@ class LoopForgeApp(App[None]):
     def _operation_status(self, snapshot: UiSnapshot) -> str:
         operation = snapshot.operation
         running = operation.state == "loading" and not operation.finished
-        from loopforge.cli.terminal_capabilities import _env_truthy
-        ascii_only = _env_truthy("LOOPFORGE_ASCII")
-        spinner = "|/-\\" if ascii_only else "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+        spinner = "|/-\\" if _ascii_only() else "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
         marker = (
             spinner[self._operation_spinner_phase % len(spinner)]
             if running
             else _operation_marker(operation.state)
         )
         progress = operation.events[-1] if operation.events else None
+        separator = run_glyph(" · ", " - ")
         suffix = (
-            f" · {progress.current}/{progress.total}"
+            f"{separator}{progress.current}/{progress.total}"
             if progress is not None and progress.current is not None and progress.total is not None
             else ""
         )
         elapsed = self._operation.elapsed_seconds() if running and self._operation is not None else operation.elapsed_seconds
         state = "Running" if running else operation.state.replace("_", " ").title()
-        return f"{marker} {state} · {operation.label} · {self._operation_run_label} · {_format_elapsed(elapsed)}{suffix}"
+        return separator.join(
+            (f"{marker} {state}", operation.label, self._operation_run_label, _format_elapsed(elapsed))
+        ) + suffix
 
     def _apply_shell_theme(self) -> None:
         """Keep the TUI palette aligned with the shell's persisted theme."""
@@ -1422,26 +1647,6 @@ class LoopForgeApp(App[None]):
             if snapshot.project.blockers:
                 after = "\n\nProject health\n" + "\n".join(f"× {item}" for item in snapshot.project.blockers)
             return project.name, before, runs, _run_line, after, "Enter open · / filter · n new · a archive · Esc projects"
-        if self._screen == "run":
-            if self._refreshing_after_operation:
-                return "Run", "Refreshing run state…", (), None, "", "Waiting for the current action to finish refreshing"
-            shell = snapshot.run.shell
-            if shell is None or shell.run is None:
-                return "Run", "Loading run state…", (), None, "", "Esc runs"
-            label, marker, _ = FAMILY_PRESENTATION[shell.family]
-            stages = "\n".join(f"{stage.marker} {stage.title} — {stage.label} ({stage.actor})" for stage in shell.stages)
-            blockers = "\n".join(f"× {item}" for item in shell.blockers)
-            action = shell.run.next_action.label if shell.run.next_action is not None else "No action available"
-            adapter = getattr(self.shell, "selected_adapter", "default")
-            project_name = snapshot.project.project.name if snapshot.project.project else self.shell.project_dir.name
-            before = (
-                f"{shell.run.task}\n{marker} {label} · {shell.run.short_id} · {shell.run.actor}\n"
-                f"{project_name} · adapter: {adapter} · revision {snapshot.revision}\n\n"
-                f"Pipeline\n{stages or 'No workflow stages.'}\n\nNext action\n{action}"
-            )
-            if blockers:
-                before += "\n\nBlockers\n" + blockers
-            return shell.run.task or "Run", before, (), None, "", "Enter action · e evidence · Ctrl+K actions · Esc runs"
         if self._screen == "evidence":
             if self._evidence_preview:
                 return "Evidence", self._evidence_page_text(), (), None, "", "Esc list · c copy · x export · PgUp/PgDn navigate"
@@ -1627,6 +1832,32 @@ def _snapshot_run_label(snapshot: UiSnapshot) -> str:
     return "current run"
 
 
+def _run_sequence_number(snapshot: UiSnapshot) -> int | None:
+    """Return the stable chronological run ordinal shown in the header."""
+
+    shell = snapshot.run.shell
+    if shell is None or shell.run is None:
+        return None
+    rows = sorted(
+        snapshot.project.runs,
+        key=lambda row: (
+            str(row.get("created_at") or ""),
+            str(row.get("run_id") or row.get("id") or ""),
+        ),
+    )
+    for index, row in enumerate(rows, start=1):
+        if str(row.get("run_id") or row.get("id") or "") == shell.run.id:
+            return index
+    return len(rows) + 1
+
+
+def _snapshot_run_identity(snapshot: UiSnapshot) -> tuple[str, str] | None:
+    shell = snapshot.run.shell
+    if shell is None or shell.run is None:
+        return None
+    return str(snapshot.selected_project), shell.run.id
+
+
 def _operation_log(events: Iterable[object], *, limit: int = 8) -> str:
     """Return the literal, multiline-safe tail in receipt order."""
 
@@ -1640,18 +1871,12 @@ def _operation_log(events: Iterable[object], *, limit: int = 8) -> str:
     return "\n".join(rows) if rows else "Waiting for the first update…"
 
 
-def _event_marker(kind: str) -> str:
-    if kind in {"failed", "blocked", "cancelled"}:
-        return "×"
-    if kind in {"completed", "check finished", "artifact written"}:
-        return "✓"
-    if kind == "adapter output":
-        return "›"
-    return "·"
-
-
 def _operation_marker(state: str) -> str:
-    return {"ready": "✓", "failed": "×", "blocked": "×"}.get(state, "•")
+    return {
+        "ready": run_glyph("✓", "+"),
+        "failed": run_glyph("×", "x"),
+        "blocked": run_glyph("×", "x"),
+    }.get(state, run_glyph("•", "*"))
 
 
 def _format_elapsed(seconds: float) -> str:

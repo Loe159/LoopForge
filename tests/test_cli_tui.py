@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -18,6 +19,14 @@ from loopforge.cli.tui import run_fullscreen_console
 
 
 class CliTuiTests(unittest.TestCase):
+    def test_run_activity_glyphs_have_ascii_fallbacks(self) -> None:
+        from loopforge.cli.textual_app.run_presenter import event_marker, run_glyph
+
+        with mock.patch.dict(os.environ, {"LOOPFORGE_ASCII": "1"}):
+            self.assertEqual(run_glyph("◉", "*"), "*")
+            self.assertEqual(event_marker("completed"), "+")
+            self.assertEqual(event_marker("adapter output"), ">")
+
     def test_headless_shell_does_not_construct_fullscreen_application(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             previous_textual_app = sys.modules.pop("loopforge.cli.textual_app", None)

@@ -507,6 +507,7 @@ class InteractiveShell:
         self,
         action: ActionDescriptor,
         *,
+        implementation_mode: str = DEFAULT_AGENT_EXECUTION_MODE,
         operation_callback=None,
         cancel_event: Event | None = None,
     ) -> DispatchResult:
@@ -523,6 +524,7 @@ class InteractiveShell:
             return DispatchResult(2)
         if key == "run-readonly-stage":
             return self.execute_readonly_guided_stage(
+                execution_mode=implementation_mode,
                 operation_callback=operation_callback,
                 cancel_event=cancel_event,
             )
@@ -539,6 +541,7 @@ class InteractiveShell:
                 self.selected_adapter,
                 list(self.selected_adapter_args),
                 confirmed=True,
+                implementation_mode=implementation_mode,
                 operation_callback=operation_callback,
                 cancel_event=cancel_event,
             )
@@ -639,6 +642,7 @@ class InteractiveShell:
     def execute_readonly_guided_stage(
         self,
         *,
+        execution_mode: str = DEFAULT_AGENT_EXECUTION_MODE,
         operation_callback=None,
         cancel_event: Event | None = None,
     ) -> DispatchResult:
@@ -656,6 +660,7 @@ class InteractiveShell:
                 stage=stage,
                 adapter=self.selected_adapter,
                 adapter_args=self.selected_adapter_args,
+                execution_mode=execution_mode,
                 operation_callback=operation_callback,
                 cancel_event=cancel_event,
             )
@@ -1167,6 +1172,7 @@ class InteractiveShell:
         self,
         raw: str,
         *,
+        default_execution_mode: str = DEFAULT_AGENT_EXECUTION_MODE,
         operation_callback=None,
         cancel_event: Event | None = None,
     ) -> DispatchResult:
@@ -1175,7 +1181,7 @@ class InteractiveShell:
         parser.add_argument(
             "--execution-mode",
             choices=AGENT_EXECUTION_MODES,
-            default=DEFAULT_AGENT_EXECUTION_MODE,
+            default=default_execution_mode,
         )
         parser.add_argument("--check", action="store_true")
         parser.add_argument("--confirm", action="store_true")

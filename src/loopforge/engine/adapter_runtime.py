@@ -24,8 +24,9 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
+from loopforge.adapters.bounded_capture import BoundedCapture
 from loopforge.adapters.commands import adapter_command, headless_implementation_command
 from loopforge.engine.process_runner import ProcessRunner
 from loopforge.engine.execution import OperationCallback
@@ -41,6 +42,8 @@ def command_for_readonly_stage(
     adapter_args: list[str],
     workspace_dir: Path,
     run_dir: Path | None = None,
+    json_output: bool = False,
+    output_last_message_path: Path | None = None,
 ) -> list[str]:
     from loopforge.engine import DEFAULT_READONLY_AGENT, kilo_headless_run_command
 
@@ -66,7 +69,24 @@ def command_for_readonly_stage(
             args[1:1] = ["--add-dir", str(run_dir)]
         if "--color" not in args:
             args[1:1] = ["--color", "never"]
-        args = [value for value in args if value != "--json"]
+        sanitized: list[str] = []
+        index = 0
+        while index < len(args):
+            value = args[index]
+            option = value.split("=", 1)[0]
+            if option == "--json":
+                index += 1
+                continue
+            if option in {"-o", "--output-last-message"}:
+                index += 1 if "=" in value else 2
+                continue
+            sanitized.append(value)
+            index += 1
+        args = sanitized
+        if output_last_message_path is not None:
+            args[1:1] = ["--output-last-message", str(output_last_message_path)]
+        if json_output:
+            args[1:1] = ["--json"]
         if "-" not in args:
             args.append("-")
         return ["codex", *args]
@@ -106,8 +126,14 @@ def execute_readonly_adapter_command(
     adapter output is forwarded as factual operation events while it runs.
     """
 
+    from loopforge.adapters.local_implementation_adapter import (
+        StreamPresenter,
+        is_codex_json_stream,
+        kilo_final_message,
+    )
     from loopforge.engine import (
         is_kilo_run_command,
+        is_kilo_json_stream,
         isolated_process_module,
         kilo_command_with_prompt,
         kilo_command_without_windows_batch_launcher,
@@ -120,21 +146,49 @@ def execute_readonly_adapter_command(
     )
     if kilo_prompted:
         prepared_command = kilo_command_without_windows_batch_launcher(prepared_command)
+    kilo_json_stream = kilo_prompted and is_kilo_json_stream(resolved)
     isolated = isolated_process_module()
     policy = isolated.load_policy()
     isolated.validate_command(prepared_command, project_dir, policy)
-    child = run_streaming_process(
-        prepared_command,
-        project_dir,
-        timeout_seconds,
-        output_callback=operation_callback,
-        cancel_event=cancel_event,
-        stream_output=operation_callback is None,
-        input_bytes=None if kilo_prompted else prompt,
-        codex_windows_runtime=Path(resolved[0]).stem.casefold() == "codex",
-    )
+    presenter: StreamPresenter | None = None
+    output_chunk_callback: Callable[[str, bytes], None] | None = None
+    if operation_callback is not None and (
+        is_codex_json_stream(prepared_command) or kilo_json_stream
+    ):
+        target = _OperationEventTextTarget(operation_callback, "adapter", "stdout")
+        presenter = StreamPresenter(
+            target,
+            parse_codex_json=is_codex_json_stream(prepared_command),
+            parse_kilo_json=kilo_json_stream,
+        )
+
+        def publish_chunk(stream: str, chunk: bytes) -> None:
+            if stream == "stdout":
+                assert presenter is not None
+                presenter.write(chunk)
+            else:
+                emit_adapter_output(operation_callback, "adapter", stream, chunk)
+
+        output_chunk_callback = publish_chunk
+    try:
+        child = run_streaming_process(
+            prepared_command,
+            project_dir,
+            timeout_seconds,
+            output_callback=operation_callback,
+            output_chunk_callback=output_chunk_callback,
+            cancel_event=cancel_event,
+            stream_output=operation_callback is None,
+            input_bytes=None if kilo_prompted else prompt,
+            codex_windows_runtime=Path(resolved[0]).stem.casefold() == "codex",
+        )
+    finally:
+        if presenter is not None:
+            presenter.close()
     stdout = child["stdout"] if isinstance(child.get("stdout"), bytes) else b""
     stderr = child["stderr"] if isinstance(child.get("stderr"), bytes) else b""
+    if kilo_json_stream:
+        child = {**child, "artifact_output": kilo_final_message(stdout)}
     return child, stdout, stderr
 
 
@@ -258,12 +312,39 @@ def emit_adapter_output(
     emit_operation_event(callback, "adapter_output", f"{stage} {stream}: {message}")
 
 
+class _OperationEventTextTarget:
+    """Adapt text output from ``StreamPresenter`` to operation events."""
+
+    def __init__(
+        self,
+        callback: OperationCallback,
+        stage: str,
+        stream: str,
+    ) -> None:
+        self.callback = callback
+        self.stage = stage
+        self.stream = stream
+
+    def write(self, value: str) -> int:
+        emit_adapter_output(
+            self.callback,
+            self.stage,
+            self.stream,
+            value.encode("utf-8"),
+        )
+        return len(value)
+
+    def flush(self) -> None:
+        return None
+
+
 def run_streaming_process(
     command: list[str],
     cwd: Path,
     timeout_seconds: int,
     *,
     output_callback: OperationCallback | None = None,
+    output_chunk_callback: Callable[[str, bytes], None] | None = None,
     cancel_event: threading.Event | None = None,
     stream_output: bool = False,
     input_bytes: bytes | None = None,
@@ -316,6 +397,7 @@ def run_streaming_process(
     )
     stdout_buffer = bytearray()
     stderr_buffer = bytearray()
+    capture = BoundedCapture(int(policy["max_captured_output_bytes"]))
 
     def read_available(source) -> bytes:  # type: ignore[no-untyped-def]
         if hasattr(source, "read1"):
@@ -328,17 +410,21 @@ def run_streaming_process(
                 chunk = read_available(source)
                 if not chunk:
                     break
-                buffer.extend(chunk)
-                if output_callback is not None:
-                    emit_adapter_output(output_callback, "adapter", stream, chunk)
-                elif stream_output:
+                retained = capture.append(buffer, chunk)
+                if output_chunk_callback is not None and retained:
+                    output_chunk_callback(stream, retained)
+                elif output_callback is not None and retained:
+                    emit_adapter_output(output_callback, "adapter", stream, retained)
+                elif stream_output and retained:
                     binary_target = getattr(target, "buffer", None)
                     if binary_target is not None:
-                        binary_target.write(chunk)
+                        binary_target.write(retained)
                         binary_target.flush()
                     else:
-                        target.write(decode_output(chunk))
+                        target.write(decode_output(retained))
                         target.flush()
+                if capture.exceeded.is_set():
+                    break
         finally:
             source.close()
 
@@ -371,17 +457,27 @@ def run_streaming_process(
         input_thread.start()
     timed_out = False
     interrupted = False
+
+    def stop_process() -> int | None:
+        try:
+            process.terminate()
+        except OSError:
+            pass
+        try:
+            return process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            return process.wait()
+
     try:
         deadline = time.monotonic() + bounded_timeout
         while True:
+            if capture.exceeded.is_set():
+                returncode = stop_process()
+                break
             if cancel_event is not None and cancel_event.is_set():
                 interrupted = True
-                process.terminate()
-                try:
-                    returncode = process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    returncode = process.wait()
+                returncode = stop_process()
                 break
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -407,14 +503,15 @@ def run_streaming_process(
     stderr_thread.join(timeout=5)
     if input_thread is not None:
         input_thread.join(timeout=5)
+    output_limit_exceeded = capture.exceeded.is_set()
     if interrupted and cancel_event is None:
         raise KeyboardInterrupt
     return {
-        "completed": not timed_out,
+        "completed": not timed_out and not output_limit_exceeded,
         "returncode": returncode,
         "timed_out": timed_out,
         "interrupted": interrupted,
-        "output_limit_exceeded": False,
+        "output_limit_exceeded": output_limit_exceeded,
         "stdout": bytes(stdout_buffer),
         "stderr": bytes(stderr_buffer),
     }

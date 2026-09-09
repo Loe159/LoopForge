@@ -9,6 +9,9 @@ dependencies = [
   # The Textual full-screen application uses App workers, Pilot tests, and the
   # command palette APIs verified against Textual 8.x.
   "textual>=8.0,<9",
+  # Preserve an interactive Windows console while mirroring the same harness
+  # output into the LoopForge TUI.
+  "pywinpty>=2.0.15,<4; sys_platform == 'win32'",
 ]
 
 [project.scripts]

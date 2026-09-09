@@ -19,6 +19,7 @@ from loopforge.engine.terminal import (
     TerminalLaunchRequest,
     TerminalSessionResult,
     WindowsTerminalLauncher,
+    _normalize_windows_terminal_command,
     default_terminal_launcher,
 )
 from loopforge.engine import execute_attempt
@@ -116,6 +117,9 @@ class InteractiveAdapterCommandTests(unittest.TestCase):
                 "C:/outside-two.txt",
                 "--model",
                 "openai/gpt-5",
+                "--format",
+                "json",
+                "--thinking",
             ],
             workspace_dir=Path("C:/worktree"),
             prompt="Implement the approved plan.",
@@ -130,6 +134,8 @@ class InteractiveAdapterCommandTests(unittest.TestCase):
         self.assertNotIn("--file", command)
         self.assertNotIn("C:/outside-one.txt", command)
         self.assertNotIn("C:/outside-two.txt", command)
+        self.assertNotIn("--format", command)
+        self.assertNotIn("--thinking", command)
         self.assertEqual(command[-1], "Implement the approved plan.")
 
     def test_opencode_interactive_command_removes_headless_prompt(self) -> None:
@@ -249,6 +255,60 @@ class TerminalLauncherTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertTrue(popen.call_args.kwargs["creationflags"] & 0x00000010)
         self.assertEqual(popen.call_args.kwargs["cwd"], root)
+
+    def test_windows_launcher_mirrors_bridge_output_when_callback_is_present(self) -> None:
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            chunks: list[tuple[str, bytes]] = []
+            connection = mock.Mock()
+            connection.recv_bytes.side_effect = [b"Reasoning\r\n", EOFError]
+            listener = mock.Mock()
+            listener.accept.return_value = connection
+            process = mock.Mock()
+            process.poll.return_value = 0
+            process.returncode = 0
+            with (
+                mock.patch(
+                    "loopforge.engine.terminal.Listener", return_value=listener
+                ),
+                mock.patch(
+                    "loopforge.engine.terminal.subprocess.Popen", return_value=process
+                ) as popen,
+            ):
+                result = WindowsTerminalLauncher().launch(
+                    TerminalLaunchRequest(
+                        command=self.command(),
+                        cwd=root,
+                        title="LoopForge attempt-001",
+                        timeout_seconds=30,
+                        artifacts_dir=root / "artifacts",
+                        cancel_event=threading.Event(),
+                        output_chunk_callback=lambda stream, chunk: chunks.append(
+                            (stream, chunk)
+                        ),
+                    )
+                )
+
+        launcher_command = popen.call_args.args[0]
+        self.assertEqual(Path(launcher_command[1]).name, "terminal_bridge.py")
+        self.assertEqual(chunks, [("stdout", b"Reasoning\r\n")])
+        self.assertEqual(result.output, b"Reasoning\r\n")
+
+    def test_windows_command_wraps_kilo_cmd_for_conpty(self) -> None:
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            kilo = root / "kilo.cmd"
+            comspec = root / "cmd.exe"
+            kilo.touch()
+            comspec.touch()
+
+            command = _normalize_windows_terminal_command(
+                [str(kilo), "run", "--interactive", "prompt"],
+                {"COMSPEC": str(comspec), "PATH": str(root)},
+            )
+
+        self.assertEqual(command[:4], [str(comspec.resolve()), "/d", "/s", "/c"])
+        self.assertEqual(command[4], str(kilo))
 
     def test_windows_launcher_passes_only_the_requested_environment(self) -> None:
         with TemporaryDirectory() as temp:
@@ -587,6 +647,53 @@ class TerminalAttemptIntegrationTests(unittest.TestCase):
         self.assertEqual(attempt["terminal_launcher"], "test-terminal")
         self.assertTrue(attempt["workspace_changed"])
 
+    def test_terminal_attempt_streams_the_visible_console_into_agent_output(self) -> None:
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            workspace = root / "workspace"
+            run_dir = root / "run"
+            workspace.mkdir()
+            run_dir.mkdir()
+            (run_dir / "progress.md").write_text("# Progress\n\n", encoding="utf-8")
+            events: list[dict[str, object]] = []
+            console_output = b"Thinking about the implementation.\r\nTool call: edit file\r\n"
+
+            def launch(request: TerminalLaunchRequest) -> TerminalSessionResult:
+                self.assertIsNotNone(request.output_chunk_callback)
+                request.output_chunk_callback("stdout", console_output)
+                (request.cwd / "terminal-change.txt").write_text(
+                    "changed\n", encoding="utf-8"
+                )
+                return TerminalSessionResult(
+                    launched=True,
+                    returncode=0,
+                    launcher="test-terminal",
+                    output=console_output,
+                )
+
+            attempt = execute_attempt(
+                project_dir=workspace,
+                run_dir=run_dir,
+                run=self.run_data(workspace),
+                contract=self.contract_data(),
+                adapter="codex",
+                adapter_args=[],
+                implementation_mode="terminal",
+                terminal_launcher=mock.Mock(launch=mock.Mock(side_effect=launch)),
+                operation_callback=events.append,
+            )
+
+            persisted = (run_dir / str(attempt["stdout_path"])).read_bytes()
+
+        self.assertEqual(persisted, console_output)
+        self.assertTrue(
+            any(
+                event.get("kind") == "adapter_output"
+                and "Thinking about the implementation." in str(event.get("message"))
+                for event in events
+            )
+        )
+
     def test_control_c_exit_with_changes_completes_the_attempt(self) -> None:
         with TemporaryDirectory() as temp:
             root = Path(temp)
@@ -716,7 +823,7 @@ class TerminalAttemptIntegrationTests(unittest.TestCase):
 
         self.assertEqual(attempt["status"], "completed")
 
-    def test_large_prompt_is_staged_in_worktree_and_not_passed_on_argv(self) -> None:
+    def test_terminal_attempt_stages_full_prompt_and_sends_short_reference(self) -> None:
         with TemporaryDirectory() as temp:
             root = Path(temp)
             workspace = root / "workspace"
@@ -726,14 +833,22 @@ class TerminalAttemptIntegrationTests(unittest.TestCase):
             (run_dir / "progress.md").write_text("# Progress\n\n", encoding="utf-8")
             run = self.run_data(workspace)
             run["task"] = "x" * 40_000
-            observed_prompt_path: Path | None = None
+            observed_prompt = ""
+            staged_prompt = ""
+            staged_path: Path | None = None
 
             def launch(request: TerminalLaunchRequest) -> TerminalSessionResult:
-                nonlocal observed_prompt_path
-                self.assertLess(len(request.command[-1]), 1_000)
-                self.assertIn("runtime-prompts/attempt-001.md", request.command[-1])
-                observed_prompt_path = request.cwd / ".loopforge" / "runtime-prompts" / "attempt-001.md"
-                self.assertGreater(len(observed_prompt_path.read_text(encoding="utf-8")), 32_000)
+                nonlocal observed_prompt, staged_prompt, staged_path
+                observed_prompt = request.command[-1]
+                self.assertLess(len(observed_prompt), 1_000)
+                self.assertIn(".loopforge/runtime-prompts/", observed_prompt)
+                prompt_reference = observed_prompt.split(" in ", 1)[1].split(
+                    ". Treat", 1
+                )[0]
+                staged_path = request.cwd / prompt_reference
+                staged_prompt = staged_path.read_text(encoding="utf-8")
+                self.assertGreater(len(staged_prompt), 32_000)
+                self.assertIn("## Embedded Run Inputs", staged_prompt)
                 (request.cwd / "terminal-change.txt").write_text("changed\n", encoding="utf-8")
                 return TerminalSessionResult(
                     launched=True,
@@ -753,8 +868,38 @@ class TerminalAttemptIntegrationTests(unittest.TestCase):
             )
 
             self.assertEqual(attempt["status"], "completed")
-            self.assertIsNotNone(observed_prompt_path)
-            self.assertFalse(observed_prompt_path.exists())
+            self.assertEqual(attempt["result_origin"], "loopforge")
+            self.assertGreater(len(staged_prompt), 32_000)
+            self.assertIsNotNone(staged_path)
+            self.assertFalse(staged_path.exists())
+
+    def test_terminal_attempt_rejects_linked_prompt_directory(self) -> None:
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            workspace = root / "workspace"
+            run_dir = root / "run"
+            workspace.mkdir()
+            run_dir.mkdir()
+            (run_dir / "progress.md").write_text("# Progress\n\n", encoding="utf-8")
+            launcher = mock.Mock()
+
+            with mock.patch(
+                "loopforge.engine.execution._path_is_reparse_point",
+                side_effect=lambda path: path.name == ".loopforge",
+            ):
+                with self.assertRaisesRegex(ValueError, "staging directory is unsafe"):
+                    execute_attempt(
+                        project_dir=workspace,
+                        run_dir=run_dir,
+                        run=self.run_data(workspace),
+                        contract=self.contract_data(),
+                        adapter="codex",
+                        adapter_args=[],
+                        implementation_mode="terminal",
+                        terminal_launcher=launcher,
+                    )
+
+            launcher.launch.assert_not_called()
 
     def test_terminal_noop_does_not_reuse_preexisting_git_changes(self) -> None:
         with TemporaryDirectory() as temp:

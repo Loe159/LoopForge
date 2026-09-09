@@ -14,6 +14,8 @@ top-level import.
 from __future__ import annotations
 
 import json
+import secrets
+import stat
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -60,6 +62,59 @@ class MetricsSummaryResult:
 
 
 OperationCallback = Callable[[dict[str, Any]], None]
+
+
+def _path_is_reparse_point(path: Path) -> bool:
+    details = path.lstat()
+    attributes = int(getattr(details, "st_file_attributes", 0))
+    reparse_flag = int(getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
+    return stat.S_ISLNK(details.st_mode) or bool(attributes & reparse_flag)
+
+
+def _runtime_prompt_directory(workspace_dir: Path, *, create: bool) -> Path:
+    """Return a real in-workspace prompt directory, rejecting links/junctions."""
+
+    workspace_root = workspace_dir.resolve(strict=True)
+    prompt_dir = workspace_root / ".loopforge" / "runtime-prompts"
+    for directory in (prompt_dir.parent, prompt_dir):
+        if create:
+            directory.mkdir(exist_ok=True)
+        if _path_is_reparse_point(directory) or not directory.is_dir():
+            raise ValueError(
+                f"interactive prompt staging directory is unsafe: {directory}"
+            )
+        try:
+            directory.resolve(strict=True).relative_to(workspace_root)
+        except (OSError, ValueError):
+            raise ValueError(
+                f"interactive prompt staging directory escapes workspace: {directory}"
+            ) from None
+    return prompt_dir
+
+
+def _stage_runtime_prompt(
+    workspace_dir: Path,
+    attempt_id: str,
+    prompt: str,
+) -> Path:
+    prompt_dir = _runtime_prompt_directory(workspace_dir, create=True)
+    prompt_path = prompt_dir / f"{attempt_id}-{secrets.token_hex(12)}.md"
+    with prompt_path.open("x", encoding="utf-8") as prompt_file:
+        prompt_file.write(prompt)
+    return prompt_path
+
+
+def _remove_runtime_prompt(workspace_dir: Path, prompt_path: Path) -> None:
+    """Remove only the exact regular prompt file from its validated directory."""
+
+    try:
+        prompt_dir = _runtime_prompt_directory(workspace_dir, create=False)
+        if prompt_path.parent != prompt_dir or _path_is_reparse_point(prompt_path):
+            return
+        prompt_path.unlink(missing_ok=True)
+        prompt_dir.rmdir()
+    except (FileNotFoundError, OSError, ValueError):
+        return
 
 
 def nonnegative_int_or_none(value: object) -> int | None:
@@ -510,7 +565,6 @@ def execute_attempt(
     terminal_launcher: TerminalLauncher | None = None,
 ) -> dict[str, Any]:
     from loopforge.engine import (
-        CONFIG_DIR,
         AGENT_EXECUTION_MODES,
         SUPPORTED_ADAPTERS,
         InteractiveAdapterUnavailable,
@@ -520,6 +574,7 @@ def execute_attempt(
         command_for_attempt,
         decode_output,
         detect_git_base_commit,
+        emit_adapter_output,
         emit_operation_event,
         execute_adapter_command,
         expected_session_for,
@@ -637,6 +692,7 @@ def execute_attempt(
 
     result_path = attempt_dir / "result.json"
     child_stderr_path = attempt_dir / "adapter-child.stderr"
+    result_origin = "loopforge"
     protocol_command: list[str] = []
     terminal_launcher_name: str | None = None
     cancelled_before_execution = cancel_event is not None and cancel_event.is_set()
@@ -651,29 +707,24 @@ def execute_attempt(
         stderr = b""
         result = None
     elif selected_execution_mode == "terminal":
-        workspace_prompt_path = (
-            workspace_dir / CONFIG_DIR / "runtime-prompts" / f"{attempt_id}.md"
+        runtime_prompt_path = _stage_runtime_prompt(
+            workspace_dir,
+            attempt_id,
+            prompt,
         )
-        workspace_prompt_path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            with workspace_prompt_path.open("x", encoding="utf-8") as prompt_file:
-                prompt_file.write(prompt)
-        except FileExistsError:
-            raise FileExistsError(
-                f"interactive prompt staging path already exists: {workspace_prompt_path}"
-            ) from None
+        prompt_reference = runtime_prompt_path.relative_to(workspace_dir).as_posix()
         interactive_prompt_argument = (
             "Read and follow the complete LoopForge implementation prompt in "
-            f"{workspace_prompt_path.relative_to(workspace_dir).as_posix()}. "
-            "Treat it as the initial instructions for this session."
+            f"{prompt_reference}. Treat that file as the source of truth for this "
+            "attempt."
+        )
+        command = interactive_implementation_command(
+            adapter=adapter,
+            adapter_args=adapter_args,
+            workspace_dir=workspace_dir,
+            prompt=interactive_prompt_argument,
         )
         try:
-            command = interactive_implementation_command(
-                adapter=adapter,
-                adapter_args=adapter_args,
-                workspace_dir=workspace_dir,
-                prompt=interactive_prompt_argument,
-            )
             terminal = launch_terminal_session(
                 command=tuple(command),
                 cwd=workspace_dir,
@@ -682,9 +733,18 @@ def execute_attempt(
                 artifacts_dir=attempt_dir,
                 cancel_event=cancel_event,
                 terminal_launcher=terminal_launcher,
+                output_chunk_callback=(
+                    (
+                        lambda stream, chunk: emit_adapter_output(
+                            operation_callback, "implementation", stream, chunk
+                        )
+                    )
+                    if operation_callback is not None
+                    else None
+                ),
             )
         finally:
-            workspace_prompt_path.unlink(missing_ok=True)
+            _remove_runtime_prompt(workspace_dir, runtime_prompt_path)
         terminal_launcher_name = terminal.launcher
         cancelled_before_fallback = terminal.interrupted or (
             not terminal.launched
@@ -710,9 +770,9 @@ def execute_attempt(
                 "returncode": terminal.returncode,
                 "timed_out": terminal.timed_out,
                 "interrupted": cancelled_before_fallback,
-                "output_limit_exceeded": False,
+                "output_limit_exceeded": terminal.output_truncated,
             }
-            stdout = b""
+            stdout = terminal.output
             stderr = terminal.error.encode("utf-8", errors="replace")
             result = None
     if selected_execution_mode == "headless" and not cancelled_before_execution:
@@ -739,6 +799,8 @@ def execute_attempt(
             stream_output=stream_output,
         )
         result = parse_adapter_result_file(result_path) or parse_adapter_result(stdout)
+        if result is not None:
+            result_origin = "adapter"
 
     finished = utc_now()
     after_snapshot = workspace_snapshot(workspace_dir)
@@ -889,6 +951,7 @@ def execute_attempt(
         status = str(result["status"])
     except ValueError as error:
         contract_validation_error = str(error)
+        result_origin = "loopforge"
         invalid_result_path = attempt_dir / "result.invalid.json"
         write_json_atomic(invalid_result_path, result)
         status = "failed"
@@ -920,6 +983,7 @@ def execute_attempt(
         ),
         "protocol_command": protocol_command,
         "execution_mode": selected_execution_mode,
+        "result_origin": result_origin,
         "terminal_launcher": terminal_launcher_name,
         "terminal_fallback_reason": terminal_fallback_reason or None,
         "started_at": started,

@@ -36,7 +36,7 @@ from loopforge.engine.path_resolvers import resolve_confined
 from loopforge.engine.execution import OperationCallback
 
 
-MAX_INTERACTIVE_STAGE_ARTIFACT_BYTES = 1_000_000
+MAX_STAGE_ARTIFACT_BYTES = 1_000_000
 
 
 def next_readonly_stage(run: dict[str, Any]) -> str | None:
@@ -445,10 +445,12 @@ def execute_readonly_stage(
 
     stage_dir = status.run_dir / "artifacts" / "stages" / stage
     stage_dir.mkdir(parents=True, exist_ok=True)
+    last_message_path = stage_dir / "last-message.md"
+    last_message_path.unlink(missing_ok=True)
     emit_operation_event(
         operation_callback,
         "stage_started",
-        f"Starting read-only {stage} stage.",
+        f"Starting read-only {stage} stage with {adapter}.",
         artifact=str(stage_dir),
     )
     runtime_stage_dir = workspace_dir / ".loopforge" / "runtime-stages"
@@ -499,7 +501,13 @@ def execute_readonly_stage(
     terminal_candidate_expected = False
     terminal_candidate_present = False
     terminal_candidate_limit_exceeded = False
+    headless_candidate_limit_exceeded = False
+    capture_codex_stream = False
+    capture_kilo_stream = False
     command: list[str] = []
+    stdout = b""
+    stderr = b""
+    artifact_stdout = b""
     try:
         if selected_execution_mode == "terminal":
             runtime_stage_dir.mkdir(parents=True, exist_ok=True)
@@ -530,6 +538,15 @@ def execute_readonly_stage(
                     artifacts_dir=stage_dir,
                     cancel_event=cancel_event,
                     terminal_launcher=terminal_launcher,
+                    output_chunk_callback=(
+                        (
+                            lambda stream, chunk: emit_adapter_output(
+                                operation_callback, stage, stream, chunk
+                            )
+                        )
+                        if operation_callback is not None
+                        else None
+                    ),
                 )
             finally:
                 runtime_prompt_path.unlink(missing_ok=True)
@@ -561,14 +578,15 @@ def execute_readonly_stage(
                 try:
                     with candidate_path.open("rb") as candidate_file:
                         terminal_candidate_present = True
-                        stdout = candidate_file.read(
-                            MAX_INTERACTIVE_STAGE_ARTIFACT_BYTES + 1
+                        artifact_stdout = candidate_file.read(
+                            MAX_STAGE_ARTIFACT_BYTES + 1
                         )
                 except FileNotFoundError:
-                    stdout = b""
-                if len(stdout) > MAX_INTERACTIVE_STAGE_ARTIFACT_BYTES:
+                    artifact_stdout = b""
+                if len(artifact_stdout) > MAX_STAGE_ARTIFACT_BYTES:
                     terminal_candidate_limit_exceeded = True
-                    stdout = stdout[:MAX_INTERACTIVE_STAGE_ARTIFACT_BYTES]
+                    artifact_stdout = artifact_stdout[:MAX_STAGE_ARTIFACT_BYTES]
+                stdout = terminal_result.output
                 stderr = terminal_result.error.encode("utf-8", errors="replace")
                 child = {
                     "completed": terminal_result.launched
@@ -576,15 +594,21 @@ def execute_readonly_stage(
                     "returncode": terminal_result.returncode,
                     "timed_out": terminal_result.timed_out,
                     "interrupted": cancelled_before_fallback,
-                    "output_limit_exceeded": False,
+                    "output_limit_exceeded": terminal_result.output_truncated,
                 }
 
         if selected_execution_mode == "headless":
+            capture_codex_stream = adapter == "codex" and operation_callback is not None
+            capture_kilo_stream = adapter == "kilo-code"
             command = command_for_readonly_stage(
                 adapter=adapter,
                 adapter_args=adapter_args or [],
                 workspace_dir=workspace_dir,
                 run_dir=status.run_dir,
+                json_output=capture_codex_stream,
+                output_last_message_path=(
+                    last_message_path if capture_codex_stream else None
+                ),
             )
             if adapter == "local-adapter-fixture":
                 child, stdout, stderr = execute_fixture_command(
@@ -593,6 +617,7 @@ def execute_readonly_stage(
                     project_dir=workspace_dir,
                     timeout_seconds=timeout_seconds,
                 )
+                artifact_stdout = stdout
             else:
                 child, stdout, stderr = execute_readonly_adapter_command(
                     command=command,
@@ -602,6 +627,28 @@ def execute_readonly_stage(
                     operation_callback=operation_callback,
                     cancel_event=cancel_event,
                 )
+                if capture_codex_stream:
+                    try:
+                        with last_message_path.open("rb") as message_file:
+                            artifact_stdout = message_file.read(
+                                MAX_STAGE_ARTIFACT_BYTES + 1
+                            )
+                    except FileNotFoundError:
+                        artifact_stdout = b""
+                    if len(artifact_stdout) > MAX_STAGE_ARTIFACT_BYTES:
+                        headless_candidate_limit_exceeded = True
+                        artifact_stdout = artifact_stdout[
+                            :MAX_STAGE_ARTIFACT_BYTES
+                        ]
+                elif capture_kilo_stream and isinstance(
+                    child.get("artifact_output"), bytes
+                ):
+                    artifact_stdout = child["artifact_output"]
+                    if len(artifact_stdout) > MAX_STAGE_ARTIFACT_BYTES:
+                        headless_candidate_limit_exceeded = True
+                        artifact_stdout = artifact_stdout[:MAX_STAGE_ARTIFACT_BYTES]
+                else:
+                    artifact_stdout = stdout
     except (OSError, RuntimeError, ValueError) as error:
         blockers = [f"read-only {stage} adapter execution could not start: {error}"]
         updated = update_run_for_stage_blocker(
@@ -623,11 +670,20 @@ def execute_readonly_stage(
     finally:
         runtime_prompt_path.unlink(missing_ok=True)
         candidate_path.unlink(missing_ok=True)
+        last_message_path.unlink(missing_ok=True)
 
     write_json_atomic(
         stage_dir / "execution.json",
         {
+            "adapter": adapter,
             "execution_mode": selected_execution_mode,
+            "stream_format": (
+                "codex-jsonl"
+                if capture_codex_stream
+                else "kilo-jsonl"
+                if capture_kilo_stream
+                else "text"
+            ),
             "terminal_launcher": (
                 terminal_result.launcher if terminal_result is not None else None
             ),
@@ -636,7 +692,15 @@ def execute_readonly_stage(
             ),
             "terminal_fallback_reason": terminal_fallback_reason,
             "candidate_present": terminal_candidate_present,
-            "candidate_limit_exceeded": terminal_candidate_limit_exceeded,
+            "candidate_limit_exceeded": (
+                terminal_candidate_limit_exceeded
+                or headless_candidate_limit_exceeded
+            ),
+            "transcript_truncated": (
+                terminal_result.output_truncated
+                if terminal_result is not None
+                else False
+            ),
             "returncode": child.get("returncode"),
             "command": (
                 redacted_interactive_command(command, interactive_prompt)
@@ -681,7 +745,7 @@ def execute_readonly_stage(
         blockers = [f"read-only {stage} adapter timed out."]
     elif not bool(child.get("completed")):
         blockers = [f"read-only {stage} adapter did not complete."]
-    elif returncode != 0 and not (terminal_candidate_expected and stdout):
+    elif returncode != 0 and not (terminal_candidate_expected and artifact_stdout):
         blockers = [f"read-only {stage} adapter failed with return code {returncode}."]
     else:
         blockers = []
@@ -694,14 +758,19 @@ def execute_readonly_stage(
     if terminal_candidate_limit_exceeded:
         artifact_validation_blockers.append(
             f"interactive {stage} candidate exceeded "
-            f"{MAX_INTERACTIVE_STAGE_ARTIFACT_BYTES} bytes."
+            f"{MAX_STAGE_ARTIFACT_BYTES} bytes."
+        )
+    elif headless_candidate_limit_exceeded:
+        artifact_validation_blockers.append(
+            f"headless {stage} candidate exceeded "
+            f"{MAX_STAGE_ARTIFACT_BYTES} bytes."
         )
     elif terminal_candidate_expected and not terminal_candidate_present:
         artifact_validation_blockers.append(
             f"interactive {stage} terminal did not produce its candidate artifact."
         )
     try:
-        artifact_text = stdout.decode("utf-8")
+        artifact_text = artifact_stdout.decode("utf-8")
     except UnicodeDecodeError:
         artifact_text = ""
         artifact_validation_blockers.append(f"{stage}.md stdout must be valid UTF-8.")
@@ -713,7 +782,7 @@ def execute_readonly_stage(
         rejected_artifact_path = retain_rejected_readonly_artifact(
             stage_dir=stage_dir,
             stage=stage,
-            content=stdout,
+            content=artifact_stdout,
         )
         blockers.extend(artifact_validation_blockers)
         blockers.append(
@@ -745,7 +814,7 @@ def execute_readonly_stage(
         )
 
     artifact_path = status.run_dir / f"{stage}.md"
-    artifact_path.write_bytes(stdout)
+    artifact_path.write_bytes(artifact_stdout)
     updated = normalize_run_workflow_state(run)
     stage_status, current_stage = READONLY_STAGE_SUCCESS[stage]
     updated["stage_statuses"][stage] = stage_status

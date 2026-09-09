@@ -40,6 +40,15 @@ FAMILY_PRESENTATION = {
     "archived": ("Archived", "–", "secondary"),
 }
 
+SEMANTIC_COLORS = {
+    "attention": "#FFB869",
+    "danger": "#FFB4AB",
+    "success": "#A8E6B0",
+    "running": "#D0BCFF",
+    "ready": "#D0BCFF",
+    "secondary": "#958EA0",
+}
+
 
 @dataclass(frozen=True)
 class ProjectSummary:
@@ -96,6 +105,12 @@ def state_family(state: object, *, blocked: bool = False, archived: bool = False
 
 def family_presentation(family: str) -> tuple[str, str, str]:
     return FAMILY_PRESENTATION.get(family, FAMILY_PRESENTATION["waiting"])
+
+
+def semantic_color(role: str) -> str:
+    """Resolve a semantic presentation role to the shared terminal palette."""
+
+    return SEMANTIC_COLORS.get(role, "#C7C6C6")
 
 
 def workflow_progress(run: dict[str, Any]) -> tuple[str, str, list[str]]:

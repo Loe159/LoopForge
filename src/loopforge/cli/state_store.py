@@ -18,19 +18,24 @@ from loopforge.cli.models import (
     HomeSnapshot,
     OperationSnapshot,
     ProjectSnapshot,
+    RunAgentSnapshot,
     RunSnapshot,
     SettingsSnapshot,
     UiSnapshot,
 )
 from loopforge.cli.operations import OperationController, OperationEvent
 from loopforge.cli.presentation import ShellSnapshot, shell_snapshot_from_status
+from loopforge.cli.run_artifacts import load_run_agent_snapshot
 from loopforge.engine import (
+    MetricsService,
     StatusResult,
+    first_nonnegative_int,
     list_registered_projects,
     list_runs_all_projects,
     list_runs_from_status,
 )
 from loopforge.engine.git_state import DEFAULT_GIT_STATE_SERVICE
+from loopforge.engine.storage import DEFAULT_JSON_STORE
 
 
 @dataclass(frozen=True)
@@ -43,6 +48,8 @@ class LoadIdentity:
 
 
 SnapshotListener = Callable[[UiSnapshot], None]
+MetricsLoader = Callable[[Path], tuple[dict[str, Any], str | None]]
+RunAgentLoader = Callable[[StatusResult, tuple[OperationEvent, ...]], RunAgentSnapshot]
 
 
 class StateStore:
@@ -63,6 +70,8 @@ class StateStore:
         projects_loader: Callable[[], Any] | None = None,
         global_runs_loader: Callable[[], Any] | None = None,
         branch_loader: Callable[[Path], str | None] | None = None,
+        metrics_loader: MetricsLoader | None = None,
+        run_agent_loader: RunAgentLoader | None = None,
     ) -> None:
         # current_status is a read-only loader used to populate cached read
         # models. This is an acceptable engine access pattern: the StateStore
@@ -78,6 +87,8 @@ class StateStore:
         self._branch_loader = branch_loader or (
             lambda path: DEFAULT_GIT_STATE_SERVICE.get(path).branch
         )
+        self._metrics_loader = metrics_loader or MetricsService(DEFAULT_JSON_STORE).load_record
+        self._run_agent_loader = run_agent_loader or load_run_agent_snapshot
         self._selected_project = project.resolve()
         self._selected_run_id: str | None = None
         self._generation = 0
@@ -89,9 +100,12 @@ class StateStore:
         self._project_rows: tuple[MappingProxyType[str, Any], ...] = ()
         self._global_runs: tuple[MappingProxyType[str, Any], ...] = ()
         self._run_blockers: tuple[str, ...] = ()
+        self._run_metrics: MappingProxyType[str, Any] = MappingProxyType({})
+        self._run_agent = RunAgentSnapshot()
         self._branch = "no Git branch"
         self._evidence = EvidenceSnapshot("empty")
         self._operation = OperationSnapshot()
+        self._run_agent_operation_session: tuple[str, str] | None = None
         self._snapshot = self._build_snapshot(reasons=("initial",))
 
     @property
@@ -133,6 +147,8 @@ class StateStore:
         self._status = None
         self._runs = ()
         self._run_blockers = ()
+        self._run_metrics = MappingProxyType({})
+        self._run_agent = RunAgentSnapshot()
         self._branch = "no Git branch"
         self._evidence = EvidenceSnapshot("empty")
         self.invalidate("project-selection")
@@ -142,6 +158,7 @@ class StateStore:
     def select_run(self, run_id: str | None) -> LoadIdentity:
         self._selected_run_id = run_id or None
         self._generation += 1
+        self._run_agent = RunAgentSnapshot()
         self.invalidate("run-selection")
         self.flush()
         return self.begin_load()
@@ -213,6 +230,9 @@ class StateStore:
         if not self.accepts(identity):
             return self._snapshot
         shell = shell_snapshot_from_status(status)
+        loaded_branch = self._branch_loader(identity.project)
+        run_metrics = _metrics_for_status(status, self._metrics_loader)
+        run_agent = self._run_agent_loader(status, self._operation.events)
         rows = [_frozen_row(row) for row in getattr(projects_result, "projects", ())]
         if not any(_row_path(row) == identity.project for row in rows):
             rows.insert(
@@ -224,13 +244,17 @@ class StateStore:
                         "initialized": status.initialized,
                         "run_count": len(getattr(runs_result, "runs", ())),
                         "attention": shell.family,
-                        "branch": self._branch_loader(identity.project),
+                        "branch": loaded_branch,
                         "last_activity": "current session",
                     }
                 ),
             )
+        if not self.accepts(identity):
+            return self._snapshot
         run_dir_changed = self._status is not None and self._status.run_dir != status.run_dir
         self._status = status
+        self._run_metrics = run_metrics
+        self._run_agent = run_agent
         self._runs = tuple(_frozen_row(row) for row in getattr(runs_result, "runs", ()))
         self._run_blockers = tuple(str(value) for value in getattr(runs_result, "blockers", ()))
         self._project_rows = tuple(rows)
@@ -241,7 +265,7 @@ class StateStore:
         record = next((row for row in rows if _row_path(row) == identity.project), None)
         self._branch = str(
             (record or {}).get("branch")
-            or self._branch_loader(identity.project)
+            or loaded_branch
             or "no Git branch"
         )
         if run_dir_changed:
@@ -262,6 +286,7 @@ class StateStore:
         return self.flush() if publish else self._snapshot
 
     def set_operation(self, operation: OperationController | None) -> UiSnapshot:
+        self._run_agent_operation_session = None
         if operation is None:
             self._operation = OperationSnapshot()
         else:
@@ -272,8 +297,34 @@ class StateStore:
     def record_operation_events(self, operation: OperationController) -> UiSnapshot:
         """Coalesce worker events; caller flushes once per UI-loop turn."""
 
-        operation.collect_events()
-        self._operation = _operation_snapshot(operation, operation.history)
+        previous_events = self._operation.events
+        history = operation.collect_events()
+        self._operation = _operation_snapshot(operation, history)
+        session_event = next(
+            (
+                event
+                for event in reversed(history)
+                if event.artifact
+                and event.kind.replace("_", " ")
+                in {"attempt started", "stage started"}
+            ),
+            None,
+        )
+        session_key = (
+            (operation.operation_id, str(session_event.artifact))
+            if session_event is not None
+            else None
+        )
+        if (
+            history != previous_events
+            and self._status is not None
+            and session_key is not None
+            and session_key != self._run_agent_operation_session
+        ):
+            run_agent = self._run_agent_loader(self._status, history)
+            self._run_agent = run_agent
+            if run_agent.system_prompt:
+                self._run_agent_operation_session = session_key
         self.invalidate("operation-event")
         return self._snapshot
 
@@ -316,6 +367,18 @@ class StateStore:
         project_state = "blocked" if self._run_blockers else "ready" if shell else "loading"
         run_state = "empty" if shell is None or shell.run is None else project_state
         home_state = "empty" if not self._project_rows else "ready"
+        run = (
+            self._status.run
+            if self._status is not None and isinstance(self._status.run, dict)
+            else {}
+        )
+        raw_attempts = run.get("attempts", ())
+        attempt_tail = raw_attempts[-12:] if isinstance(raw_attempts, (list, tuple)) else ()
+        attempts = tuple(
+            _frozen_row(attempt)
+            for attempt in attempt_tail
+            if isinstance(attempt, dict)
+        )
         return UiSnapshot(
             revision=self._revision if revision is None else revision,
             reasons=reasons,
@@ -330,7 +393,14 @@ class StateStore:
                 self._run_blockers,
                 self._branch,
             ),
-            run=RunSnapshot(run_state, shell),
+            run=RunSnapshot(
+                run_state,
+                shell,
+                created_at=str(run.get("created_at") or ""),
+                attempts=attempts,
+                total_tokens=_metrics_total_tokens(self._run_metrics),
+                agent=self._run_agent,
+            ),
             evidence=self._evidence,
             settings=SettingsSnapshot(),
             operation=self._operation,
@@ -346,6 +416,28 @@ def _row_path(row: MappingProxyType[str, Any]) -> Path | None:
         return Path(str(row.get("path") or "")).resolve()
     except OSError:
         return None
+
+
+def _metrics_for_status(
+    status: StatusResult,
+    loader: MetricsLoader,
+) -> MappingProxyType[str, Any]:
+    """Return the current run's canonical metrics record when one exists."""
+
+    if status.run_dir is None or not isinstance(status.run, dict):
+        return MappingProxyType({})
+    run_id = str(status.run.get("id") or status.run.get("run_id") or status.run_dir.name)
+    record, _ = loader(status.run_dir)
+    if str(record.get("run_id") or "") != run_id:
+        return MappingProxyType({})
+    return _frozen_row(record)
+
+
+def _metrics_total_tokens(record: MappingProxyType[str, Any]) -> int | None:
+    tokens = record.get("tokens")
+    if not isinstance(tokens, dict):
+        return None
+    return first_nonnegative_int(tokens.get("total_tokens"))
 
 
 def _operation_snapshot(

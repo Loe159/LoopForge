@@ -49,6 +49,17 @@ class MetricsService:
             counts[key] = counts.get(key, 0) + 1
         return dict(sorted(counts.items()))
 
+    def load_record(self, run_dir: Path) -> tuple[dict[str, Any], str | None]:
+        """Read one run's metrics record without scanning sibling runs."""
+
+        path = run_dir / "metrics" / self.record_file
+        if not path.is_file():
+            return {}, None
+        try:
+            return self.store.read_object(path), None
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            return {}, f"could not read metrics record {path}: {error}"
+
     def summarize_token_field(self, records: list[dict[str, Any]], field: str) -> dict[str, Any]:
         return self.summarize_number_series(
             records,

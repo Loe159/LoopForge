@@ -20,6 +20,12 @@ from loopforge.cli.workflow import (
 
 
 class CliStructureTests(unittest.TestCase):
+    def test_run_dashboard_stays_out_of_the_public_cli_facade(self) -> None:
+        from loopforge.cli.textual_app.widgets import RunDashboard
+
+        self.assertFalse(hasattr(cli, "RunDashboard"))
+        self.assertEqual(RunDashboard.__module__, "loopforge.cli.textual_app.widgets")
+
     def test_cli_facade_reexports_models_and_errors(self) -> None:
         self.assertIs(cli.CliOptions, CliOptions)
         self.assertIs(cli.GitHubIssueRef, GitHubIssueRef)

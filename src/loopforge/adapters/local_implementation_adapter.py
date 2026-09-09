@@ -6,16 +6,22 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
+import time
+import unicodedata
+from collections import deque
 from pathlib import Path
 from typing import Any, Sequence
 
+from loopforge.adapters.bounded_capture import BoundedCapture
 from loopforge.adapters.kilo_code import (
     command_without_windows_batch_launcher,
     command_with_prompt,
     is_kilo_command,
+    is_kilo_json_stream,
 )
 from loopforge.checks import isolated_process, validate_implementation_result
 from loopforge.contracts import policy_path
@@ -62,6 +68,44 @@ EXPECTED_POLICY: dict[str, Any] = {
     ],
     "stream_child_output": True,
 }
+
+_ANSI_OR_OSC = re.compile(
+    r"(?:\x1b\][^\x07\x1b]*(?:\x07|\x1b\\))|"
+    r"(?:(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~])"
+)
+_PRIVATE_KEY = re.compile(
+    r"-----BEGIN (?:[A-Z0-9]+ )?PRIVATE KEY-----[\s\S]*?"
+    r"-----END (?:[A-Z0-9]+ )?PRIVATE KEY-----"
+)
+_KNOWN_TOKEN = re.compile(
+    r"(?:github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|"
+    r"(?:AKIA|ASIA)[A-Z0-9]{16}|AIza[0-9A-Za-z_-]{35}|"
+    r"sk-[A-Za-z0-9_-]{8,})"
+)
+_SECRET_ASSIGNMENT = re.compile(
+    r"\b(api[_ -]?key|authorization|client[_ -]?secret|password|passwd|token)"
+    r"\b(\s*[:=]\s*)([^\s,;}\]]+)",
+    flags=re.IGNORECASE,
+)
+_BEARER_TOKEN = re.compile(r"\bbearer\s+[^\s,;}\]]+", flags=re.IGNORECASE)
+_SENSITIVE_FIELDS = frozenset(
+    {
+        "api_key",
+        "apikey",
+        "authorization",
+        "client_secret",
+        "credential",
+        "credentials",
+        "id_token",
+        "password",
+        "passwd",
+        "private_key",
+        "refresh_token",
+        "secret",
+        "session_token",
+        "token",
+    }
+)
 
 
 def load_policy(path: Path = POLICY_PATH) -> dict[str, Any]:
@@ -257,14 +301,143 @@ def collect_text(value: object) -> list[str]:
     return texts
 
 
-def codex_event_lines(event: dict[str, Any], state: dict[str, str]) -> list[str]:
+def _redact_observable_value(value: object) -> object:
+    if isinstance(value, dict):
+        redacted: dict[str, object] = {}
+        for key, item in value.items():
+            name = re.sub(r"[^a-z0-9]+", "_", str(key).casefold()).strip("_")
+            redacted[str(key)] = (
+                "[redacted sensitive value]"
+                if name in _SENSITIVE_FIELDS
+                else _redact_observable_value(item)
+            )
+        return redacted
+    if isinstance(value, list):
+        return [_redact_observable_value(item) for item in value]
+    if isinstance(value, str):
+        return _sanitize_observable_text(value)
+    return value
+
+
+def _sanitize_observable_text(value: str) -> str:
+    text = _ANSI_OR_OSC.sub("", value.replace("\r\n", "\n").replace("\r", "\n"))
+    text = "".join(
+        character
+        for character in text
+        if character in "\n\t" or not unicodedata.category(character).startswith("C")
+    )
+    text = _PRIVATE_KEY.sub("[redacted private key]", text)
+    text = _KNOWN_TOKEN.sub("[redacted sensitive value]", text)
+    text = _SECRET_ASSIGNMENT.sub(
+        lambda match: f"{match.group(1)}{match.group(2)}[redacted sensitive value]",
+        text,
+    )
+    return _BEARER_TOKEN.sub("Bearer [redacted sensitive value]", text)
+
+
+def observable_stream_text(value: object, limit: int = 1600) -> str:
+    """Keep emitted agent content readable while preserving the output bound."""
+
+    if isinstance(value, (dict, list)):
+        text = json.dumps(
+            _redact_observable_value(value),
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    else:
+        text = str(value or "")
+    text = _sanitize_observable_text(text).strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)].rstrip() + "..."
+
+
+def observable_stream_block(label: str, value: object) -> list[str]:
+    text = observable_stream_text(value)
+    if not text:
+        return [label]
+    return [label, *(f"  {line}" for line in text.splitlines())]
+
+
+def codex_item_lines(item: dict[str, Any], event_type: str) -> list[str]:
+    """Project one documented Codex JSONL item without hiding its payload."""
+
+    item_type = str(item.get("type") or "").lower()
+    status = str(item.get("status") or "").lower()
+    if item_type == "reasoning":
+        return observable_stream_block("Reasoning", item.get("text") or "In progress")
+    if item_type == "agent_message":
+        return observable_stream_block("Agent message", item.get("text"))
+    if item_type == "command_execution":
+        command = observable_stream_text(item.get("command"))
+        exit_code = item.get("exit_code")
+        metadata = [
+            value
+            for value in (
+                status,
+                f"exit {exit_code}" if exit_code is not None else "",
+            )
+            if value
+        ]
+        label = "Tool call" + (f" ({', '.join(metadata)})" if metadata else "")
+        lines = observable_stream_block(label, f"$ {command}" if command else "")
+        output = observable_stream_text(item.get("aggregated_output"))
+        if output and not event_type.endswith("started"):
+            lines.extend(["  Output", *(f"    {line}" for line in output.splitlines())])
+        return lines
+    if item_type == "file_change":
+        changes = item.get("changes")
+        rows = []
+        if isinstance(changes, list):
+            rows = [
+                f"{value.get('kind', 'update')} {value.get('path', '')}".strip()
+                for value in changes
+                if isinstance(value, dict)
+            ]
+        return observable_stream_block("File change", "\n".join(rows) or status)
+    if item_type == "mcp_tool_call":
+        target = ".".join(
+            value
+            for value in (
+                str(item.get("server") or ""),
+                str(item.get("tool") or ""),
+            )
+            if value
+        )
+        label = f"MCP tool call{f' · {target}' if target else ''}"
+        details: list[str] = []
+        if item.get("arguments") is not None:
+            details.append(f"Arguments: {observable_stream_text(item['arguments'])}")
+        if item.get("result") is not None and not event_type.endswith("started"):
+            details.append(f"Result: {observable_stream_text(item['result'])}")
+        if item.get("error") is not None:
+            details.append(f"Error: {observable_stream_text(item['error'])}")
+        return observable_stream_block(label, "\n".join(details) or status)
+    if item_type == "web_search":
+        return observable_stream_block("Web search", item.get("query"))
+    if item_type == "todo_list":
+        todos = item.get("items")
+        rows = []
+        if isinstance(todos, list):
+            rows = [
+                f"[{'x' if value.get('completed') else ' '}] {value.get('text', '')}".rstrip()
+                for value in todos
+                if isinstance(value, dict)
+            ]
+        return observable_stream_block("Plan", "\n".join(rows))
+    if item_type == "error":
+        return observable_stream_block("Agent error", item.get("message"))
+    return []
+
+
+def codex_event_lines(event: dict[str, Any], state: dict[str, Any]) -> list[str]:
     event_type = str(event.get("type") or event.get("event") or "").lower()
-    event_blob = json.dumps(event, sort_keys=True).lower()
-    if "reason" in event_type or "thinking" in event_type or "reasoning" in event_blob:
-        if state.get("last") != "thinking":
-            state["last"] = "thinking"
-            return ["Reflexion en cours..."]
-        return []
+    item = event.get("item")
+    if isinstance(item, dict):
+        rendered = codex_item_lines(item, event_type)
+        if rendered:
+            state["last"] = str(item.get("type") or "item")
+            return rendered
     if "error" in event_type or "error" in event:
         state["last"] = "error"
         detail = (
@@ -272,22 +445,127 @@ def codex_event_lines(event: dict[str, Any], state: dict[str, str]) -> list[str]
             or event_type
             or "unknown error"
         )
-        return [f"Erreur adaptateur: {compact_stream_text(detail)}"]
+        return observable_stream_block("Adapter error", detail)
+    if "reason" in event_type or "thinking" in event_type:
+        state["last"] = "reasoning"
+        detail = nested_value(event, {"text", "summary", "message"})
+        return observable_stream_block("Reasoning", detail or "In progress")
     if any(marker in event_type for marker in ("tool", "exec", "command", "function_call")):
         command_value = nested_value(event, {"command", "cmd", "name"})
         if command_value is None:
             command_value = event_type.replace("_", " ")
         state["last"] = "tool"
-        return [f"Outil: {compact_stream_text(command_value)}"]
+        return observable_stream_block("Tool call", command_value)
     if "message" in event_type or "response" in event_type or "agent" in event_type:
         texts = [text for text in collect_text(event) if text.strip()]
         if texts:
             state["last"] = "message"
-            lines = ["Message"]
-            for text in texts[:3]:
-                lines.extend(f"  {line}" for line in text.splitlines() if line.strip())
-            return lines
+            return observable_stream_block("Agent message", "\n".join(texts[:3]))
+    if event_type == "turn.completed" and isinstance(event.get("usage"), dict):
+        state["last"] = "usage"
+        return observable_stream_block("Usage", event["usage"])
     return []
+
+
+def kilo_event_lines(event: dict[str, Any], state: dict[str, Any]) -> list[str]:
+    """Project one Kilo JSON event and suppress its duplicated event copies."""
+
+    event_type = str(event.get("type") or "").casefold()
+    part = event.get("part")
+    if not isinstance(part, dict):
+        part = {}
+    part_type = str(part.get("type") or event_type).casefold()
+    rendered: list[str]
+    if event_type == "reasoning" or part_type == "reasoning":
+        rendered = observable_stream_block("Reasoning", part.get("text") or "In progress")
+    elif event_type == "text" or part_type == "text":
+        rendered = observable_stream_block("Agent message", part.get("text"))
+    elif event_type == "tool_use" or part_type == "tool":
+        tool = observable_stream_text(part.get("tool") or "tool")
+        tool_state = part.get("state")
+        if not isinstance(tool_state, dict):
+            tool_state = {}
+        status = observable_stream_text(tool_state.get("status"))
+        label = "Tool call" + (f" ({status})" if status else "")
+        if tool:
+            label += f" · {tool}"
+        details: list[str] = []
+        if tool_state.get("input") is not None:
+            details.append(f"Input: {observable_stream_text(tool_state['input'])}")
+        if tool_state.get("output") is not None:
+            details.append(f"Output: {observable_stream_text(tool_state['output'])}")
+        if tool_state.get("error") is not None:
+            details.append(f"Error: {observable_stream_text(tool_state['error'])}")
+        rendered = observable_stream_block(label, "\n".join(details))
+    elif event_type == "error" or part_type == "error":
+        detail = nested_value(event, {"message", "error", "detail"})
+        rendered = observable_stream_block("Adapter error", detail or "Unknown Kilo error")
+    else:
+        return []
+
+    # Kilo 7.4 emits duplicate logical events whose envelope metadata can
+    # differ. Deduplicate the safe rendered projection rather than the raw
+    # JSON, and retain a short history because unrendered step events may sit
+    # between the copies.
+    fingerprint = json.dumps(
+        {
+            "part_id": part.get("id"),
+            "event_type": event_type,
+            "part_type": part_type,
+            "rendered": rendered,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    seen = state.get("seen_kilo_events")
+    if not isinstance(seen, deque):
+        seen = deque(maxlen=64)
+        state["seen_kilo_events"] = seen
+    if fingerprint in seen:
+        return []
+    seen.append(fingerprint)
+    return rendered
+
+
+def adapter_event_lines(event: dict[str, Any], state: dict[str, Any]) -> list[str]:
+    """Project a supported harness JSON event through one presentation seam."""
+
+    if isinstance(event.get("part"), dict) and event.get("sessionID"):
+        return kilo_event_lines(event, state)
+    return codex_event_lines(event, state)
+
+
+def kilo_final_message(value: bytes) -> bytes:
+    """Extract Kilo's final assistant text from its duplicated JSONL stream."""
+
+    final_answers: list[str] = []
+    other_answers: list[str] = []
+    seen_parts: set[str] = set()
+    for raw_line in value.decode("utf-8", errors="replace").splitlines():
+        try:
+            event = json.loads(raw_line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict) or str(event.get("type") or "").casefold() != "text":
+            continue
+        part = event.get("part")
+        if not isinstance(part, dict):
+            continue
+        part_id = str(part.get("id") or "")
+        if part_id and part_id in seen_parts:
+            continue
+        if part_id:
+            seen_parts.add(part_id)
+        text = str(part.get("text") or "").strip()
+        if not text:
+            continue
+        phase = nested_value(part.get("metadata"), {"phase"})
+        if str(phase or "").casefold() == "final_answer":
+            final_answers.append(text)
+        else:
+            other_answers.append(text)
+    selected = final_answers or other_answers[-1:]
+    return "\n".join(selected).encode("utf-8")
 
 
 class StreamPresenter:
@@ -296,17 +574,19 @@ class StreamPresenter:
         target,
         *,
         parse_codex_json: bool = False,
+        parse_kilo_json: bool = False,
         codex_text: bool = False,
     ):
         self.target = target
         self.parse_codex_json = parse_codex_json
+        self.parse_kilo_json = parse_kilo_json
         self.codex_text = codex_text
         self.buffer = ""
-        self.state: dict[str, str] = {}
+        self.state: dict[str, Any] = {}
         self.noted_diagnostic = False
 
     def write(self, chunk: bytes) -> None:
-        if not self.parse_codex_json and not self.codex_text:
+        if not self.parse_codex_json and not self.parse_kilo_json and not self.codex_text:
             self.target.buffer.write(chunk)
             self.target.buffer.flush()
             return
@@ -320,7 +600,7 @@ class StreamPresenter:
         stripped = line.strip()
         if not stripped:
             return
-        if self.parse_codex_json:
+        if self.parse_codex_json or self.parse_kilo_json:
             try:
                 event = json.loads(stripped)
             except json.JSONDecodeError:
@@ -329,8 +609,13 @@ class StreamPresenter:
                     self.noted_diagnostic = True
                 return
             if isinstance(event, dict):
-                for rendered in codex_event_lines(event, self.state):
-                    print(rendered, file=self.target, flush=True)
+                rendered = (
+                    kilo_event_lines(event, self.state)
+                    if self.parse_kilo_json
+                    else codex_event_lines(event, self.state)
+                )
+                if rendered:
+                    print("\n".join(rendered), file=self.target, flush=True)
             return
         if not self.noted_diagnostic:
             print(f"Adapter: {compact_stream_text(stripped)}", file=self.target, flush=True)
@@ -349,6 +634,7 @@ def summary_for(
     changed: bool,
     policy: dict[str, Any],
     *,
+    output_limit_exceeded: bool = False,
     fixture: bool = False,
     stderr: bytes = b"",
 ) -> str:
@@ -359,6 +645,8 @@ def summary_for(
             "Codex Windows workspace sandbox helper failed to launch before "
             "implementation; inspect the retained child stderr evidence."
         )
+    elif output_limit_exceeded:
+        text = f"{command_name} exceeded the bounded output limit."
     elif timed_out:
         text = f"{command_name} timed out."
     elif completed is None:
@@ -439,6 +727,7 @@ def run_adapter(
         command_with_kilo_prompt(command, stdin_file)
     )
     kilo_prepared = is_kilo_command(resolved_command)
+    present_kilo_json = kilo_prepared and is_kilo_json_stream(resolved_command)
     prepared_command = (
         command_without_windows_batch_launcher(resolved_command)
         if kilo_prepared
@@ -446,6 +735,7 @@ def run_adapter(
     )
     completed: subprocess.CompletedProcess[bytes] | None = None
     timed_out = False
+    output_limit_exceeded = False
     try:
         stdin_handle = (
             stdin_file.open("rb")
@@ -477,6 +767,7 @@ def run_adapter(
         )
         stdout_buffer = bytearray()
         stderr_buffer = bytearray()
+        capture = BoundedCapture(int(isolation_policy["max_captured_output_bytes"]))
         present_codex_json = is_codex_json_stream(prepared_command)
         present_codex_text = is_codex_command(prepared_command) and not present_codex_json
 
@@ -496,9 +787,11 @@ def run_adapter(
                     chunk = read_available(source)
                     if not chunk:
                         break
-                    buffer.extend(chunk)
-                    if stream_output and policy["stream_child_output"]:
-                        presenter.write(chunk)
+                    retained = capture.append(buffer, chunk)
+                    if retained and stream_output and policy["stream_child_output"]:
+                        presenter.write(retained)
+                    if capture.exceeded.is_set():
+                        break
             finally:
                 presenter.close()
                 source.close()
@@ -512,6 +805,7 @@ def run_adapter(
                 StreamPresenter(
                     sys.stdout,
                     parse_codex_json=present_codex_json,
+                    parse_kilo_json=present_kilo_json,
                     codex_text=present_codex_text,
                 ),
             ),
@@ -523,20 +817,43 @@ def run_adapter(
                 process.stderr,
                 sys.stderr,
                 stderr_buffer,
-                StreamPresenter(sys.stderr, codex_text=present_codex_text or present_codex_json),
+                StreamPresenter(
+                    sys.stderr,
+                    codex_text=(
+                        present_codex_text
+                        or present_codex_json
+                        or present_kilo_json
+                    ),
+                ),
             ),
             daemon=True,
         )
         stdout_thread.start()
         stderr_thread.start()
-        try:
-            returncode = process.wait(timeout=policy["command_timeout_seconds"])
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            process.kill()
-            returncode = process.wait()
+        deadline = time.monotonic() + policy["command_timeout_seconds"]
+        while True:
+            if capture.exceeded.is_set():
+                process.terminate()
+                try:
+                    returncode = process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    returncode = process.wait()
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                timed_out = True
+                process.kill()
+                returncode = process.wait()
+                break
+            try:
+                returncode = process.wait(timeout=min(remaining, 0.1))
+                break
+            except subprocess.TimeoutExpired:
+                continue
         stdout_thread.join(timeout=5)
         stderr_thread.join(timeout=5)
+        output_limit_exceeded = capture.exceeded.is_set()
         if stdin_handle is not None:
             stdin_handle.close()
         completed = subprocess.CompletedProcess(
@@ -562,7 +879,7 @@ def run_adapter(
         changed = initial_snapshot != workspace_file_snapshot(workspace, policy)
     else:
         changed = bool(relevant_git_status_paths(current_git_paths, policy))
-    if timed_out or completed.returncode != 0:
+    if timed_out or output_limit_exceeded or completed.returncode != 0:
         status = "failed"
     elif changed:
         status = "completed"
@@ -574,6 +891,7 @@ def run_adapter(
         timed_out,
         changed,
         policy,
+        output_limit_exceeded=output_limit_exceeded,
         fixture=(
             stream_output
             and session["runner_id"] in policy["fixture_runner_ids"]

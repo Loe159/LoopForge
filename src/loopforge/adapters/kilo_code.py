@@ -36,9 +36,36 @@ def headless_run_command(
     prepared = list(arguments)
     if prepared[:1] == ["run"]:
         prepared = prepared[1:]
+    controlled: list[str] = []
+    index = 0
+    while index < len(prepared):
+        argument = prepared[index]
+        option = argument.split("=", 1)[0]
+        if option == "--format":
+            index += 1 if "=" in argument else 2
+            continue
+        if option in {"--thinking", "--no-thinking"}:
+            index += 1
+            continue
+        controlled.append(argument)
+        index += 1
+    prepared = controlled
     if not any(argument == "--agent" or argument.startswith("--agent=") for argument in prepared):
         prepared.extend(["--agent", default_agent])
-    return ["kilo", "run", *prepared]
+    return ["kilo", "run", *prepared, "--format", "json", "--thinking"]
+
+
+def is_kilo_json_stream(command: Sequence[str]) -> bool:
+    """Return whether a Kilo run command emits newline-delimited JSON events."""
+
+    if not is_kilo_run_command(command):
+        return False
+    for index, argument in enumerate(command):
+        if argument == "--format" and index + 1 < len(command):
+            return command[index + 1].casefold() == "json"
+        if argument.casefold() == "--format=json":
+            return True
+    return False
 
 
 def command_with_prompt(command: Sequence[str], prompt: str) -> list[str]:

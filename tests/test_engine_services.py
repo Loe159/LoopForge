@@ -729,6 +729,65 @@ class PackagedRuntimeLayoutTests(unittest.TestCase):
             self.assertEqual(payload["status"], "completed")
             self.assertTrue(payload["workspace_changed"])
 
+    def test_adapter_stops_child_when_combined_output_limit_is_exceeded(self) -> None:
+        policy = local_implementation_adapter.load_policy()
+        isolation_policy = isolated_process.load_policy()
+        isolation_policy["max_captured_output_bytes"] = 64
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            session_path = workspace / "expected-session.json"
+            session_path.write_text(
+                json.dumps(
+                    {
+                        "issue": 1,
+                        "risk": "low",
+                        "base_commit": "0" * 40,
+                        "workspace": str(workspace.resolve()),
+                        "runner_id": "local-adapter-fixture",
+                        "recovery_authorized": False,
+                        "preflight_sha256": "1" * 64,
+                        "start_authorization_receipt_sha256": "2" * 64,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with mock.patch.object(
+                local_implementation_adapter.isolated_process,
+                "load_policy",
+                return_value=isolation_policy,
+            ):
+                result = local_implementation_adapter.run_adapter(
+                    session_path,
+                    [
+                        sys.executable,
+                        "-c",
+                        "import sys; sys.stdout.buffer.write(b'x' * 65536); sys.stdout.flush()",
+                    ],
+                    workspace,
+                    policy,
+                )
+
+            payload = json.loads(result)
+            self.assertEqual(payload["status"], "failed")
+            self.assertIn("bounded output limit", payload["summary"])
+
+    def test_observable_output_redacts_secrets_and_terminal_controls(self) -> None:
+        rendered = local_implementation_adapter.observable_stream_text(
+            {
+                "password": "visible-password",
+                "token": "sk-visible-token",
+                "message": "safe\x1b]0;forged title\x07\u009dsuffix",
+            }
+        )
+
+        self.assertIn("safe", rendered)
+        self.assertNotIn("visible-password", rendered)
+        self.assertNotIn("sk-visible-token", rendered)
+        self.assertNotIn("forged title", rendered)
+        self.assertNotIn("\x1b", rendered)
+        self.assertNotIn("\u009d", rendered)
+
     def test_kilo_code_is_allowlisted_and_receives_the_loopforge_prompt(self) -> None:
         policy = local_implementation_adapter.load_policy()
         self.assertIn("kilo", policy["allowed_command_basenames"])
@@ -750,14 +809,21 @@ class PackagedRuntimeLayoutTests(unittest.TestCase):
         )
         self.assertEqual(
             kilo_code.headless_run_command([], default_agent=kilo_code.DEFAULT_READONLY_AGENT),
-            ["kilo", "run", "--agent", "ask"],
+            ["kilo", "run", "--agent", "ask", "--format", "json", "--thinking"],
         )
         self.assertEqual(
             kilo_code.headless_run_command(
                 ["run", "--agent=architect"],
                 default_agent=kilo_code.DEFAULT_IMPLEMENTATION_AGENT,
             ),
-            ["kilo", "run", "--agent=architect"],
+            [
+                "kilo",
+                "run",
+                "--agent=architect",
+                "--format",
+                "json",
+                "--thinking",
+            ],
         )
 
 
@@ -1036,6 +1102,27 @@ class PackTrustStoreTests(unittest.TestCase):
 
 
 class MetricsServiceTests(unittest.TestCase):
+    def test_load_record_reads_only_the_selected_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            selected = root / "selected"
+            other = root / "other"
+            store = JsonStore()
+            store.write_object(
+                selected / "metrics" / "record.json",
+                {"run_id": "selected", "tokens": {"total_tokens": 12}},
+            )
+            store.write_object(
+                other / "metrics" / "record.json",
+                {"run_id": "other", "tokens": {"total_tokens": 99}},
+            )
+
+            record, error = MetricsService(store).load_record(selected)
+
+            self.assertIsNone(error)
+            self.assertEqual(record["run_id"], "selected")
+            self.assertEqual(record["tokens"]["total_tokens"], 12)
+
     def test_summary_keeps_unknown_values_out_of_averages(self) -> None:
         service = MetricsService(JsonStore())
         summary = service.build_summary(
