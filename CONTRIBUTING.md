@@ -24,7 +24,6 @@ to confirm no flaky tests.
 |---|---|---|---|
 | Python | 3.11 | — | Required by `pyproject.toml` |
 | textual | 8.0 | <9 | TUI framework |
-| prompt_toolkit | 3.0 | — | CLI prompt |
 | rich | 13.0 | — | Terminal formatting |
 
 ## CLI changes

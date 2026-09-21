@@ -331,6 +331,49 @@
     min-height: 6;
 }
 
+.run-tool-entry {
+    height: auto;
+    padding: 0;
+    margin: 0;
+    border: none;
+    background: transparent;
+}
+
+.run-tool-entry > CollapsibleTitle {
+    width: 1fr;
+    height: 1;
+    padding: 0;
+    color: #958EA0;
+    text-style: none;
+    text-overflow: ellipsis;
+}
+
+.run-tool-entry > CollapsibleTitle:focus {
+    background: #2A2435;
+    color: #D0BCFF;
+}
+
+.run-tool-entry > Contents {
+    padding: 0 0 1 3;
+    color: #958EA0;
+}
+
+.run-entry-message {
+    margin: 1 0;
+    padding: 0 1;
+    border-left: solid #CBC3D7;
+    color: #E7E0ED;
+}
+
+.run-entry-reasoning {
+    margin: 1 0;
+    color: #958EA0;
+}
+
+.run-entry-info {
+    color: #958EA0;
+}
+
 #run-implementation-panel {
     min-height: 7;
     border: solid #A66500;

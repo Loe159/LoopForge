@@ -12,6 +12,12 @@ from loopforge.engine.lifecycle import RunStage
 
 
 class TestNormalizeWorkflowState(unittest.TestCase):
+    def test_review_complete_survives_normalization(self):
+        run = {"current_stage": "review_complete", "stage_statuses": {"review": "complete"}}
+        normalized = normalize_run_workflow_state(run)
+        self.assertEqual(normalized["current_stage"], RunStage.REVIEW_COMPLETE.value)
+        self.assertEqual(normalized["stage_statuses"]["review"], "complete")
+
     def test_normalize_rejects_unknown_stage(self):
         """Unknown current_stage should be reset to task_draft."""
         run = {"current_stage": "invalid_stage_fake"}

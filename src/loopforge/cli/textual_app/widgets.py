@@ -9,12 +9,14 @@ a separate ``_selected_index``.
 from __future__ import annotations
 
 from typing import Any, Callable
+from dataclasses import replace
 
+from rich.console import Group
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.widgets import OptionList
-from textual.widgets import Input, Static
+from textual.widgets import Collapsible, Input, Static
 from textual.widgets.option_list import Option
 
 from loopforge.cli.textual_app.run_presenter import (
@@ -23,6 +25,9 @@ from loopforge.cli.textual_app.run_presenter import (
     run_glyph,
     semantic_color,
     terminal_marker,
+    TranscriptEntry,
+    agent_body_renderable,
+    transcript_entries,
 )
 
 
@@ -255,6 +260,155 @@ class RunHeader(Horizontal):
         self.query_one("#run-header-status", Static).update(state)
 
 
+class RunToolEntry(Collapsible):
+    """A native call updated in place; expansion is owned by the reader."""
+
+    def __init__(self, entry: TranscriptEntry) -> None:
+        self.entry = entry
+        self.detail = Static(entry.body, markup=False)
+        self.phase = 0
+        super().__init__(self.detail, title="", collapsed=True,
+                         collapsed_symbol=run_glyph("▸", ">"),
+                         expanded_symbol=run_glyph("▾", "v"), classes="run-tool-entry")
+        self.update_entry(entry)
+
+    def update_entry(self, entry: TranscriptEntry) -> None:
+        self.entry = entry
+        self.detail.update(
+            agent_body_renderable(entry.body or "No additional details.", tool_output=True)
+        )
+        self.set_class(entry.status == "failed", "tool-failed")
+        self.refresh_title()
+
+    def refresh_title(self) -> None:
+        entry = self.entry
+        if entry.status == "running":
+            frames = "|/-\\" if ascii_only() else "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+            marker = frames[self.phase % len(frames)]
+        else:
+            marker = {"completed": run_glyph("✓", "+"), "failed": run_glyph("×", "x")}.get(entry.status, "?")
+        title = Text(marker, style=semantic_color("danger") if entry.status == "failed" else
+                     semantic_color("success") if entry.status == "completed" else "#958EA0")
+        title.append(f" {entry.title}", style="#958EA0")
+        if entry.summary:
+            summary = " ".join(entry.summary.split())
+            title.append(f"  {summary[:100]}", style="#958EA0")
+        if entry.status == "failed":
+            title.append("  Failed", style=semantic_color("danger"))
+        elif entry.status == "unknown":
+            title.append("  No result received", style="#958EA0")
+        # Rich Text remains literal: tool names/commands are never markup.
+        self.title = title
+
+
+class RunAgentOutput(Vertical):
+    """One incremental narrative, preserving tool widgets and keyboard focus."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.transcript = Text()
+        self._items: dict[str, Static | RunToolEntry] = {}
+        self._entries: tuple[TranscriptEntry, ...] = ()
+        self._scope: object = None
+
+    def on_mount(self) -> None:
+        self._spinner = self.set_interval(0.12, self._tick, pause=True)
+
+    def _tick(self) -> None:
+        for item in self._items.values():
+            if isinstance(item, RunToolEntry) and item.entry.status == "running":
+                item.phase += 1
+                item.refresh_title()
+
+    def update(self, value: Text, *, active: bool = True, scope: object = None) -> None:
+        if scope != self._scope:
+            for item in self._items.values():
+                item.remove()
+            self._items.clear()
+            self._entries = ()
+            self._scope = scope
+        self.transcript = value
+        entries = transcript_entries(value.plain)
+        if not active:
+            entries = tuple(replace(entry, status="unknown") if entry.status == "running" else entry
+                            for entry in entries)
+        if entries == self._entries:
+            return
+        self._entries = entries
+        keys = {entry.key for entry in entries}
+        for key in tuple(self._items):
+            if key not in keys:
+                self._items.pop(key).remove()
+        for entry in entries:
+            item = self._items.get(entry.key)
+            if item is None:
+                if entry.kind == "tool":
+                    item = RunToolEntry(entry)
+                else:
+                    text = Text()
+                    if entry.kind == "message":
+                        text.append("Agent\n", style="bold #E7E0ED")
+                        body = agent_body_renderable(entry.body)
+                        if isinstance(body, Text):
+                            text.append_text(body)
+                        else:
+                            item = Static(
+                                Group(Text("Agent", style="bold #E7E0ED"), body),
+                                markup=False,
+                                classes=f"run-entry-{entry.kind}",
+                            )
+                            self._items[entry.key] = item
+                            self.mount(item)
+                            continue
+                    elif entry.kind == "reasoning":
+                        text.append("Reasoning\n", style="italic #958EA0")
+                        body = agent_body_renderable(entry.body)
+                        if isinstance(body, Text):
+                            body.stylize("#958EA0")
+                            text.append_text(body)
+                        else:
+                            item = Static(
+                                Group(Text("Reasoning", style="italic #958EA0"), body),
+                                markup=False,
+                                classes=f"run-entry-{entry.kind}",
+                            )
+                            self._items[entry.key] = item
+                            self.mount(item)
+                            continue
+                    else:
+                        text.append(entry.title, style="#958EA0")
+                        if entry.body:
+                            text.append("\n" + entry.body, style="#CBC3D7")
+                    item = Static(text, markup=False, classes=f"run-entry-{entry.kind}")
+                self._items[entry.key] = item
+                self.mount(item)
+            elif isinstance(item, RunToolEntry):
+                item.update_entry(entry)
+        if any(entry.status == "running" for entry in entries):
+            self._spinner.resume()
+        else:
+            self._spinner.pause()
+        self._order_entries()
+
+    def _order_entries(self) -> None:
+        # Reopening/final artifact refreshes can insert older entries before
+        # already-mounted live rows. Move them without replacing focused tools.
+        # mount() registers children synchronously; only their Mount events are
+        # asynchronous. Order now, before painting, rather than in a callback
+        # after a refresh that may be deferred or superseded by another update.
+        previous = None
+        for entry in self._entries:
+            item = self._items.get(entry.key)
+            if item is None or item.parent is not self:
+                continue
+            if previous is None:
+                if self.children and self.children[0] is not item:
+                    self.move_child(item, before=0)
+            else:
+                self.move_child(item, after=previous)
+            previous = item
+
+
 class RunTranscriptPanel(Container):
     """One labeled transcript surface inside the scrolling run narrative."""
 
@@ -264,7 +418,10 @@ class RunTranscriptPanel(Container):
         self._body_id = body_id
 
     def compose(self) -> ComposeResult:
-        yield Static("", id=self._body_id, markup=False)
+        if self._body_id == "run-agent-output":
+            yield RunAgentOutput(id=self._body_id)
+        else:
+            yield Static("", id=self._body_id, markup=False)
 
     def update_title(self, title: str) -> None:
         self.border_title = title
@@ -307,6 +464,8 @@ class RunActivityFeed(VerticalScroll):
         agent_output: Text,
         implementation_contract: str,
         adapter: str,
+        active: bool = True,
+        scope: object = None,
     ) -> None:
         ellipsis = "..." if ascii_only() else "…"
         self.query_one("#run-attempt-heading", Static).update(heading)
@@ -317,7 +476,7 @@ class RunActivityFeed(VerticalScroll):
         if prompt != self._system_prompt:
             self.query_one("#run-system-prompt", Static).update(prompt)
             self._system_prompt = prompt
-        self.query_one("#run-agent-output", Static).update(agent_output)
+        self.query_one("#run-agent-output", RunAgentOutput).update(agent_output, active=active, scope=scope)
         contract_panel = self.query_one(
             "#run-implementation-panel", RunTranscriptPanel
         )

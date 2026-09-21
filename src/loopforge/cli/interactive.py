@@ -1,4 +1,7 @@
-"""Interactive shell for LoopForge."""
+"""Shared command session for the Textual TUI and scriptable shell commands.
+
+This module owns command dispatch, not an input loop or a second terminal UI.
+"""
 
 from __future__ import annotations
 
@@ -16,11 +19,7 @@ from pathlib import Path
 from threading import Event
 from typing import TextIO
 
-try:
-    from prompt_toolkit.completion import Completer
-except ImportError:  # pragma: no cover - exercised only in minimal installs.
-    class Completer:  # type: ignore[no-redef]
-        pass
+_WINDOWS = os.name == "nt"
 
 from loopforge.engine import (
     DEFAULT_ADAPTER,
@@ -107,7 +106,6 @@ SUPPORTED_COMMANDS = {
     "guide": "Explain the current workflow state and recommended next actions.",
     "help": "Show command help.",
     "init": "Initialize LoopForge metadata for this project.",
-    "keymap": "Show or change the session editing mode.",
     "learn": "Propose or approve durable memory updates.",
     "memories": "Show durable and proposed memory state.",
     "new": "Create a new run.",
@@ -131,7 +129,6 @@ SUPPORTED_COMMANDS = {
     "skills": "List local pack skills.",
     "stats": "Show local run statistics.",
     "status": "Show current LoopForge loop state.",
-    "statusline": "Configure the session-only status line.",
     "tasks": "List recorded attempts and next action.",
     "theme": "Set the session theme.",
     "title": "Show or set a session title.",
@@ -143,7 +140,6 @@ SUPPORTED_COMMANDS = {
         "Pull LoopForge updates, verify prerequisites, and reinstall the command."
     ),
     "verify": "Generate a patch and run deterministic pack checks.",
-    "vim": "Toggle vim-style editing mode for the session.",
     "why": "Explain why LoopForge recommends the next action.",
 }
 
@@ -164,13 +160,11 @@ ALIASES = {
     "security-review": "review",
     "simplify": "review",
     "usage": "stats",
-    "vim": "keymap",
 }
 
 ALIAS_ARGUMENTS = {
     "adapters": "list",
     "memories": "details",
-    "vim": "vim",
 }
 
 COMMAND_GROUPS = {
@@ -226,22 +220,10 @@ class DispatchResult:
 
 def tui_dependency_state() -> dict[str, bool]:
     return {
-        "prompt_toolkit": importlib.util.find_spec("prompt_toolkit") is not None,
         "rich": importlib.util.find_spec("rich") is not None,
         # Discovery only: keep Textual unimported for every headless command.
         "textual": importlib.util.find_spec("textual") is not None,
     }
-
-
-def interactive_ui_enabled(*, requested: bool = False) -> bool:
-    """Return whether the full-screen console is the interactive default.
-
-    ``requested`` remains accepted for callers that used the former opt-in
-    flag.  Interactive TTY sessions now always open the console; ``--plain``
-    selects the prompt-based compatibility surface instead.
-    """
-
-    return True
 
 
 def available_commands() -> dict[str, str]:
@@ -253,31 +235,6 @@ def available_commands() -> dict[str, str]:
     return COMMANDS.copy()
 
 
-class SlashCommandCompleter(Completer):
-    def __init__(
-        self,
-        commands: dict[str, str] | None = None,
-        *,
-        project_dir: Path | None = None,
-    ) -> None:
-        self.commands = commands if commands is not None else contextual_commands(project_dir)
-
-    def get_completions(self, document, complete_event):  # type: ignore[no-untyped-def]
-        from prompt_toolkit.completion import Completion
-
-        word = document.get_word_before_cursor(WORD=True)
-        if not word.startswith("/"):
-            return
-        needle = word[1:]
-        for command in self.commands:
-            if command.startswith(needle):
-                yield Completion(
-                    f"/{command}",
-                    start_position=-len(word),
-                    display_meta=self.commands[command],
-                )
-
-
 class InteractiveShell:
     def __init__(
         self,
@@ -285,20 +242,16 @@ class InteractiveShell:
         *,
         output: TextIO | None = None,
         error: TextIO | None = None,
-        allow_confirmation: bool = True,
         renderer_mode: str = "auto",
     ) -> None:
         self.project_dir = project_dir.resolve()
         self.output = output or sys.stdout
         self.error = error or sys.stderr
         self.running = True
-        self.allow_confirmation = allow_confirmation
         preferences = user_preferences()
-        self.statusline = preferences["statusline"]
         self.theme = preferences["theme"]
         self.renderer_mode = renderer_mode
         self.renderer = TerminalRenderer(self.output, mode=self.renderer_mode, theme=self.theme)
-        self.editing_mode = preferences["keymap"]
         self.session_title = "LoopForge"
         status = current_status(self.project_dir)
         config = status.config or {}
@@ -324,7 +277,6 @@ class InteractiveShell:
         command, args = self.canonical_command(command, args)
         if implicit_run:
             result = self.cmd_run(args)
-            self._status_dirty = True
             return result
         handler = getattr(self, f"cmd_{command.replace('-', '_')}", None)
         if handler is None:
@@ -333,7 +285,6 @@ class InteractiveShell:
             return DispatchResult(2)
         result = handler(args)
         # S5.3: invalidate the cached status so the toolbar reflects the new state.
-        self._status_dirty = True
         return result
 
     def parse_line(self, line: str) -> tuple[str, str, bool]:
@@ -363,7 +314,7 @@ class InteractiveShell:
 
     def split_args(self, raw: str) -> list[str] | None:
         try:
-            if os.name != "nt":
+            if not _WINDOWS:
                 return shlex.split(raw)
             marker = "__LOOPFORGE_WINDOWS_BACKSLASH__"
 
@@ -386,12 +337,6 @@ class InteractiveShell:
         except ValueError as error:
             self.write(f"Could not parse arguments: {error}", error=True)
             return None
-
-    def confirm_if_available(self, prompt: str) -> bool:
-        if not self.allow_confirmation:
-            return False
-        answer = input(f"{prompt} Type yes to continue: ")
-        return answer.strip().lower() == "yes"
 
     def refresh_session_config(self) -> None:
         status = current_status(self.project_dir)
@@ -418,32 +363,6 @@ class InteractiveShell:
 
     def next_action(self) -> ActionDescriptor | None:
         return primary_action(current_guidance(self.project_dir))
-
-    def write_home(self) -> None:
-        status = current_status(self.project_dir)
-        action = self.next_action()
-        run_text = "none"
-        if status.run is not None:
-            run_text = f"{status.run.get('run_id')} {status.run.get('status')}"
-        lines = summary_table_lines(
-            [
-                ("project", status.project_dir.name),
-                ("run", run_text),
-                ("adapter", self.selected_adapter),
-                ("status", status.run.get("status") if status.run is not None else "not initialized" if not status.initialized else "ready_for_run"),
-            ]
-        )
-        lines.extend(["", "Next", f"/do {action.id}" if action is not None else "/status"])
-        self.write_panel("LoopForge shell", lines)
-
-    def prompt_text(self) -> str:
-        status = current_status(self.project_dir)
-        value = "blocked" if status.blockers else "ready"
-        if status.run is not None:
-            value = str(status.run.get("status") or value)
-        elif not status.initialized:
-            value = "not_initialized"
-        return f"loopforge {value} > "
 
     def guidance_lines(self) -> list[str]:
         guidance = current_guidance(self.project_dir)
@@ -1207,11 +1126,6 @@ class InteractiveShell:
             self.write(f"adapter: {adapter}")
             self.write("adapter args: " + " ".join(chosen_args))
         confirmed = args.confirm
-        if adapter is not None and not confirmed:
-            status = current_status(self.project_dir)
-            profile = status.run.get("profile") if status.run is not None else None
-            if profile == "strict":
-                confirmed = self.confirm_if_available("Strict profile requires confirmation.")
         return self._continue_with_adapter(
             adapter,
             chosen_args,
@@ -1292,11 +1206,6 @@ class InteractiveShell:
         except SystemExit:
             return DispatchResult(2)
         confirmed = args.confirm
-        if not confirmed:
-            status = current_status(self.project_dir)
-            profile = status.run.get("profile") if status.run is not None else None
-            if profile == "strict":
-                confirmed = self.confirm_if_available("Strict profile requires confirmation.")
         with self.renderer.loading("Generating patch and running verification..."):
             result = verify_run(
                 self.project_dir,
@@ -1344,11 +1253,6 @@ class InteractiveShell:
         except SystemExit:
             return DispatchResult(2)
         confirmed = args.confirm
-        if args.approve and not confirmed:
-            status = current_status(self.project_dir)
-            profile = status.run.get("profile") if status.run is not None else None
-            if profile == "strict":
-                confirmed = self.confirm_if_available("Strict profile requires confirmation.")
         with self.renderer.loading("Updating LoopForge memory proposals..."):
             result = learn_run(
                 self.project_dir,
@@ -1625,10 +1529,19 @@ class InteractiveShell:
         operation_callback=None,
         cancel_event: Event | None = None,
     ) -> DispatchResult:
-        action_id = raw.strip()
-        if not action_id:
-            self.write("usage: /do <action-id>", error=True)
+        parser = argparse.ArgumentParser(prog="/do", add_help=False)
+        parser.add_argument("action_id")
+        parser.add_argument("--confirm", action="store_true")
+        parser.add_argument("--execution-mode", choices=AGENT_EXECUTION_MODES, default=DEFAULT_AGENT_EXECUTION_MODE)
+        tokens = self.split_args(raw)
+        if tokens is None:
             return DispatchResult(2)
+        try:
+            args = parser.parse_args(tokens)
+        except SystemExit:
+            return DispatchResult(2)
+        action_id = args.action_id
+        confirmed = args.confirm
         action = self.guidance_action(action_id)
         if action is None:
             self.write(f"unknown guided action: {action_id}", error=True)
@@ -1636,19 +1549,15 @@ class InteractiveShell:
         self.write("Do this")
         self.write(action.command_fallback)
         self.write(f"Why: {action.description}")
-        if action.requires_confirmation:
-            if not self.allow_confirmation:
-                self.write(
-                    f"action '{action.id}' requires confirmation; run {action.command_fallback} explicitly.",
-                    error=True,
-                )
-                return DispatchResult(1)
-            answer = input(f"Run '{action.command_fallback}'? Type yes to continue: ")
-            if answer.strip().lower() != "yes":
-                self.write("cancelled")
-                return DispatchResult(1)
+        if action.requires_confirmation and not confirmed:
+            self.write(
+                f"action '{action.id}' requires confirmation; use /do {action.id} --confirm.",
+                error=True,
+            )
+            return DispatchResult(1)
         return self.execute_guided_action(
             action,
+            implementation_mode=args.execution_mode,
             operation_callback=operation_callback,
             cancel_event=cancel_event,
         )
@@ -1730,40 +1639,6 @@ class InteractiveShell:
             self.write("Title set")
         self.write(f"title  {self.session_title}")
         return DispatchResult(0)
-
-    def cmd_keymap(self, raw: str) -> DispatchResult:
-        value = raw.strip().lower()
-        if not value:
-            self.write(f"keymap  {self.editing_mode}")
-            return DispatchResult(0)
-        if value not in {"emacs", "vim"}:
-            self.write("usage: /keymap emacs|vim", error=True)
-            return DispatchResult(2)
-        self.editing_mode = value
-        self.persist_user_preference("keymap", value)
-        self._apply_live_keymap()
-        self.write("Keymap set")
-        self.write(f"keymap  {self.editing_mode}")
-        return DispatchResult(0)
-
-    def _apply_live_keymap(self) -> None:
-        """Apply the current editing_mode to the active prompt session (S2.6e)."""
-
-        session = getattr(self, "_prompt_session", None)
-        if session is None or session.app is None:
-            return
-        try:
-            from prompt_toolkit.enums import EditingMode
-
-            session.app.editing_mode = (
-                EditingMode.VI if self.editing_mode == "vim" else EditingMode.EMACS
-            )
-        except Exception:
-            pass
-
-    def cmd_vim(self, raw: str = "") -> DispatchResult:
-        del raw
-        return self.cmd_keymap("vim")
 
     def cmd_stats(self, raw: str = "") -> DispatchResult:
         del raw
@@ -2196,14 +2071,12 @@ class InteractiveShell:
             lines.append("No issues found.")
 
         lines.append("")
-        lines.append(f"prompt_toolkit: {'available' if deps['prompt_toolkit'] else 'missing'}")
         lines.append(f"rich: {'available' if deps['rich'] else 'missing'}")
         lines.append(f"textual: {'available' if deps['textual'] else 'missing'}")
         lines.append(f"selected adapter: {self.selected_adapter}")
         lines.append("selected adapter args: " + " ".join(self.selected_adapter_args))
         lines.append(f"renderer: {self.renderer_mode}")
         lines.append(f"theme: {self.theme}")
-        lines.append(f"keymap: {self.editing_mode}")
         git = subprocess.run(["git", "--version"], check=False, capture_output=True, text=True)
         lines.append(f"git: {git.stdout.strip() if git.returncode == 0 else 'missing'}")
         lines.append(f"supported adapters: {', '.join(SUPPORTED_ADAPTERS)}")
@@ -2323,24 +2196,9 @@ class InteractiveShell:
         self.write("session adapter args: " + " ".join(self.selected_adapter_args))
         self.write(f"session theme: {self.theme}")
         self.write(f"session renderer: {self.renderer_mode}")
-        self.write(f"session keymap: {self.editing_mode}")
         if status.config is not None:
             for key in sorted(status.config):
                 self.write(f"{key}: {status.config[key]}")
-        return DispatchResult(0)
-
-    def cmd_statusline(self, raw: str) -> DispatchResult:
-        value = raw.strip().lower()
-        if value in {"", "status"}:
-            self.write(f"statusline  {self.statusline}")
-            return DispatchResult(0)
-        if value not in {"full", "compact", "off"}:
-            self.write("usage: /statusline full|compact|off", error=True)
-            return DispatchResult(2)
-        self.statusline = value
-        self.persist_user_preference("statusline", value)
-        self.write("Statusline set")
-        self.write(f"statusline  {self.statusline}")
         return DispatchResult(0)
 
     def cmd_clear(self, raw: str = "") -> DispatchResult:
@@ -2357,86 +2215,6 @@ class InteractiveShell:
     def cmd_quit(self, raw: str = "") -> DispatchResult:
         return self.cmd_exit(raw)
 
-    def _cached_toolbar_status(self):
-        """Return a cached status snapshot, reloading only when dirty (S5.3)."""
-
-        if self._status_dirty or self._cached_status is None:
-            self._cached_status = current_status(self.project_dir)
-            self._status_dirty = False
-        return self._cached_status
-
-    def toolbar(self) -> str:
-        if self.statusline == "off":
-            return ""
-        status = self._cached_toolbar_status()
-        parts = [status.project_dir.name]
-        if status.config is not None:
-            parts.append(str(status.config.get("profile")))
-        if status.run is not None:
-            parts.append(str(status.run.get("status")))
-            parts.append(str(status.run.get("pack")))
-        parts.append(f"adapter:{self.selected_adapter}")
-        if self._git_state.branch:
-            parts.append(f"git:{self._git_state.branch}")
-        if self.statusline == "full":
-            parts.append(f"blockers:{len(status.blockers)}")
-            parts.append(status.next_step)
-        return " | ".join(parts)
-
-    def run_prompt(self, *, interactive_ui: bool = True) -> int:
-        deps = tui_dependency_state()
-        required = ("textual",) if interactive_ui and self.renderer_mode != "plain" else (
-            "prompt_toolkit",
-            "rich",
-        )
-        missing = [name for name in required if not deps[name]]
-        if missing:
-            self.write(
-                "LoopForge interactive shell requires missing dependencies: "
-                + ", ".join(missing),
-                error=True,
-            )
-            self.write(
-                "Install package dependencies or use `loopforge shell --command ...`.",
-                error=True,
-            )
-            return 1
-
-        if interactive_ui and self.renderer_mode != "plain":
-            from loopforge.cli.tui import run_fullscreen_console
-
-            return run_fullscreen_console(self)
-
-        from prompt_toolkit import PromptSession
-        from prompt_toolkit.enums import EditingMode
-        from prompt_toolkit.history import FileHistory
-
-        history_dir = loopforge_home()
-        history_dir.mkdir(parents=True, exist_ok=True)
-        editing_mode = EditingMode.VI if self.editing_mode == "vim" else EditingMode.EMACS
-        session = PromptSession(
-            completer=SlashCommandCompleter(contextual_commands(self.project_dir)),
-            history=FileHistory(str(history_dir / "interactive-history.txt")),
-            bottom_toolbar=lambda: self.toolbar(),
-            editing_mode=editing_mode,
-        )
-        self._prompt_session = session
-        self.write_home()
-        exit_code = 0
-        while self.running:
-            try:
-                line = session.prompt(self.prompt_text())
-            except (EOFError, KeyboardInterrupt):
-                self.write("bye")
-                break
-            result = self.dispatch(line)
-            if result.exit_code:
-                exit_code = result.exit_code
-            if result.should_exit:
-                break
-        return exit_code
-
-
 def run_interactive(
     project_dir: Path,
     *,
@@ -2451,7 +2229,6 @@ def run_interactive(
         project_dir,
         output=output,
         error=error,
-        allow_confirmation=command is None and script is None,
         renderer_mode=renderer_mode,
     )
     if command is not None:
@@ -2468,4 +2245,11 @@ def run_interactive(
             if result.should_exit:
                 break
         return exit_code
-    return shell.run_prompt(interactive_ui=interactive_ui_enabled(requested=interactive_ui))
+    missing = [name for name, present in tui_dependency_state().items() if not present]
+    if missing:
+        shell.write("LoopForge TUI requires: " + ", ".join(missing), error=True)
+        shell.write("Install package dependencies or use `loopforge shell --command ...`.", error=True)
+        return 1
+    from loopforge.cli.tui import run_fullscreen_console
+
+    return run_fullscreen_console(shell)

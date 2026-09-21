@@ -598,6 +598,8 @@ def execute_readonly_stage(
                 }
 
         if selected_execution_mode == "headless":
+            from loopforge.adapters.observation import retire_terminal_transcript
+            retire_terminal_transcript(stage_dir)
             capture_codex_stream = adapter == "codex" and operation_callback is not None
             capture_kilo_stream = adapter == "kilo-code"
             command = command_for_readonly_stage(
@@ -640,7 +642,7 @@ def execute_readonly_stage(
                         artifact_stdout = artifact_stdout[
                             :MAX_STAGE_ARTIFACT_BYTES
                         ]
-                elif capture_kilo_stream and isinstance(
+                elif isinstance(
                     child.get("artifact_output"), bytes
                 ):
                     artifact_stdout = child["artifact_output"]
@@ -682,6 +684,8 @@ def execute_readonly_stage(
                 if capture_codex_stream
                 else "kilo-jsonl"
                 if capture_kilo_stream
+                else f"{adapter}-jsonl"
+                if selected_execution_mode == "headless" and adapter in {"claude-code", "opencode"}
                 else "text"
             ),
             "terminal_launcher": (

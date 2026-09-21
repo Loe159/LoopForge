@@ -11,7 +11,7 @@ Run commands from the repository root.
 | `$env:PYTHONPATH='src'; python -m unittest discover -s tests` | Test source tree without editable installation | PowerShell fallback; the test layout is `tests/`. |
 | `loopforge --help` / `loopforge help <command>` | Discover installed CLI | Entry point is declared in `pyproject.toml`. |
 | `loopforge init`, `run`, `status`, `continue`, `verify`, `learn` | Exercise the normal local workflow | Commands and examples are documented in `README.md`. |
-| `loopforge` / `loopforge shell` | Open the default full-screen interactive console | Requires a TTY plus `textual`; `--plain` opts into the prompt-based shell. |
+| `loopforge` / `loopforge shell` | Open the default full-screen interactive console | Requires a TTY plus `textual`; `--plain` only controls CLI text rendering; TTY sessions still open Textual. |
 | `loopforge shell --command "/status"` | Exercise one slash command without a TUI prompt | Supported in scripts/tests and does not allow interactive confirmation. |
 | `loopforge shell --script commands.loopforge` | Execute UTF-8 slash-command lines | Blank lines and `#` comments are skipped (`cli/interactive.py`). |
 
@@ -24,7 +24,7 @@ Run commands from the repository root.
 ## Environment and tooling
 
 - Python 3.11+ is required by `pyproject.toml`.
-- `textual`, `prompt_toolkit`, and `rich` are runtime dependencies.
+- `textual` and `rich` are runtime dependencies.
 - Git is used for worktrees, patches, and bundled checks.
 - `gh` is only needed for GitHub issue intake.
 - `LOOPFORGE_HOME` redirects run/workspace data; use a temporary value in tests.

@@ -4,7 +4,6 @@ version = "0.1.0"
 description = "Portable agentic workflow engine for bounded autonomous work loops."
 requires-python = ">=3.11"
 dependencies = [
-  "prompt_toolkit>=3.0",
   "rich>=13.0",
   # The Textual full-screen application uses App workers, Pilot tests, and the
   # command palette APIs verified against Textual 8.x.

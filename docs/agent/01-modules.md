@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | Public CLI | `cli/__init__.py` | Stable `loopforge.cli:main`, compatibility exports, global options, payload/table helpers, and CLI presentation seams. |
 | CLI parsing/contracts | `cli/parser.py`, `models.py`, `errors.py`, `context.py` | Argument tree, shared DTOs/errors, and immutable invocation dependencies. Add shared command contracts here. |
-| CLI orchestration | `cli/app.py`, `workflow.py`, `intake.py`, `github.py` | Handler dispatch, workflow commands, guided intake, and GitHub access. Add a command in its existing cohesive handler family. |
+| CLI orchestration | `cli/app.py`, `workflow.py`, `intake.py`, `github.py` | Handler dispatch, workflow commands, explicit intake, and GitHub access. Add a command in its existing cohesive handler family. |
 | CLI experience | `cli/ui.py`, `presentation.py`, `actions.py`, `interactive.py`, `tui.py`, `evidence.py`, `operations.py` | Text rendering, shared state/action view models, headless slash compatibility, the default full-screen console, evidence previews, and foreground-operation events. |
 | Engine facade | `engine/__init__.py` | Config, runs, lifecycle state, workspaces, adapters, verification, memory, metrics wrappers, and local draft preparation. It owns persisted lifecycle transitions. |
 | Engine services | `engine/storage.py`, `projects.py`, `packs.py`, `metrics.py` | Atomic JSON objects, project identity/registry/migration, pack discovery/validation, and unknown-safe metric aggregation. |
@@ -58,8 +58,8 @@ the exported engine APIs rather than scan `LOOPFORGE_HOME` itself.
 
 ## Compatibility material
 
-The active modules under `.agent/checks/` and
+The modules under `.agent/checks/` and
 `.agent/adapters/local_implementation_adapter.py` delegate to packaged
-counterparts. Other `.agent/` scripts, prompts, policies, schemas, and shell
-adapters remain inherited material; no current engine path proves all of them
-are runnable.
+counterparts. Shell adapters call that same packaged adapter through its
+compatibility launcher. No policies, schemas, templates, prompts, or standalone
+bootstrap implementations remain under `.agent/`.

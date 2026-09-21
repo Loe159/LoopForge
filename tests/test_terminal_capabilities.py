@@ -99,7 +99,8 @@ class DetectCapabilitiesTests(unittest.TestCase):
             self.assertFalse(caps.no_color)
 
     def test_rich_mode_uses_rich_when_available(self) -> None:
-        caps = detect_capabilities(io.StringIO(), mode="rich", rich_available=True)
+        with mock.patch.dict(os.environ, self._no_env(), clear=True):
+            caps = detect_capabilities(io.StringIO(), mode="rich", rich_available=True)
         self.assertTrue(caps.use_rich)
 
     def test_auto_mode_without_tty_or_force_is_plain(self) -> None:

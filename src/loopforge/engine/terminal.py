@@ -587,20 +587,28 @@ def launch_terminal_session(
     """Launch and normalize a supervised visible harness session."""
 
     from loopforge.checks import isolated_process
+    from loopforge.adapters.observation import TerminalObservation
 
     launcher = terminal_launcher or default_terminal_launcher()
     policy = isolated_process.load_policy()
+    observation = TerminalObservation(command, cwd, artifacts_dir, output_chunk_callback)
+    observation.prepare()
+    environment = build_terminal_environment()
+    environment.update(observation.environment)
+    observation.start()
     try:
         result = launcher.launch(
             TerminalLaunchRequest(
-                command=command,
+                command=observation.command,
                 cwd=cwd,
                 title=title,
                 timeout_seconds=timeout_seconds,
                 artifacts_dir=artifacts_dir,
                 cancel_event=cancel_event,
-                environment=build_terminal_environment(),
-                output_chunk_callback=output_chunk_callback,
+                environment=environment,
+                output_chunk_callback=(
+                    (lambda stream, data: None) if observation.active else output_chunk_callback
+                ),
                 max_output_bytes=int(policy["max_captured_output_bytes"]),
             )
         )
@@ -612,6 +620,10 @@ def launch_terminal_session(
             launcher=str(getattr(launcher, "name", "terminal")),
             error="Interactive terminal session was interrupted.",
         )
+    finally:
+        observation.close()
+    if observation.active and not result.launched:
+        observation.journal.replace(observation.spool / "unavailable-transcript.log")
     if result.launcher:
         return result
     return replace(result, launcher=str(getattr(launcher, "name", "terminal")))

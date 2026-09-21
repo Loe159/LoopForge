@@ -300,7 +300,7 @@ def workflow_stage_guidance(
         action = guided_action(
             "approve-task",
             "Review and approve the task",
-            "loopforge run",
+            'loopforge shell --command "/do approve-task --confirm"',
             requires_confirmation=True,
             why="Task approval is required before repository research.",
         )
@@ -310,7 +310,7 @@ def workflow_stage_guidance(
         action = guided_action(
             "run-research",
             f"Run read-only research with {adapter}",
-            "loopforge run",
+            'loopforge shell --command "/do run-research --confirm"',
             risk="read-only-agent",
             requires_confirmation=True,
             why="Research maps files, tests, and reusable patterns before planning.",
@@ -321,7 +321,7 @@ def workflow_stage_guidance(
         action = guided_action(
             "run-plan",
             f"Generate a read-only plan with {adapter}",
-            "loopforge run",
+            'loopforge shell --command "/do run-plan --confirm"',
             risk="read-only-agent",
             requires_confirmation=True,
             why="Implementation must be based on repository evidence.",
@@ -335,7 +335,7 @@ def workflow_stage_guidance(
         action = guided_action(
             "approve-plan",
             "Review and approve the implementation plan",
-            "loopforge run",
+            'loopforge shell --command "/do approve-plan --confirm"',
             requires_confirmation=True,
             why="Implementation cannot start until scope and checks are approved.",
         )
@@ -392,7 +392,7 @@ def workflow_stage_guidance(
         action = guided_action(
             "run-review",
             f"Run read-only patch review with {adapter}",
-            "loopforge run",
+            'loopforge shell --command "/do run-review --confirm"',
             risk="read-only-agent",
             requires_confirmation=True,
             why="The reviewer compares the patch with the task, research, plan, and checks.",
@@ -406,7 +406,7 @@ def workflow_stage_guidance(
         action = guided_action(
             "approve-review",
             "Approve the review for draft preparation",
-            "loopforge run",
+            'loopforge shell --command "/do approve-review --confirm"',
             requires_confirmation=True,
             why="Verification and review are evidence; publication authority remains human.",
         )
@@ -416,7 +416,7 @@ def workflow_stage_guidance(
         action = guided_action(
             "prepare-draft",
             "Prepare the local draft PR artifact",
-            "loopforge run",
+            'loopforge shell --command "/do prepare-draft --confirm"',
             requires_confirmation=True,
             why="This prepares a local draft without pushing or opening a network PR.",
         )

@@ -47,7 +47,6 @@ from loopforge.engine.storage import JsonStore
 from loopforge.engine.terminal import TerminalLaunchRequest, TerminalSessionResult
 from loopforge.cli.interactive import (
     InteractiveShell,
-    SlashCommandCompleter,
     available_commands,
     contextual_commands,
     tui_dependency_state,
@@ -300,6 +299,7 @@ class CliTests(unittest.TestCase):
         run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
         run_json["status"] = "verified"
         run_json["current_stage"] = "review_complete"
+        run_json["stage_statuses"]["implementation"] = "complete"
         run_json["stage_statuses"]["verification"] = "complete"
         run_json["stage_statuses"]["review"] = "complete"
         run_json.setdefault("verification", {})["status"] = "passed"
@@ -1241,8 +1241,6 @@ class CliTests(unittest.TestCase):
             "permissions",
             "review",
             "security-review",
-            "statusline",
-            "keymap",
         ):
             self.assertIn(name, commands)
         self.assertNotIn("model", commands)
@@ -1269,13 +1267,11 @@ class CliTests(unittest.TestCase):
             project = Path(temp_dir) / "project"
             project.mkdir()
             commands = contextual_commands(project)
-            completer = SlashCommandCompleter(project_dir=project)
 
         self.assertIn("init", commands)
         self.assertNotIn("model", commands)
         self.assertNotIn("quit", commands)
         self.assertNotIn("adapters", commands)
-        self.assertEqual(commands, completer.commands)
 
     def test_shell_preferences_are_user_scoped_and_persisted(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1286,21 +1282,13 @@ class CliTests(unittest.TestCase):
             with mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(home)}):
                 shell = InteractiveShell(project, output=io.StringIO())
                 self.assertEqual(shell.dispatch("/theme dark").exit_code, 0)
-                self.assertEqual(shell.dispatch("/statusline compact").exit_code, 0)
-                self.assertEqual(shell.dispatch("/vim").exit_code, 0)
                 restored = InteractiveShell(project, output=io.StringIO())
 
             preferences = json.loads((home / "preferences.json").read_text(encoding="utf-8"))
 
-        self.assertEqual(preferences, {"keymap": "vim", "statusline": "compact", "theme": "dark"})
+        self.assertEqual(preferences, {"theme": "dark"})
         self.assertEqual(restored.theme, "dark")
-        self.assertEqual(restored.statusline, "compact")
-        self.assertEqual(restored.editing_mode, "vim")
 
-    def test_shell_completer_supports_prompt_toolkit_async_api(self) -> None:
-        completer = SlashCommandCompleter(available_commands())
-
-        self.assertTrue(hasattr(completer, "get_completions_async"))
 
     def test_renderer_plain_mode_does_not_emit_ansi(self) -> None:
         output = io.StringIO()
@@ -1399,20 +1387,19 @@ class CliTests(unittest.TestCase):
         self.assertIn("LF_HELP_TOPIC_UNKNOWN", text)
         self.assertIn("loopforge help run", text)
 
-    def test_help_describes_run_cockpit_without_workflow_flag(self) -> None:
+    def test_help_describes_explicit_workflow_without_workflow_flag(self) -> None:
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             self.assertEqual(main(["help"]), 0)
         text = output.getvalue()
-        self.assertIn("run` is the cockpit", text)
-        self.assertIn("one approved stage at a time", text)
+        self.assertIn("Textual TUI", text)
         self.assertNotIn("--workflow", text)
 
         run_output = io.StringIO()
         with contextlib.redirect_stdout(run_output):
             self.assertEqual(main(["help", "run"]), 0)
         run_text = run_output.getvalue()
-        self.assertIn("`loopforge run` is the cockpit", run_text)
+        self.assertIn("`loopforge run` creates a run", run_text)
         self.assertIn("task approval", run_text)
         self.assertIn("read-only research", run_text)
         self.assertIn("read-only plan", run_text)
@@ -1425,12 +1412,12 @@ class CliTests(unittest.TestCase):
         self.assertIn("never approves, executes, or publishes", run_text)
         self.assertNotIn("--workflow", run_text)
 
-    def test_readme_documents_run_cockpit_workflow(self) -> None:
+    def test_readme_documents_tui_and_cli_workflow(self) -> None:
         readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(
             encoding="utf-8"
         )
         readme_flat = " ".join(readme.split())
-        self.assertIn("`loopforge run` is the cockpit", readme)
+        self.assertIn("Textual TUI", readme)
         self.assertIn("task approval", readme)
         self.assertIn("read-only research", readme)
         self.assertIn("read-only planning", readme)
@@ -1464,43 +1451,19 @@ class CliTests(unittest.TestCase):
                     self.assertEqual(main(["run", "--no-input"]), 2)
             self.assertIn("LF_INPUT_REQUIRED", error.getvalue())
 
-    def test_run_without_task_prompts_when_interactive(self) -> None:
+    def test_run_without_task_never_prompts_even_in_a_tty(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             repo = Path(temp_dir)
-            loopforge_home = repo / "home"
-            output = io.StringIO()
-            answers = iter(
-                [
-                    "2",
-                    "Prompted task",
-                    "Fails on startup",
-                    "Startup test passes",
-                    "y",
-                    "y",
-                    "y",
-                    "n",
-                ]
-            )
             with (
-                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(repo / "home")}),
                 mock.patch("sys.stdin", TtyStringIO()),
-                mock.patch("builtins.input", side_effect=lambda _: next(answers)),
+                mock.patch("builtins.input", side_effect=AssertionError("unexpected prompt")),
                 working_directory(repo),
-                contextlib.redirect_stdout(output),
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
             ):
-                self.assertEqual(main(["init"]), 0)
-                self.assertEqual(main(["run"]), 0)
-            config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
-            run_dir = Path(config["run_root"]) / config["current_run_id"]
-            run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
-            self.assertEqual(run_json["task"], "Prompted task\n\nContext: Fails on startup")
-            self.assertIn("Startup test passes", run_json["success_checks"])
-            self.assertEqual(run_json["current_stage"], "task_approved")
-            self.assertEqual(
-                run_json["approval"]["source"],
-                "local/manual",
-            )
-            self.assertIn("Next\nloopforge run", output.getvalue())
+                self.assertEqual(main(["run"]), 2)
+                self.assertIsNone(current_status(repo).run)
 
     def test_run_with_active_run_interactive_can_resume_without_creating_new_run(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1517,11 +1480,10 @@ class CliTests(unittest.TestCase):
             first_run_id = config["current_run_id"]
 
             output = io.StringIO()
-            answers = iter(["1"])
             with (
                 mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
                 mock.patch("sys.stdin", TtyStringIO()),
-                mock.patch("builtins.input", side_effect=lambda _: next(answers)),
+                mock.patch("builtins.input", side_effect=AssertionError("unexpected prompt")),
                 working_directory(repo),
                 contextlib.redirect_stdout(output),
             ):
@@ -1536,7 +1498,7 @@ class CliTests(unittest.TestCase):
             self.assertIn(first_run_id, text)
             self.assertIn("Next", text)
 
-    def test_run_with_active_run_no_input_reports_cockpit_text_and_json(self) -> None:
+    def test_run_with_active_run_no_input_reports_status_text_and_json(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             repo = Path(temp_dir)
             loopforge_home = repo / "home"
@@ -1561,7 +1523,7 @@ class CliTests(unittest.TestCase):
             updated = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
             self.assertEqual(updated["current_run_id"], first_run_id)
             self.assertEqual(len([path for path in Path(config["run_root"]).iterdir() if path.is_dir()]), 1)
-            self.assertIn("Active run found", text_output.getvalue())
+            self.assertIn("Active LoopForge run", text_output.getvalue())
             self.assertIn(first_run_id, text_output.getvalue())
 
             json_output = io.StringIO()
@@ -1581,7 +1543,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(payload["status"]["run"]["run_id"], first_run_id)
             self.assertTrue(payload["guidance"]["recommended_actions"])
 
-    def test_run_cockpit_does_not_offer_research_for_unapproved_task(self) -> None:
+    def test_scripted_workflow_does_not_offer_research_for_unapproved_task(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             repo = Path(temp_dir)
             loopforge_home = repo / "home"
@@ -1608,12 +1570,11 @@ class CliTests(unittest.TestCase):
             config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
             run_dir = Path(config["run_root"]) / config["current_run_id"]
 
-            answers = iter(["1"])
             output = io.StringIO()
             with (
                 mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
                 mock.patch("sys.stdin", TtyStringIO()),
-                mock.patch("builtins.input", side_effect=lambda _: next(answers)),
+                mock.patch("builtins.input", side_effect=AssertionError("unexpected prompt")),
                 working_directory(repo),
                 contextlib.redirect_stdout(output),
             ):
@@ -1627,7 +1588,7 @@ class CliTests(unittest.TestCase):
                 valid_research_markdown(),
             )
 
-    def test_run_cockpit_executes_research_with_fixture_adapter(self) -> None:
+    def test_scripted_workflow_executes_research_with_fixture_adapter(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)
             repo = workspace / "project"
@@ -1654,16 +1615,15 @@ class CliTests(unittest.TestCase):
                 )
             run_dir = self.approve_current_run(repo, loopforge_home)
 
-            answers = iter(["1", "y"])
             output = io.StringIO()
             with (
                 mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
                 mock.patch("sys.stdin", TtyStringIO()),
-                mock.patch("builtins.input", side_effect=lambda _: next(answers)),
+                mock.patch("builtins.input", side_effect=AssertionError("unexpected prompt")),
                 working_directory(repo),
                 contextlib.redirect_stdout(output),
             ):
-                self.assertEqual(main(["run"]), 0)
+                self.assertEqual(main(["shell", "--command", "/do run-research --confirm"]), 0)
 
             run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
             workspace_dir = Path(run_json["workspace"]["path"])
@@ -1706,7 +1666,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(guidance.state, "task_needs_input")
             self.assertEqual(guidance.recommended_actions[0].id, "complete-task")
 
-    def test_run_cockpit_executes_plan_with_fixture_adapter(self) -> None:
+    def test_scripted_workflow_executes_plan_with_fixture_adapter(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)
             repo = workspace / "project"
@@ -1739,16 +1699,15 @@ class CliTests(unittest.TestCase):
             run_json_path.write_text(json.dumps(run_json), encoding="utf-8")
             (run_dir / "research.md").write_text(valid_research_markdown(), encoding="utf-8")
 
-            answers = iter(["1", "y"])
             output = io.StringIO()
             with (
                 mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
                 mock.patch("sys.stdin", TtyStringIO()),
-                mock.patch("builtins.input", side_effect=lambda _: next(answers)),
+                mock.patch("builtins.input", side_effect=AssertionError("unexpected prompt")),
                 working_directory(repo),
                 contextlib.redirect_stdout(output),
             ):
-                self.assertEqual(main(["run"]), 0)
+                self.assertEqual(main(["shell", "--command", "/do run-plan --confirm"]), 0)
 
             run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
             self.assertEqual((run_dir / "plan.md").read_text(encoding="utf-8"), valid_plan_markdown())
@@ -1802,7 +1761,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(persisted["stage_statuses"]["plan"], "awaiting_approval")
             self.assertEqual(persisted["human_gates"]["plan_approval"]["status"], "pending")
 
-    def test_run_cockpit_executes_review_with_fixture_adapter(self) -> None:
+    def test_scripted_workflow_executes_review_with_fixture_adapter(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)
             repo = workspace / "project"
@@ -1838,16 +1797,15 @@ class CliTests(unittest.TestCase):
             run_json.setdefault("verification", {})["status"] = "passed"
             run_json_path.write_text(json.dumps(run_json), encoding="utf-8")
 
-            answers = iter(["1", "y"])
             output = io.StringIO()
             with (
                 mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
                 mock.patch("sys.stdin", TtyStringIO()),
-                mock.patch("builtins.input", side_effect=lambda _: next(answers)),
+                mock.patch("builtins.input", side_effect=AssertionError("unexpected prompt")),
                 working_directory(repo),
                 contextlib.redirect_stdout(output),
             ):
-                self.assertEqual(main(["run"]), 0)
+                self.assertEqual(main(["shell", "--command", "/do run-review --confirm"]), 0)
 
             run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
             self.assertEqual((run_dir / "review.md").read_text(encoding="utf-8"), valid_review_markdown())
@@ -1863,7 +1821,7 @@ class CliTests(unittest.TestCase):
             self.assertIn("# Reviewer", prompt)
             self.assertIn("Review ready", output.getvalue())
 
-    def test_run_cockpit_approves_plan_for_implementation(self) -> None:
+    def test_scripted_workflow_approves_plan_for_implementation(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)
             repo = workspace / "project"
@@ -1893,23 +1851,22 @@ class CliTests(unittest.TestCase):
             run_json_path.write_text(json.dumps(run_json), encoding="utf-8")
             (run_dir / "plan.md").write_text(valid_plan_markdown(), encoding="utf-8")
 
-            answers = iter(["1", "y"])
             output = io.StringIO()
             with (
                 mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
                 mock.patch("sys.stdin", TtyStringIO()),
-                mock.patch("builtins.input", side_effect=lambda _: next(answers)),
+                mock.patch("builtins.input", side_effect=AssertionError("unexpected prompt")),
                 working_directory(repo),
                 contextlib.redirect_stdout(output),
             ):
-                self.assertEqual(main(["run"]), 0)
+                self.assertEqual(main(["shell", "--command", "/do approve-plan --confirm"]), 0)
 
             run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
             plan_gate = run_json["human_gates"]["plan_approval"]
             self.assertEqual(run_json["current_stage"], "implementation_ready")
             self.assertEqual(run_json["stage_statuses"]["plan"], "approved")
             self.assertEqual(plan_gate["status"], "approved")
-            self.assertEqual(plan_gate["source"], "local")
+            self.assertEqual(plan_gate["source"], "interactive")
             self.assertTrue(plan_gate["approved_at"])
             self.assertEqual(run_json["blockers"], [])
             self.assertIn("Plan approved", output.getvalue())
@@ -1956,9 +1913,9 @@ class CliTests(unittest.TestCase):
             self.assertEqual(run_json["current_stage"], "plan_ready")
             self.assertEqual(run_json["stage_statuses"]["plan"], "awaiting_approval")
             self.assertEqual(run_json["human_gates"]["plan_approval"]["status"], "pending")
-            self.assertIn("Active run found", output.getvalue())
+            self.assertIn("Active LoopForge run", output.getvalue())
 
-    def test_run_cockpit_approves_review_after_verification(self) -> None:
+    def test_scripted_workflow_approves_review_after_verification(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)
             repo = workspace / "project"
@@ -1995,16 +1952,15 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(main(["verify"]), 0)
                 self.complete_current_review(run_dir)
 
-            answers = iter(["1", "y"])
             output = io.StringIO()
             with (
                 mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
                 mock.patch("sys.stdin", TtyStringIO()),
-                mock.patch("builtins.input", side_effect=lambda _: next(answers)),
+                mock.patch("builtins.input", side_effect=AssertionError("unexpected prompt")),
                 working_directory(repo),
                 contextlib.redirect_stdout(output),
             ):
-                self.assertEqual(main(["run"]), 0)
+                self.assertEqual(main(["shell", "--command", "/do approve-review --confirm"]), 0)
 
             run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
             review_gate = run_json["human_gates"]["review_approval"]
@@ -2012,7 +1968,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(run_json["stage_statuses"]["verification"], "complete")
             self.assertEqual(run_json["stage_statuses"]["review"], "approved")
             self.assertEqual(review_gate["status"], "approved")
-            self.assertEqual(review_gate["source"], "local")
+            self.assertEqual(review_gate["source"], "interactive")
             self.assertTrue(review_gate["approved_at"])
             self.assertTrue(run_json["publish_eligibility"]["eligible"])
             self.assertEqual(run_json["publish_eligibility"]["mode"], "draft")
@@ -2068,9 +2024,9 @@ class CliTests(unittest.TestCase):
             self.assertEqual(run_json["stage_statuses"]["review"], "pending")
             self.assertEqual(run_json["human_gates"]["review_approval"]["status"], "pending")
             self.assertFalse(run_json["publish_eligibility"]["eligible"])
-            self.assertIn("Active run found", output.getvalue())
+            self.assertIn("Active LoopForge run", output.getvalue())
 
-    def test_run_cockpit_after_review_prepares_draft_pr_publication(self) -> None:
+    def test_scripted_workflow_after_review_prepares_draft_pr_publication(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)
             repo = workspace / "project"
@@ -2107,26 +2063,24 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(main(["verify"]), 0)
                 self.complete_current_review(run_dir)
 
-            answers = iter(["1", "y"])
             with (
                 mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
                 mock.patch("sys.stdin", TtyStringIO()),
-                mock.patch("builtins.input", side_effect=lambda _: next(answers)),
+                mock.patch("builtins.input", side_effect=AssertionError("unexpected prompt")),
                 working_directory(repo),
                 contextlib.redirect_stdout(io.StringIO()),
             ):
-                self.assertEqual(main(["run"]), 0)
+                self.assertEqual(main(["shell", "--command", "/do approve-review --confirm"]), 0)
 
-            answers = iter(["1", "y"])
             output = io.StringIO()
             with (
                 mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
                 mock.patch("sys.stdin", TtyStringIO()),
-                mock.patch("builtins.input", side_effect=lambda _: next(answers)),
+                mock.patch("builtins.input", side_effect=AssertionError("unexpected prompt")),
                 working_directory(repo),
                 contextlib.redirect_stdout(output),
             ):
-                self.assertEqual(main(["run"]), 0)
+                self.assertEqual(main(["shell", "--command", "/do prepare-draft --confirm"]), 0)
 
             run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
             artifact_path = run_dir / "artifacts" / "publication" / "draft-pr.json"
@@ -2200,7 +2154,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(run_json["current_stage"], "review_ready")
             self.assertEqual(run_json["stage_statuses"]["publication"], "pending")
             self.assertFalse(artifact_path.exists())
-            self.assertIn("Active run found", output.getvalue())
+            self.assertIn("Active LoopForge run", output.getvalue())
 
     def test_prepare_draft_publication_blocks_without_review_or_patch(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2241,7 +2195,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(run_json["stage_statuses"]["publication"], "pending")
             self.assertFalse((run_dir / "artifacts" / "publication" / "draft-pr.json").exists())
 
-    def test_run_cockpit_blocks_readonly_stage_when_fixture_changes_worktree(self) -> None:
+    def test_scripted_workflow_blocks_readonly_stage_when_fixture_changes_worktree(self) -> None:
         for stage, artifact in (
             ("research", valid_research_markdown()),
             ("plan", valid_plan_markdown()),
@@ -2283,28 +2237,28 @@ class CliTests(unittest.TestCase):
                     run_json_path.write_text(json.dumps(run_json), encoding="utf-8")
                     (run_dir / "research.md").write_text(valid_research_markdown(), encoding="utf-8")
 
-                answers = iter(["1", "y"])
                 error = io.StringIO()
+                output = io.StringIO()
                 with (
                     mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
                     mock.patch("sys.stdin", TtyStringIO()),
-                    mock.patch("builtins.input", side_effect=lambda _: next(answers)),
+                    mock.patch("builtins.input", side_effect=AssertionError("unexpected prompt")),
                     working_directory(repo),
-                    contextlib.redirect_stdout(io.StringIO()),
+                    contextlib.redirect_stdout(output),
                     contextlib.redirect_stderr(error),
                 ):
-                    self.assertEqual(main(["run"]), 1)
+                    self.assertEqual(main(["shell", "--command", f"/do run-{stage} --confirm"]), 1)
 
                 run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
                 self.assertEqual(run_json["stage_statuses"][stage], "blocked")
                 self.assertIn("changed the worktree", "\n".join(run_json["blockers"]))
-                self.assertIn(f"{stage.title()} blocked", error.getvalue())
+                self.assertIn(f"{stage.title()} blocked", output.getvalue())
                 self.assertNotEqual(
                     (run_dir / f"{stage}.md").read_text(encoding="utf-8"),
                     artifact,
                 )
 
-    def test_run_cockpit_blocks_readonly_stage_with_invalid_frontmatter(self) -> None:
+    def test_scripted_workflow_blocks_readonly_stage_with_invalid_frontmatter(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)
             repo = workspace / "project"
@@ -2335,17 +2289,17 @@ class CliTests(unittest.TestCase):
                 )
             run_dir = self.approve_current_run(repo, loopforge_home)
 
-            answers = iter(["1", "y"])
             error = io.StringIO()
+            output = io.StringIO()
             with (
                 mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
                 mock.patch("sys.stdin", TtyStringIO()),
-                mock.patch("builtins.input", side_effect=lambda _: next(answers)),
+                mock.patch("builtins.input", side_effect=AssertionError("unexpected prompt")),
                 working_directory(repo),
-                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stdout(output),
                 contextlib.redirect_stderr(error),
             ):
-                self.assertEqual(main(["run"]), 1)
+                self.assertEqual(main(["shell", "--command", "/do run-research --confirm"]), 1)
 
             run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
             blockers = "\n".join(run_json["blockers"])
@@ -2356,7 +2310,7 @@ class CliTests(unittest.TestCase):
                 (run_dir / "research.md").read_text(encoding="utf-8"),
                 invalid_research,
             )
-            self.assertIn("Research blocked", error.getvalue())
+            self.assertIn("Research blocked", output.getvalue())
 
     def test_readonly_research_retains_invalid_candidates_and_allows_retry(self) -> None:
         partial_research = """---
@@ -2472,6 +2426,11 @@ Only this section is present.
             def launch(request: TerminalLaunchRequest) -> TerminalSessionResult:
                 self.assertIsNotNone(request.output_chunk_callback)
                 request.output_chunk_callback("stdout", console_output)
+                from loopforge.adapters.observation_hook import record_hook
+                record_hook({"cwd": str(request.cwd), "session_id": "test-stage-session",
+                             "hook_event_name": "Stop",
+                             "last_assistant_message": "Reading repository context."},
+                            Path(request.environment["LOOPFORGE_OBSERVATION_DIR"]), request.cwd)
                 candidate = (
                     request.cwd
                     / ".loopforge"
@@ -2897,7 +2856,7 @@ Only this section is present.
                 (run_dir / "research.md").read_text(encoding="utf-8"),
                 valid_research_markdown(),
             )
-            self.assertIn("Active run found", output.getvalue())
+            self.assertIn("Active LoopForge run", output.getvalue())
 
     def test_run_with_task_can_replace_active_current_run_explicitly(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2928,42 +2887,6 @@ Only this section is present.
             self.assertIn("Previous current run", text)
             self.assertIn(f"Replaced {first_run_id}", text)
 
-    def test_run_wizard_uses_selected_default_adapter(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            repo = Path(temp_dir)
-            loopforge_home = repo / "home"
-            output = io.StringIO()
-            answers = iter(
-                [
-                    "2",
-                    "Adapter-neutral task",
-                    "",
-                    "Proof exists",
-                    "y",
-                    "y",
-                    "y",
-                    "n",
-                ]
-            )
-            with (
-                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
-                mock.patch("sys.stdin", TtyStringIO()),
-                mock.patch("builtins.input", side_effect=lambda _: next(answers)),
-                working_directory(repo),
-                contextlib.redirect_stdout(output),
-            ):
-                self.assertEqual(main(["init"]), 0)
-                update = set_default_adapter(
-                    repo,
-                    "claude-code",
-                    ["--dangerously-skip-permissions"],
-                )
-                self.assertTrue(update.ok, update.message)
-                self.assertEqual(main(["run"]), 0)
-
-            text = output.getvalue()
-            self.assertIn("Next\nloopforge run", text)
-            self.assertNotIn("Launch Codex now", text)
 
     def test_run_with_task_remains_prompt_free_when_interactive(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -3102,11 +3025,10 @@ Only this section is present.
             self.assertIsNone(config["current_run_id"])
             self.assertIn("LF_GITHUB_APPROVAL_UNAVAILABLE", error.getvalue())
 
-    def test_run_can_select_open_github_issue_when_provider_available(self) -> None:
+    def test_run_reads_explicit_github_issue_without_prompting(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             repo = Path(temp_dir)
             loopforge_home = repo / "home"
-            answers = iter(["1", "", "1", "", "", "y", "y", "n"])
             issue_list = {
                 "issues": [
                     {
@@ -3120,13 +3042,13 @@ Only this section is present.
             with (
                 mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
                 mock.patch("sys.stdin", TtyStringIO()),
-                mock.patch("loopforge.cli.gh_issue_list", return_value=IssueReadResult(True, issue=issue_list)),
-                mock.patch("builtins.input", side_effect=lambda _: next(answers)),
+                mock.patch("loopforge.cli.gh_issue_view", return_value=IssueReadResult(True, issue=issue_list["issues"][0])),
+                mock.patch("builtins.input", side_effect=AssertionError("unexpected prompt")),
                 working_directory(repo),
                 contextlib.redirect_stdout(io.StringIO()),
             ):
                 self.assertEqual(main(["init"]), 0)
-                self.assertEqual(main(["run"]), 0)
+                self.assertEqual(main(["run", "https://github.com/acme/app/issues/7"]), 0)
             config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
             run_dir = Path(config["run_root"]) / config["current_run_id"]
             run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
@@ -3905,7 +3827,7 @@ Only this section is present.
             with working_directory(repo), contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(main(["init"]), 0)
                 shell = InteractiveShell(repo, output=io.StringIO(), error=io.StringIO())
-                with mock.patch("loopforge.cli.interactive.os.name", "nt"):
+                with mock.patch("loopforge.cli.interactive._WINDOWS", True):
                     self.assertEqual(
                         shell.dispatch(
                             '/adapter local-adapter-fixture -- "C:\\fixture folder\\runner.py" --mode S01'
@@ -4028,8 +3950,6 @@ Only this section is present.
                         "/config set adapter-args --dangerously-skip-permissions",
                         "/theme dark",
                         "/tui plain",
-                        "/keymap vim",
-                        "/statusline compact",
                         "/title Focus",
                         "/config show",
                     ]
@@ -4052,8 +3972,6 @@ Only this section is present.
             text = output.getvalue()
             self.assertIn("theme  dark", text)
             self.assertIn("tui  plain", text)
-            self.assertIn("keymap  vim", text)
-            self.assertIn("statusline  compact", text)
             self.assertIn("title  Focus", text)
 
     def test_shell_stats_tasks_usage_cost_and_raw(self) -> None:
@@ -4710,9 +4628,9 @@ Only this section is present.
                 self.assertEqual(main(["shell", "--command", "/doctor"]), 0)
 
             text = output.getvalue()
-            self.assertIn("prompt_toolkit: missing", text)
+            self.assertIn("textual: missing", text)
             self.assertIn("rich: missing", text)
-            self.assertEqual(tui_dependency_state()["prompt_toolkit"], True)
+            self.assertEqual(tui_dependency_state()["textual"], True)
 
     def test_install_command_renders_a_machine_readable_result(self) -> None:
         output = io.StringIO()
@@ -5996,7 +5914,7 @@ Only this section is present.
             self.assertIn("status  passed", output.getvalue())
             self.assertIn("risk    low", output.getvalue())
 
-    def test_run_cockpit_approves_verified_work_for_review(self) -> None:
+    def test_scripted_workflow_approves_verified_work_for_review(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)
             repo = workspace / "project"
@@ -6032,23 +5950,22 @@ Only this section is present.
             (run_dir / "verification.md").write_text("# Verification\n\nPassed.\n", encoding="utf-8")
             self.complete_current_review(run_dir)
 
-            answers = iter(["1", "y"])
             output = io.StringIO()
             with (
                 mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
                 mock.patch("sys.stdin", TtyStringIO()),
-                mock.patch("builtins.input", side_effect=lambda _: next(answers)),
+                mock.patch("builtins.input", side_effect=AssertionError("unexpected prompt")),
                 working_directory(repo),
                 contextlib.redirect_stdout(output),
             ):
-                self.assertEqual(main(["run"]), 0)
+                self.assertEqual(main(["shell", "--command", "/do approve-review --confirm"]), 0)
 
             run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
             review_gate = run_json["human_gates"]["review_approval"]
             self.assertEqual(run_json["current_stage"], "review_ready")
             self.assertEqual(run_json["stage_statuses"]["review"], "approved")
             self.assertEqual(review_gate["status"], "approved")
-            self.assertEqual(review_gate["source"], "local")
+            self.assertEqual(review_gate["source"], "interactive")
             self.assertTrue(review_gate["approved_at"])
             self.assertTrue(run_json["publish_eligibility"]["eligible"])
             self.assertEqual(run_json["publish_eligibility"]["mode"], "draft")
@@ -6102,9 +6019,9 @@ Only this section is present.
             self.assertEqual(run_json["stage_statuses"]["review"], "pending")
             self.assertEqual(run_json["human_gates"]["review_approval"]["status"], "pending")
             self.assertFalse(run_json["publish_eligibility"]["eligible"])
-            self.assertIn("Active run found", output.getvalue())
+            self.assertIn("Active LoopForge run", output.getvalue())
 
-    def test_run_cockpit_prepares_draft_publication_after_review(self) -> None:
+    def test_scripted_workflow_prepares_draft_publication_after_review(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)
             repo = workspace / "project"
@@ -6142,7 +6059,7 @@ Only this section is present.
             run_json["stage_statuses"]["task"] = "approved"
             run_json["stage_statuses"]["research"] = "complete"
             run_json["stage_statuses"]["plan"] = "approved"
-            run_json["stage_statuses"]["implementation"] = "in_progress"
+            run_json["stage_statuses"]["implementation"] = "complete"
             run_json["stage_statuses"]["verification"] = "complete"
             run_json["stage_statuses"]["review"] = "approved"
             run_json["human_gates"]["review_approval"] = {
@@ -6170,16 +6087,15 @@ Only this section is present.
             }
             run_json_path.write_text(json.dumps(run_json), encoding="utf-8")
 
-            answers = iter(["1", "y"])
             output = io.StringIO()
             with (
                 mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}),
                 mock.patch("sys.stdin", TtyStringIO()),
-                mock.patch("builtins.input", side_effect=lambda _: next(answers)),
+                mock.patch("builtins.input", side_effect=AssertionError("unexpected prompt")),
                 working_directory(repo),
                 contextlib.redirect_stdout(output),
             ):
-                self.assertEqual(main(["run"]), 0)
+                self.assertEqual(main(["shell", "--command", "/do prepare-draft --confirm"]), 0)
 
             draft_path = run_dir / "artifacts" / "publication" / "draft-pr.json"
             draft = json.loads(draft_path.read_text(encoding="utf-8"))
@@ -6260,7 +6176,7 @@ Only this section is present.
             run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
             self.assertNotEqual(run_json["stage_statuses"]["publication"], "draft_prepared")
             self.assertFalse((run_dir / "artifacts" / "publication" / "draft-pr.json").exists())
-            self.assertIn("Active run found", output.getvalue())
+            self.assertIn("Active LoopForge run", output.getvalue())
 
     def test_prepare_draft_publication_blocks_without_review_eligibility(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -23,12 +23,13 @@ autonomy: verification is evidence, never review or publication authority.
   the renderer, presentation/actions, workflow progress, guidance, and
   effective pack contract; do not add another command registry or live renderer.
 - Interactive TTY sessions open the full-screen console by default. Preserve
-  `--plain`, `shell --command`, and `shell --script` as compatibility paths.
+  `--plain` for CLI text output and `shell --command` / `shell --script` for
+  scriptable commands. Do not restore the removed prompt shell or text menus.
 - `src/loopforge/engine/__init__.py` owns workflow state. Use its normalizers
   and approval APIs; do not patch lifecycle fields from CLI code.
 - Product checks, adapters, policies, schemas, templates, and bundled packs
-  belong under `src/loopforge/`. `.agent/` contains compatibility launchers and
-  inherited bootstrap material; keep launchers runnable.
+  belong under `src/loopforge/`. `.agent/` contains only thin compatibility
+  launchers; keep them runnable, without duplicating product code or data.
 - Do not add hidden network, publication, telemetry, or destructive behavior.
 - Preserve unrelated working-tree changes and keep generated run artifacts
   outside the repository by default.

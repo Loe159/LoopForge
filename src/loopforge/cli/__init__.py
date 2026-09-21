@@ -103,58 +103,6 @@ TABLE_DEFAULT_COLUMNS = {
 }
 
 
-def prompt_text(label: str, *, default: str = "", required: bool = True) -> str:
-    prompt = f"{label}"
-    if default:
-        prompt += f" [{default}]"
-    prompt += ": "
-    while True:
-        value = input(prompt).strip()
-        if value:
-            return value
-        if default:
-            return default
-        if not required:
-            return ""
-        print("Please enter a value.")
-
-
-def prompt_yes_no(label: str, *, default: bool = False) -> bool:
-    suffix = "Y/n" if default else "y/N"
-    value = input(f"{label} [{suffix}]: ").strip().lower()
-    if not value:
-        return default
-    return value in {"y", "yes"}
-
-
-def split_csv_prompt(value: str) -> list[str]:
-    return [item.strip() for item in value.split(",") if item.strip()]
-
-
-def configured_adapter(config: dict[str, Any]) -> tuple[str, list[str]]:
-    adapter = str(config.get("default_adapter") or DEFAULT_ADAPTER)
-    if adapter not in SUPPORTED_ADAPTERS:
-        adapter = DEFAULT_ADAPTER
-    raw_args = config.get("default_adapter_args", [])
-    adapter_args = [str(value) for value in raw_args] if isinstance(raw_args, list) else []
-    return adapter, adapter_args
-
-
-def adapter_continue_command(adapter: str, adapter_args: list[str] | None = None) -> str:
-    command = f"loopforge continue --adapter {adapter}"
-    if adapter_args:
-        command += " -- " + subprocess.list2cmdline([str(arg) for arg in adapter_args])
-    return command
-
-
-def current_project_profile(project_dir: Path) -> str:
-    try:
-        config = json.loads(project_config_path(project_dir).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return DEFAULT_PROFILE
-    return normalize_profile(config.get("profile", DEFAULT_PROFILE))
-
-
 def _github_client() -> GitHubIssueClient:
     return GitHubIssueClient(sys.modules[__name__])
 
@@ -237,53 +185,6 @@ def _intake_service() -> RunIntakeService:
     return RunIntakeService(sys.modules[__name__])
 
 
-def pack_check_suggestions(project_dir: Path, pack: str | None) -> list[tuple[str, str]]:
-    return _intake_service().pack_check_suggestions(project_dir, pack)
-
-
-def permission_suggestions() -> list[tuple[str, str]]:
-    return _intake_service().permission_suggestions()
-
-
-def confirm_or_edit_list(
-    title: str,
-    suggestions: list[tuple[str, str]],
-    *,
-    default_values: list[str] | None = None,
-) -> list[str]:
-    return _intake_service().confirm_or_edit_list(
-        title,
-        suggestions,
-        default_values=default_values,
-    )
-
-
-def build_manual_intake(
-    project_dir: Path,
-    args: argparse.Namespace,
-    *,
-    default_task: str = "",
-    source_metadata: dict[str, Any] | None = None,
-    notes: list[str] | None = None,
-) -> RunIntake:
-    return _intake_service().build_manual(
-        project_dir,
-        args,
-        default_task=default_task,
-        source_metadata=source_metadata,
-        notes=notes,
-    )
-
-
-def build_issue_intake(
-    project_dir: Path,
-    args: argparse.Namespace,
-    ref: GitHubIssueRef,
-    issue: dict[str, Any],
-) -> RunIntake:
-    return _intake_service().build_issue(project_dir, args, ref, issue)
-
-
 def build_noninteractive_issue_intake(
     project_dir: Path,
     args: argparse.Namespace,
@@ -291,14 +192,6 @@ def build_noninteractive_issue_intake(
     issue: dict[str, Any],
 ) -> RunIntake:
     return _intake_service().build_noninteractive_issue(project_dir, args, ref, issue)
-
-
-def choose_issue_from_list(project_dir: Path) -> tuple[GitHubIssueRef | None, dict[str, Any] | None, str]:
-    return _intake_service().choose_issue_from_list(project_dir)
-
-
-def interactive_run_intake(project_dir: Path, args: argparse.Namespace) -> RunIntake:
-    return _intake_service().interactive(project_dir, args)
 
 
 def noninteractive_run_intake(project_dir: Path, args: argparse.Namespace) -> RunIntake:
@@ -652,10 +545,10 @@ def print_table_rows(
 def print_grouped_help() -> None:
     print("LoopForge")
     print("Portable agentic workflow loops.")
-    print("`loopforge run` is the cockpit: it resumes the active run and advances one approved stage at a time.")
+    print("`loopforge` opens the Textual TUI; `loopforge run` creates a task or reports the active run.")
     print()
     groups = [
-        ("Start", [("init", "Prepare this project"), ("run", "Create or resume a staged run")]),
+        ("Start", [("init", "Prepare this project"), ("run", "Create a run or inspect the active run")]),
         (
             "Work",
             [
@@ -684,7 +577,7 @@ def print_grouped_help() -> None:
         (
             "Automation",
             [
-                ("shell", "Open the interactive shell"),
+                ("shell", "Open Textual or execute scriptable commands"),
                 ("completion", "Print shell completion script"),
             ],
         ),
@@ -1026,7 +919,7 @@ def run_has_explicit_source(args: argparse.Namespace) -> bool:
     )
 
 
-def render_run_cockpit(
+def render_active_run(
     project_dir: Path,
     renderer: TerminalRenderer,
     *,
@@ -1047,7 +940,7 @@ def render_run_cockpit(
         return
     result = current_status(project_dir)
     guidance = current_guidance(project_dir)
-    print("Active run found; showing cockpit.")
+    print("Active LoopForge run; showing status.")
     render_status(renderer, result, guidance, details=True)
 
 
@@ -1147,77 +1040,6 @@ def render_publication_result(
         blockers=list(getattr(result, "blockers", []) or []),
         next_command="loopforge run",
     )
-
-
-def maybe_run_readonly_stage_from_cockpit(
-    project_dir: Path,
-    renderer: TerminalRenderer,
-    *,
-    adapter: str,
-    adapter_args: list[str],
-    execution_mode: str = "auto",
-    no_color: bool,
-) -> int:
-    status = current_status(project_dir)
-    if status.run is None:
-        return 0
-    stage = next_readonly_stage(status.run)
-    if stage is None:
-        statuses = status.run.get("stage_statuses", {})
-        if not isinstance(statuses, dict):
-            return 0
-        if statuses.get("plan") == "awaiting_approval":
-            if not prompt_yes_no("Approve current plan for implementation", default=False):
-                return 0
-            result = approve_plan(project_dir, source="local")
-            render_plan_approval_result(
-                renderer if result.ok else TerminalRenderer(sys.stderr, no_color=no_color),
-                result,
-            )
-            return 0 if result.ok else 1
-        if (
-            statuses.get("verification") == "complete"
-            and statuses.get("review") == "complete"
-        ):
-            if not prompt_yes_no("Approve completed review for draft preparation", default=False):
-                return 0
-            result = approve_review(project_dir, source="local")
-            render_review_approval_result(
-                renderer if result.ok else TerminalRenderer(sys.stderr, no_color=no_color),
-                result,
-            )
-            return 0 if result.ok else 1
-        eligibility = status.run.get("publish_eligibility", {})
-        if (
-            statuses.get("publication") != "draft_prepared"
-            and isinstance(eligibility, dict)
-            and eligibility.get("eligible") is True
-            and eligibility.get("mode") == "draft"
-        ):
-            if not prompt_yes_no("Prepare draft PR publication artifact", default=False):
-                return 0
-            result = prepare_draft_publication(project_dir)
-            render_publication_result(
-                renderer if result.ok else TerminalRenderer(sys.stderr, no_color=no_color),
-                result,
-            )
-            return 0 if result.ok else 1
-        return 0
-    if not prompt_yes_no(f"Run read-only {stage} with {adapter} now", default=False):
-        return 0
-    with renderer.loading(f"Running read-only {stage} with {adapter}..."):
-        result = execute_readonly_stage(
-            project_dir,
-            stage=stage,
-            adapter=adapter,
-            adapter_args=adapter_args,
-            execution_mode=execution_mode,
-        )
-    render_stage_result(
-        renderer if result.ok else TerminalRenderer(sys.stderr, no_color=no_color),
-        result,
-    )
-    return 0 if result.ok else 1
 
 
 def run_rows_from_result(result: object) -> list[dict[str, object]]:

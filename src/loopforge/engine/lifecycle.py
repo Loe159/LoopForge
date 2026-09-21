@@ -31,6 +31,7 @@ class RunStage(str, Enum):
     VERIFICATION_BLOCKED = "verification_blocked"
     VERIFICATION_COMPLETE = "verification_complete"
     REVIEW_READY = "review_ready"
+    REVIEW_COMPLETE = "review_complete"
     REVIEW_APPROVED = "review_approved"
     DRAFT_PUBLICATION_READY = "draft_publication_ready"
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import shutil
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Sequence
 
 DEFAULT_IMPLEMENTATION_AGENT = "code"
@@ -13,7 +13,7 @@ DEFAULT_READONLY_AGENT = "ask"
 def is_kilo_command(command: Sequence[str]) -> bool:
     """Return whether *command* invokes the Kilo Code CLI."""
 
-    return bool(command) and Path(command[0]).name.lower() in {
+    return bool(command) and PureWindowsPath(command[0]).name.lower() in {
         "kilo",
         "kilo.exe",
         "kilo.cmd",

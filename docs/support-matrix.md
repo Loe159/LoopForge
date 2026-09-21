@@ -19,7 +19,7 @@ Classifies every user-facing entry point for LoopForge v1. Only entries marked
 | Surface | Status | Tested version | Notes |
 |---|---|---|---|
 | Top-level CLI (`loopforge <cmd>`) | Supported | 0.1.0 | |
-| `--plain` | Compatible | 0.1.0 | No TUI, headless operation |
+| `--plain` | Compatible | 0.1.0 | Plain CLI output; interactive TTY sessions still open Textual |
 | `shell --command` | Supported | 0.1.0 | Single-command execution |
 | `shell --script` | Supported | 0.1.0 | Script file execution |
 | Textual TUI | Supported | Textual >=8.0,<9 | Default for interactive TTY sessions |
@@ -30,20 +30,23 @@ Classifies every user-facing entry point for LoopForge v1. Only entries marked
 
 | Launcher | Classification | Rationale |
 |---|---|---|
-| `build_stage_context.py` | Supported | Used by adapters |
-| `check_stage_readiness.py` | Supported | Used by state machine |
-| `classify_patch_risk.py` | Supported | Used by verify pipeline |
-| `diff_policy.py` | Supported | Used by patch pipeline |
-| `generate_complete_patch.py` | Supported | Patch generation |
-| `initialize_portable_run.py` | Compatibility | Legacy path |
-| `isolated_process.py` | Supported | Process isolation |
-| `record_run_metrics.py` | Supported | Metrics |
+| `classify_patch_risk.py` | Compatibility | Wrapper around the packaged risk check |
+| `diff_policy.py` | Compatibility | Wrapper around the packaged diff policy check |
+| `generate_complete_patch.py` | Compatibility | Wrapper around packaged patch generation |
+| `isolated_process.py` | Compatibility | Import-only shim, not a CLI |
 | `validate_artifacts.py` | Compatibility | Wrapper around `loopforge.checks` |
-| `validate_disposable_worktree.py` | Supported | Worktree validation |
 | `validate_implementation_result.py` | Compatibility | Wrapper around `loopforge.checks` |
 
-Supported launchers must respond to `--help` with exit code 0.
-Compatibility-only launchers are exempt from the `--help` smoke test.
+All CLI launchers must respond to `--help` with exit code 0. The import-only
+`isolated_process.py` shim is checked by importing its packaged implementation.
+The adapter launcher under `.agent/adapters/` follows the same rule; shell
+adapters delegate to it.
+
+The standalone `build_stage_context.py`, `check_stage_readiness.py`,
+`initialize_portable_run.py`, `record_run_metrics.py`, and
+`validate_disposable_worktree.py` prototypes were removed on September 21,
+2026. They had no product callers and were not the engine's implementations.
+Their policies, schemas, templates, and prompts were removed with them.
 
 ## Engine API Boundaries
 

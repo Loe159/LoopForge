@@ -47,17 +47,10 @@ class CliTuiTests(unittest.TestCase):
     def test_fullscreen_console_is_the_interactive_default(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             shell = InteractiveShell(Path(temp_dir), output=io.StringIO())
-            with (
-                mock.patch("loopforge.cli.tui.run_fullscreen_console", return_value=0) as console,
-                mock.patch("prompt_toolkit.PromptSession") as session_type,
-            ):
-                self.assertEqual(shell.run_prompt(), 0)
-                console.assert_called_once_with(shell)
-
-                shell.renderer_mode = "plain"
-                session_type.return_value.prompt.side_effect = EOFError
-                self.assertEqual(shell.run_prompt(), 0)
-                session_type.assert_called_once()
+            with mock.patch("loopforge.cli.tui.run_fullscreen_console", return_value=0) as console:
+                self.assertEqual(run_interactive(Path(temp_dir)), 0)
+                self.assertEqual(run_interactive(Path(temp_dir), renderer_mode="plain"), 0)
+                self.assertEqual(console.call_count, 2)
 
     def test_foreground_operation_bridges_events_and_cancellation(self) -> None:
         operation = ForegroundOperation("Verify run")

@@ -14,11 +14,11 @@ artifact. The persisted workflow and its approval gates live in
   entry point are in `pyproject.toml`.
 - `loopforge = loopforge.cli:main`; the public facade is
   `src/loopforge/cli/__init__.py`.
-- Runtime dependencies are `textual`, `prompt_toolkit`, and `rich`
+- Runtime dependencies are `textual` and `rich`
   (`pyproject.toml`).
 - Interactive TTY sessions open the Textual full-screen console by default
   (`cli/tui.py`). `shell --command` and `--script` remain headless;
-  `--plain` uses the prompt-based compatibility surface.
+  `--plain` disables Rich rendering for CLI output; there is no prompt shell.
 - Tests are `unittest` suites under `tests/`; no database, HTTP server,
   container definition, Makefile, or GitHub Actions workflow was found.
 - `.github/` contains an issue template only. Release/deployment automation is
@@ -32,7 +32,7 @@ artifact. The persisted workflow and its approval gates live in
 | `src/loopforge/engine/` | Workflow API plus JSON storage, project registry, pack registry, and metrics service |
 | `src/loopforge/checks/`, `adapters/` | Packaged deterministic checks and local implementation adapter |
 | `src/loopforge/contracts/`, `packs/` | Policies/schemas and bundled packs with skills, agents, permissions, workflows, checks, and protected paths |
-| `.agent/` | Compatibility launchers for migrated scripts and remaining inherited bootstrap material |
+| `.agent/` | Thin compatibility launchers only; product implementations and data live under `src/loopforge/` |
 | `tests/` | CLI integration, CLI-boundary, and engine-service coverage |
 | `docs/agent/` | Maintained audit and future-agent instructions |
 
@@ -54,5 +54,6 @@ the engine. `projects`, `open`, and `runs --all-projects` expose global views.
 `src/loopforge.egg-info/`, `__pycache__/`, `build/`, and `dist/` are generated
 or ignored. In particular, the existing `egg-info/SOURCES.txt` still lists the
 former flat module paths and is not source of truth after the package refactor.
-Some non-migrated `.agent/checks/` scripts import helpers absent from this
-repository; they are not established runtime paths.
+The unused bootstrap scripts that imported absent helpers have been removed.
+See [repository layout](../repository-layout.md) for retired directories and
+the distinction between versioned sources and local project state.

@@ -318,8 +318,11 @@ class StateStore:
         if (
             history != previous_events
             and self._status is not None
-            and session_key is not None
-            and session_key != self._run_agent_operation_session
+            and (
+                (session_key is not None and session_key != self._run_agent_operation_session)
+                or self._run_agent.has_live_transcript
+                or any("Waiting for harness events;" in event.message for event in history)
+            )
         ):
             run_agent = self._run_agent_loader(self._status, history)
             self._run_agent = run_agent

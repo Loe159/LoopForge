@@ -26,8 +26,8 @@
 - Use `TerminalRenderer` and `render_*` helpers in `cli/ui.py`; preserve
   quiet, no-color, JSON/CSV, and stdout/stderr behavior.
 - Textual owns the default full-screen layout in `cli/textual_app/`;
-  `TerminalRenderer` owns one-shot Rich/plain output. `--plain` retains the
-  `PromptSession` prompt in `cli/interactive.py`. Do not add
+  `TerminalRenderer` owns one-shot Rich/plain output. `--plain` controls CLI text rendering only. `cli/interactive.py` owns
+  shared command dispatch, never terminal input. Do not add
   direct ANSI output or another live renderer.
 - Build UI state with `shell_snapshot`, `stage_views`, and
   `ActionDescriptor`, then execute through engine APIs. Reuse semantic roles

@@ -5,11 +5,12 @@ fallback full-screen renderer.
 
 The dependency is `textual>=8.0,<9`. The foundation spike was verified against
 Textual 8.2.8 and uses only its public `App`, worker, Pilot, binding, and
-command-palette APIs. `rich` owns one-shot CLI output; `prompt_toolkit` remains
-an explicit dependency only for the `--plain` prompt.
+command-palette APIs. `rich` owns one-shot CLI output. The former prompt shell
+and its Prompt Toolkit dependency have been removed.
 
-`loopforge --plain`, `shell --command`, `shell --script`, JSON, and CSV do not
-import `loopforge.cli.textual_app`.
+One-shot CLI commands (including `--plain`), `shell --command`, `shell --script`,
+JSON, and CSV do not import `loopforge.cli.textual_app`. Bare `loopforge` and
+`loopforge shell` in a TTY open Textual, also when `--plain` is supplied.
 
 The Textual app renders only an immutable `UiSnapshot`. Project loads run in a
 Textual worker through `StateStore`; worker code publishes messages and never

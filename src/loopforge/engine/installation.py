@@ -158,7 +158,7 @@ def install_loopforge(
             [
                 sys.executable,
                 "-c",
-                "import loopforge, prompt_toolkit, rich, textual",
+                "import loopforge, rich, textual",
             ],
             cwd=root,
             check=False,

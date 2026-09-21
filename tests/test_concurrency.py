@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -11,7 +12,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from loopforge.engine.locking import FileLock, LockTimeoutError, _read_lock_pid, _pid_is_alive
+from loopforge.engine.locking import FileLock, LockTimeoutError, _read_lock_pid
 from loopforge.engine.repositories import (
     RunRepository,
     ConfigRepository,
@@ -44,14 +45,14 @@ class TestFileLock(unittest.TestCase):
         self.assertTrue(lock.lock_path.is_file())
         lock.release()
         self.assertFalse(lock.acquired)
-        self.assertFalse(lock.lock_path.exists())
+        self.assertTrue(lock.lock_path.exists())
 
     def test_context_manager(self):
         with FileLock(self.target, timeout=2.0) as lock:
             self.assertTrue(lock.acquired)
             self.assertTrue(lock.lock_path.exists())
         self.assertFalse(lock.acquired)
-        self.assertFalse(lock.lock_path.exists())
+        self.assertTrue(lock.lock_path.exists())
 
     @unittest.skipIf(os.name == "nt", "PID not written to lock file on Windows")
     @unittest.skipIf(_WIN, "PID not written to lock file on Windows (mandatory locks)")
@@ -88,7 +89,6 @@ class TestFileLock(unittest.TestCase):
         t_waiter.join(timeout=5)
         self.assertEqual(len(locked), 2)
 
-    @unittest.skipIf(_WIN, "LK_NBLCK returns immediately; timeout not triggered on uncontended lock")
     def test_lock_timeout(self):
         hold_event = threading.Event()
         release_event = threading.Event()
@@ -132,7 +132,7 @@ class TestFileLock(unittest.TestCase):
         self.assertTrue(lock.acquired)
         self.assertTrue(lock_path.exists())
         lock.release()
-        self.assertFalse(lock_path.exists())
+        self.assertTrue(lock_path.exists())
 
     def test_stale_lock_recovery_non_numeric_pid(self):
         lock_path = Path(str(self.target) + ".lock")
@@ -171,14 +171,39 @@ class TestFileLock(unittest.TestCase):
             t.start()
         hold_event.wait(timeout=5)
         time.sleep(0.3)
+        self.assertEqual(results, ["locked"])
         release_event.set()
         for t in threads:
             t.join(timeout=10)
-        self.assertIn("locked", results)
-        # On Windows with LK_NBLCK, all threads may succeed sequentially.
-        # The important invariant is that at least one got the lock.
-        if not _WIN:
-            self.assertIn("timeout", results)
+        self.assertEqual(results, ["locked"] * 3)
+        self.assertFalse(any(thread.is_alive() for thread in threads))
+
+    def test_other_process_times_out_then_acquires_after_release(self):
+        script = (
+            "from pathlib import Path; import sys\n"
+            "from loopforge.engine.locking import FileLock, LockTimeoutError\n"
+            "try:\n"
+            "    with FileLock(Path(sys.argv[1]), timeout=0.1): pass\n"
+            "except LockTimeoutError: sys.exit(3)\n"
+        )
+        command = [sys.executable, "-c", script, str(self.target)]
+        with FileLock(self.target):
+            result = subprocess.run(command, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 3, result.stderr)
+        result = subprocess.run(command, capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_lock_reentry_does_not_lose_the_original_lock(self):
+        with FileLock(self.target) as lock:
+            with self.assertRaises(RuntimeError):
+                lock.acquire()
+            self.assertTrue(lock.acquired)
+
+    def test_release_preserves_lock_inode_for_waiters(self):
+        with FileLock(self.target) as lock:
+            inode = lock.lock_path.stat().st_ino
+        with FileLock(self.target) as lock:
+            self.assertEqual(lock.lock_path.stat().st_ino, inode)
 
 
 class TestRepositoryLocking(unittest.TestCase):

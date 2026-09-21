@@ -44,8 +44,8 @@
   applicable. Do not add a parallel prompt loop.
 - When behavior exists in both the top-level CLI and shell, route both through
   the same engine operation and keep intake, confirmation, result, and next
-  action consistent. `loopforge run`/`RunCockpitService` and `/run` are the
-  current duplication to remove, not a pattern to copy.
+  action consistent. The removed prompt shell and `RunCockpitService` must not be reintroduced.
+  Run creation and approval must remain separate, explicit operations.
 - For multi-project behavior, reuse `engine/projects.py` through its public
   engine APIs. Do not scan storage roots or edit `current_run_id` outside
   engine APIs. Test moved/clone conflicts and prior-root migration.

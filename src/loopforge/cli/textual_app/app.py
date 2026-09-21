@@ -18,7 +18,7 @@ from textual.command import DiscoveryHit, Hit, Hits, Provider
 from textual.containers import Container
 from textual.events import Resize
 from textual.timer import Timer
-from textual.widgets import Footer, Header, Input, Static
+from textual.widgets import Collapsible, Footer, Header, Input, Static
 
 from loopforge import __version__
 from loopforge.cli.actions import ActionDescriptor
@@ -54,6 +54,7 @@ from loopforge.cli.textual_app.widgets import (
     RunDashboard,
     RunHeader,
     RunRequiredAction,
+    RunToolEntry,
     ScreenList,
 )
 from loopforge.cli.textual_app.screens import (
@@ -249,6 +250,10 @@ class LoopForgeApp(App[None]):
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         """Enable the dashboard's priority bindings only on its own surface."""
 
+        if action in {"root_open_selected", "open_selected"} and isinstance(
+            getattr(self.focused, "parent", None), RunToolEntry
+        ):
+            return False  # Enter belongs to the focused tool's native disclosure.
         if action.startswith("home_"):
             return self._screen == "home" and not isinstance(self.focused, Input)
         if action.startswith("root_"):
@@ -847,20 +852,15 @@ class LoopForgeApp(App[None]):
         original_output = self.shell.output
         original_error = self.shell.error
         original_renderer = self.shell.renderer
-        original_allow_confirmation = self.shell.allow_confirmation
         self.shell.output = captured
         self.shell.error = captured
         self.shell.renderer = TerminalRenderer(captured, mode="plain", theme=self.shell.theme)
-        # Textual owns confirmations through modal screens.  Never let a
-        # compatibility command open an ``input()`` prompt over its screen.
-        self.shell.allow_confirmation = False
         try:
             result = runner()
         finally:
             self.shell.output = original_output
             self.shell.error = original_error
             self.shell.renderer = original_renderer
-            self.shell.allow_confirmation = original_allow_confirmation
         output = captured.getvalue().strip()
         if len(output) > 1200:
             output = output[:1197] + "..."
@@ -1395,7 +1395,11 @@ class LoopForgeApp(App[None]):
         self._snapshot = snapshot
         if not self.screen_stack:
             return
-        self._sync_screen_surface()
+        try:
+            self._sync_screen_surface()
+        except NoMatches:
+            # Queued worker snapshots may arrive while Textual removes the screen.
+            return
         if self._screen == "home":
             self._render_home(snapshot)
             return
@@ -1531,14 +1535,31 @@ class LoopForgeApp(App[None]):
             implementation_contract=snapshot.run.agent.implementation_contract,
             adapter=snapshot.run.agent.adapter
             or str(getattr(self.shell, "selected_adapter", "default")),
+            active=owns_operation and not snapshot.operation.finished
+            and snapshot.operation.state == "loading",
+            scope=(_snapshot_run_identity(snapshot), snapshot.run.agent.attempt_number,
+                   snapshot.run.agent.system_prompt, snapshot.run.agent.adapter),
         )
         if self._run_follow_tail and owns_operation and snapshot.operation.events:
-            activity.scroll_end(animate=False, force=True, x_axis=False)
+            # New disclosure widgets are mounted asynchronously; follow after
+            # layout so the previous scroll extent cannot strand the reader.
+            self.call_after_refresh(self._follow_run_activity_tail)
         self.query_one("#run-command-bar", RunCommandBar).update_hint(
             self._operation_status(snapshot)
             if owns_operation and snapshot.operation.state != "empty"
             else ""
         )
+
+    @on(Collapsible.Expanded)
+    def _on_tool_expanded(self, event: Collapsible.Expanded) -> None:
+        if isinstance(event.collapsible, RunToolEntry):
+            self._run_follow_tail = False  # Let the reader inspect without jumping.
+
+    def _follow_run_activity_tail(self) -> None:
+        if self._run_follow_tail:
+            self.query_one("#run-activity-feed", RunActivityFeed).scroll_end(
+                animate=False, force=True, x_axis=False
+            )
 
     def _render_operation_panel(self, snapshot: UiSnapshot) -> None:
         """Render factual operation state while preserving literal adapter output."""
@@ -1655,8 +1676,6 @@ class LoopForgeApp(App[None]):
             return "Evidence", before, items, _evidence_line, "", "Enter open · / search · c copy · x export · Esc run"
         values = [
             ("Theme", getattr(self.shell, "theme", "default")),
-            ("Statusline", getattr(self.shell, "statusline", "default")),
-            ("Keymap", getattr(self.shell, "editing_mode", "emacs")),
             ("Adapter", getattr(self.shell, "selected_adapter", "default")),
             ("Project", str(snapshot.selected_project or self.shell.project_dir)),
             ("Git", snapshot.project.branch),

@@ -12,7 +12,7 @@ def _is_machine_mode(context: CliContext) -> bool:
 
 
 class RunCommandHandler:
-    """Create a run or advance the active cockpit by one eligible stage."""
+    """Create a run or inspect the active run without prompting."""
 
     commands = frozenset({"run"})
 
@@ -35,34 +35,16 @@ class RunCommandHandler:
         init_result = api.initialize_project(context.project_dir)
         active_status = api.current_status(context.project_dir)
         explicit_source = api.run_has_explicit_source(args)
-        selected_adapter, selected_adapter_args = api.configured_adapter(init_result.config)
-        selected_adapter_command = api.adapter_continue_command(
-            selected_adapter,
-            selected_adapter_args,
-        )
-        can_prompt = not options.no_input and fmt == "text" and context.stdin.isatty()
-        cockpit = RunCockpitService(context)
         previous_current_run_id = (
             str(active_status.run.get("run_id") or "")
-            if active_status.run is not None
-            else ""
+            if active_status.run is not None else ""
         )
         if active_status.run is not None and not explicit_source:
-            resumed = cockpit.resume_active_run(
-                args,
-                fmt=fmt,
-                can_prompt=can_prompt,
-                previous_current_run_id=previous_current_run_id,
-                selected_adapter=selected_adapter,
-                selected_adapter_args=selected_adapter_args,
+            api.render_active_run(
+                context.project_dir, context.renderer, fmt=fmt, quiet=options.quiet,
             )
-            if resumed is not None:
-                return resumed
-        wizard_used = can_prompt and (not args.task or bool(args.issue_source))
-        if wizard_used:
-            intake = api.interactive_run_intake(context.project_dir, args)
-        else:
-            intake = api.noninteractive_run_intake(context.project_dir, args)
+            return 0
+        intake = api.noninteractive_run_intake(context.project_dir, args)
         try:
             with context.renderer.loading("Creating LoopForge run..."):
                 result = api.create_run(
@@ -104,73 +86,20 @@ class RunCommandHandler:
             return 0
         if options.quiet:
             return 0
-        cockpit.render_created_run(
+        RunSummaryPresenter(context).render_created_run(
             result=result,
             init_result=init_result,
             intake=intake,
             previous_current_run_id=previous_current_run_id,
-            selected_adapter_command=selected_adapter_command,
         )
-        if wizard_used:
-            return api.maybe_run_readonly_stage_from_cockpit(
-                context.project_dir,
-                context.renderer,
-                adapter=selected_adapter,
-                adapter_args=selected_adapter_args,
-                execution_mode=args.execution_mode,
-                no_color=context.options.no_color,
-            )
         return 0
 
-class RunCockpitService:
-    """Coordinate active-run resume, summary rendering, and adapter launch."""
+
+class RunSummaryPresenter:
+    """Render the result of explicit run creation."""
 
     def __init__(self, context: CliContext) -> None:
         self.context = context
-
-    def resume_active_run(
-        self,
-        args: Any,
-        *,
-        fmt: str,
-        can_prompt: bool,
-        previous_current_run_id: str,
-        selected_adapter: str,
-        selected_adapter_args: list[str],
-    ) -> int | None:
-        context = self.context
-        api = context.api
-        if can_prompt:
-            print(
-                f"Active LoopForge run: {previous_current_run_id}",
-                file=context.stdout,
-            )
-            print("1. Resume or inspect the active run", file=context.stdout)
-            print("2. Create a new run", file=context.stdout)
-            choice = api.prompt_text("Choose", default="1")
-            if choice.strip().lower() in {"2", "new", "create"}:
-                return None
-            api.render_run_cockpit(
-                context.project_dir,
-                context.renderer,
-                fmt=fmt,
-                quiet=context.options.quiet,
-            )
-            return api.maybe_run_readonly_stage_from_cockpit(
-                context.project_dir,
-                context.renderer,
-                adapter=selected_adapter,
-                adapter_args=selected_adapter_args,
-                execution_mode=args.execution_mode,
-                no_color=context.options.no_color,
-            )
-        api.render_run_cockpit(
-            context.project_dir,
-            context.renderer,
-            fmt=fmt,
-            quiet=context.options.quiet,
-        )
-        return 0
 
     def render_created_run(
         self,
@@ -179,7 +108,6 @@ class RunCockpitService:
         init_result: Any,
         intake: Any,
         previous_current_run_id: str,
-        selected_adapter_command: str,
     ) -> None:
         context = self.context
         api = context.api
@@ -241,36 +169,6 @@ class RunCockpitService:
             extra_lines=extra,
             next_command=api.next_command(context.project_dir, "loopforge run"),
         )
-
-    def maybe_launch_adapter(
-        self,
-        *,
-        selected_adapter: str,
-        selected_adapter_args: list[str],
-        selected_adapter_command: str,
-    ) -> int:
-        context = self.context
-        api = context.api
-        if api.prompt_yes_no(f"Launch adapter {selected_adapter} now", default=False):
-            with context.renderer.loading(f"Launching adapter {selected_adapter}..."):
-                result = api.continue_run(
-                    context.project_dir,
-                    adapter=selected_adapter,
-                    adapter_args=selected_adapter_args,
-                    confirmed=True,
-                )
-            api.render_continue_result(
-                context.renderer if result.ok else context.error_renderer(),
-                result,
-                details=False,
-            )
-            return 0 if result.ok else 1
-        print(
-            f"Continue later with: {selected_adapter_command}",
-            file=context.stdout,
-        )
-        return 0
-
 
 class ContinueCommandHandler:
     """Validate and execute the implementation transition."""

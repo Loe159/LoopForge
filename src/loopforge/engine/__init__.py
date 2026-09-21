@@ -150,8 +150,6 @@ USER_PREFERENCES_FILE = "preferences.json"
 
 DEFAULT_USER_PREFERENCES = {
     "theme": "default",
-    "statusline": "full",
-    "keymap": "emacs",
 }
 
 SUPPORTED_ADAPTERS = (*AGENT_COMMANDS, "local-adapter-fixture")
@@ -751,8 +749,6 @@ def user_preferences(home: Path | None = None) -> dict[str, str]:
         return values
     for key, allowed in {
         "theme": {"default", "light", "dark", "mono"},
-        "statusline": {"full", "compact", "off"},
-        "keymap": {"emacs", "vim"},
     }.items():
         value = stored.get(key)
         if isinstance(value, str) and value in allowed:
@@ -768,8 +764,6 @@ def update_user_preferences(
     values = user_preferences(home=home)
     allowed_values = {
         "theme": {"default", "light", "dark", "mono"},
-        "statusline": {"full", "compact", "off"},
-        "keymap": {"emacs", "vim"},
     }
     for key, value in updates.items():
         if key not in allowed_values or value not in allowed_values[key]:

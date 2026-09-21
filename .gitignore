@@ -14,3 +14,11 @@ runs/
 .runs/
 tmp/
 artifacts/
+*.bak.*
+
+# Local project state, editor settings, and optional agent-tool caches.
+/.loopforge/
+/.idea/
+/.agents/
+/.codex/
+node_modules/

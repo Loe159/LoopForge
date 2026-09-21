@@ -47,10 +47,11 @@ add language- or project-specific skills and checks. `PackRegistry` resolves
 inheritance, validates agent/permission/workflow references, and persists the
 effective contract into each run.
 
-## 4. Bootstrap Core
+## 4. Compatibility Launchers
 
-The imported `.agent/**` layer supplies proven primitives while the engine is
-being built. It is not the final public API.
+The `.agent/checks/` and `.agent/adapters/` paths are thin compatibility
+launchers for packaged runtime modules. Product code and contracts live under
+`src/loopforge/`; the former standalone bootstrap implementation was removed.
 
 ## Data Flow
 

@@ -22,7 +22,7 @@ class NormalCompletionTests(unittest.TestCase):
     def test_simple_echo_returns_correct_receipt(self) -> None:
         runner = ProcessRunner(output_limit_bytes=10000, timeout=10)
         receipt = runner.run(
-            [sys.executable, "-c", "print('hello')"],
+            [str(Path(sys.executable).resolve()), "-c", "print('hello')"],
             cwd=Path.cwd(),
         )
         self.assertTrue(receipt.completed)
@@ -43,7 +43,7 @@ class StdoutBoundedTests(unittest.TestCase):
     def test_infinite_stdout_bounded_to_limit(self) -> None:
         runner = ProcessRunner(output_limit_bytes=50000, timeout=10)
         receipt = runner.run(
-            [sys.executable, "-c", "while True: print('x' * 1000)"],
+            [str(Path(sys.executable).resolve()), "-c", "while True: print('x' * 1000)"],
             cwd=Path.cwd(),
         )
         self.assertFalse(receipt.completed)
@@ -59,7 +59,7 @@ class TimeoutTests(unittest.TestCase):
     def test_timeout_kills_process(self) -> None:
         runner = ProcessRunner(output_limit_bytes=100000, timeout=1.0)
         receipt = runner.run(
-            [sys.executable, "-c", "import time; time.sleep(60)"],
+            [str(Path(sys.executable).resolve()), "-c", "import time; time.sleep(60)"],
             cwd=Path.cwd(),
         )
         self.assertFalse(receipt.completed)
@@ -73,13 +73,12 @@ class TimeoutTests(unittest.TestCase):
     def test_timeout_kills_process_tree_posix(self) -> None:
         runner = ProcessRunner(output_limit_bytes=100000, timeout=2.0)
         script = (
-            "import os, sys, time; "
-            "pid = os.fork(); "
-            "if pid == 0: time.sleep(60); "
-            "else: time.sleep(60)"
+            "import os, time\n"
+            "os.fork()\n"
+            "time.sleep(60)\n"
         )
         receipt = runner.run(
-            [sys.executable, "-c", script],
+            [str(Path(sys.executable).resolve()), "-c", script],
             cwd=Path.cwd(),
         )
         self.assertFalse(receipt.completed)
@@ -94,7 +93,7 @@ class TimeoutTests(unittest.TestCase):
             "time.sleep(60)"
         )
         receipt = runner.run(
-            [sys.executable, "-c", script],
+            [str(Path(sys.executable).resolve()), "-c", script],
             cwd=Path.cwd(),
         )
         self.assertFalse(receipt.completed)
@@ -109,7 +108,7 @@ class CancellationTests(unittest.TestCase):
 
         def run_in_thread() -> None:
             r = runner.run(
-                [sys.executable, "-c", "import time; time.sleep(30)"],
+                [str(Path(sys.executable).resolve()), "-c", "import time; time.sleep(30)"],
                 cwd=Path.cwd(),
                 cancel_event=cancel_event,
             )
@@ -132,7 +131,7 @@ class StdinClosedTests(unittest.TestCase):
     def test_stdin_closed_by_default_gives_eof(self) -> None:
         runner = ProcessRunner(output_limit_bytes=10000, timeout=10)
         receipt = runner.run(
-            [sys.executable, "-c", "import sys; data = sys.stdin.read(); print('got:', repr(data))"],
+            [str(Path(sys.executable).resolve()), "-c", "import sys; data = sys.stdin.read(); print('got:', repr(data))"],
             cwd=Path.cwd(),
         )
         self.assertTrue(receipt.completed)
@@ -159,7 +158,7 @@ class LargeOutputRingBufferTests(unittest.TestCase):
         runner = ProcessRunner(output_limit_bytes=limit, timeout=10)
         receipt = runner.run(
             [
-                sys.executable,
+                str(Path(sys.executable).resolve()),
                 "-c",
                 "import sys; "
                 "sys.stdout.write('A' * 4000); "
@@ -179,7 +178,7 @@ class ProcessReceiptFieldsTests(unittest.TestCase):
     def test_normal_completion_all_fields_populated(self) -> None:
         runner = ProcessRunner()
         receipt = runner.run(
-            [sys.executable, "-c", "import sys; sys.stderr.write('err'); sys.stdout.write('out')"],
+            [str(Path(sys.executable).resolve()), "-c", "import sys; sys.stderr.write('err'); sys.stdout.write('out')"],
             cwd=Path.cwd(),
         )
         self.assertTrue(receipt.completed)
@@ -202,7 +201,7 @@ class SpoolDirTests(unittest.TestCase):
             spool = Path(tmpdir) / "spool"
             runner = ProcessRunner(spool_dir=spool)
             receipt = runner.run(
-                [sys.executable, "-c", "print('spooled')"],
+                [str(Path(sys.executable).resolve()), "-c", "print('spooled')"],
                 cwd=Path.cwd(),
             )
             self.assertTrue(receipt.completed)
@@ -220,7 +219,7 @@ class InvalidCommandTests(unittest.TestCase):
     def test_nonzero_return_not_completed(self) -> None:
         runner = ProcessRunner()
         receipt = runner.run(
-            [sys.executable, "-c", "import sys; sys.exit(1)"],
+            [str(Path(sys.executable).resolve()), "-c", "import sys; sys.exit(1)"],
             cwd=Path.cwd(),
         )
         self.assertFalse(receipt.completed)

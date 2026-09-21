@@ -974,7 +974,7 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
 
                     heading = str(app.query_one("#run-attempt-heading").render())
                     prompt = str(app.query_one("#run-system-prompt").render())
-                    output = str(app.query_one("#run-agent-output").render())
+                    output = app.query_one("#run-agent-output").transcript.plain
                     contract = str(app.query_one("#run-implementation-contract").render())
                     self.assertIn("Validate task", heading)
                     self.assertIn("System prompt will appear", prompt)
@@ -1100,7 +1100,7 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn("Attempt 01", recorded)
                     self.assertNotIn(
                         "persisted-private-summary-marker",
-                        str(app.query_one("#run-agent-output").render()),
+                        app.query_one("#run-agent-output").transcript.plain,
                     )
 
                     operation = OperationController("Implementation")
@@ -1141,10 +1141,10 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
                     await wait_for_condition(
                         pilot,
                         lambda: "Inspect configuration state"
-                        in str(app.query_one("#run-agent-output").render()),
+                        in app.query_one("#run-agent-output").transcript.plain,
                         "the live Activity event stream",
                     )
-                    rendered = str(app.query_one("#run-agent-output").render())
+                    rendered = app.query_one("#run-agent-output").transcript.plain
                     self.assertNotIn("completion-secret-marker", rendered)
                     self.assertIn("Reasoning", rendered)
                     self.assertIn("Inspect configuration state and current tests.", rendered)
@@ -1181,7 +1181,7 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
                     await wait_for_condition(
                         pilot,
                         lambda: "12 passed"
-                        in str(app.query_one("#run-agent-output").render()),
+                        in app.query_one("#run-agent-output").transcript.plain,
                         "an off-tail Activity update",
                     )
                     self.assertEqual(feed.scroll_y, off_tail)
@@ -1201,10 +1201,27 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
                     await wait_for_condition(
                         pilot,
                         lambda: "Final update"
-                        in str(app.query_one("#run-agent-output").render()),
+                        in app.query_one("#run-agent-output").transcript.plain,
                         "the resumed tail update",
                     )
                     self.assertEqual(feed.scroll_y, feed.max_scroll_y)
+
+                    # App-level Enter bindings must yield to the focused tool.
+                    tool = app.query_one("RunToolEntry")
+                    tool.query_one("CollapsibleTitle").focus()
+                    await pilot.press("enter")
+                    await pilot.pause()
+                    self.assertFalse(tool.collapsed)
+                    self.assertFalse(app._run_follow_tail)
+                    operation.emit({
+                        "kind": "adapter_output",
+                        "message": "adapter stdout: Tool call (completed, exit 0)\n  $ python -m unittest\n  All passed",
+                    })
+                    app._poll_operation()
+                    await wait_for_condition(pilot, lambda: tool.entry.status == "completed",
+                                             "the expanded tool to finish in place")
+                    self.assertIs(tool, app.query_one("RunToolEntry"))
+                    self.assertFalse(tool.collapsed)
 
                     app._snapshot = replace(
                         app.snapshot,
@@ -1213,7 +1230,7 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
                     app._render_run_activity(app.snapshot)
                     self.assertNotIn(
                         "Inspect configuration state",
-                        str(app.query_one("#run-agent-output").render()),
+                        app.query_one("#run-agent-output").transcript.plain,
                     )
 
     async def test_evidence_screen_body_renders_empty_state(self) -> None:
@@ -1251,7 +1268,7 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
             self._paint(app, "settings")
             self.assertEqual(str(app.query_one("#screen-title").render()), "Settings and diagnostics")
             body = self._body_text(app)
-            for label in ("Theme:", "Statusline:", "Keymap:", "Adapter:", "Git:", "Snapshot:", "Adapter diagnostics"):
+            for label in ("Theme:", "Adapter:", "Git:", "Snapshot:", "Adapter diagnostics"):
                 self.assertIn(label, body)
 
     async def test_open_selected_resets_selected_index_to_zero(self) -> None:

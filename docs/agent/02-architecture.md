@@ -22,7 +22,7 @@ There are three interaction surfaces after engine calls:
   `TerminalRenderer` (`cli/app.py`, `cli/workflow.py`, `cli/ui.py`);
 - the default Textual full-screen console (`cli/textual_app/`), fed by the
   immutable `ShellSnapshot`/`ActionDescriptor` presentation layer;
-- a prompt-based slash-command compatibility surface for `--plain` sessions
+- a scriptable slash-command session shared with the TUI (no prompt loop)
   (`cli/interactive.py`). `shell --command` and `--script` stay headless.
 
 The TUI reuses engine guidance and lifecycle APIs; it does not own persisted

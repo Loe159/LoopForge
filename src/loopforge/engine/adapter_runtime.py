@@ -90,8 +90,11 @@ def command_for_readonly_stage(
         if "-" not in args:
             args.append("-")
         return ["codex", *args]
-    if adapter == "claude-code" and not adapter_args:
-        return ["claude", "-p", "--permission-mode", "plan"]
+    if adapter in {"claude-code", "opencode"}:
+        args = adapter_args
+        if adapter == "claude-code" and not args:
+            args = ["--permission-mode", "plan"]
+        return headless_implementation_command(adapter=adapter, adapter_args=args)
     if adapter == "kilo-code":
         return kilo_headless_run_command(
             adapter_args,
@@ -129,7 +132,8 @@ def execute_readonly_adapter_command(
     from loopforge.adapters.local_implementation_adapter import (
         StreamPresenter,
         is_codex_json_stream,
-        kilo_final_message,
+        structured_stream_format,
+        structured_final_message,
     )
     from loopforge.engine import (
         is_kilo_run_command,
@@ -147,19 +151,20 @@ def execute_readonly_adapter_command(
     if kilo_prompted:
         prepared_command = kilo_command_without_windows_batch_launcher(prepared_command)
     kilo_json_stream = kilo_prompted and is_kilo_json_stream(resolved)
+    stream_format = structured_stream_format(resolved)
     isolated = isolated_process_module()
     policy = isolated.load_policy()
     isolated.validate_command(prepared_command, project_dir, policy)
     presenter: StreamPresenter | None = None
     output_chunk_callback: Callable[[str, bytes], None] | None = None
-    if operation_callback is not None and (
-        is_codex_json_stream(prepared_command) or kilo_json_stream
-    ):
+    if operation_callback is not None:
         target = _OperationEventTextTarget(operation_callback, "adapter", "stdout")
         presenter = StreamPresenter(
             target,
             parse_codex_json=is_codex_json_stream(prepared_command),
             parse_kilo_json=kilo_json_stream,
+            stream_format=stream_format,
+            plain_text=not stream_format,
         )
 
         def publish_chunk(stream: str, chunk: bytes) -> None:
@@ -187,8 +192,8 @@ def execute_readonly_adapter_command(
             presenter.close()
     stdout = child["stdout"] if isinstance(child.get("stdout"), bytes) else b""
     stderr = child["stderr"] if isinstance(child.get("stderr"), bytes) else b""
-    if kilo_json_stream:
-        child = {**child, "artifact_output": kilo_final_message(stdout)}
+    if stream_format in {"kilo", "opencode", "claude"}:
+        child = {**child, "artifact_output": structured_final_message(stdout, stream_format)}
     return child, stdout, stderr
 
 
@@ -306,7 +311,7 @@ def emit_adapter_output(
     message = decode_output(output).strip()
     if not message:
         return
-    limit = 1200
+    limit = 8000
     if len(message) > limit:
         message = message[: limit - 3] + "..."
     emit_operation_event(callback, "adapter_output", f"{stage} {stream}: {message}")
@@ -582,6 +587,7 @@ def execute_adapter_command(
     child_stderr_output: Path | None = None,
 ) -> tuple[dict[str, Any], bytes, bytes]:
     from loopforge.engine import repository_root
+    from loopforge.adapters.local_implementation_adapter import StreamPresenter
 
     protocol_command = adapter_protocol_command(
         adapter=adapter,
@@ -592,15 +598,27 @@ def execute_adapter_command(
         result_output=result_output,
         child_stderr_output=child_stderr_output,
     )
-    child = run_streaming_process(
-        protocol_command,
-        repository_root(),
-        min(timeout_seconds + 5, 600),
-        output_callback=operation_callback,
-        cancel_event=cancel_event,
-        stream_output=stream_output,
-        codex_windows_runtime=adapter == "codex",
-    )
+    presenters = {
+        stream: StreamPresenter(_OperationEventTextTarget(operation_callback, "adapter", stream),
+                                text_blocks=True)
+        for stream in ("stdout", "stderr")
+    } if operation_callback is not None else {}
+    try:
+        child = run_streaming_process(
+            protocol_command,
+            repository_root(),
+            min(timeout_seconds + 5, 600),
+            output_callback=operation_callback,
+            output_chunk_callback=(
+                (lambda stream, chunk: presenters[stream].write(chunk)) if presenters else None
+            ),
+            cancel_event=cancel_event,
+            stream_output=stream_output,
+            codex_windows_runtime=adapter == "codex",
+        )
+    finally:
+        for presenter in presenters.values():
+            presenter.close()
     stdout = child["stdout"] if isinstance(child.get("stdout"), bytes) else b""
     stderr = child["stderr"] if isinstance(child.get("stderr"), bytes) else b""
     return child, stdout, stderr

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import codecs
 import json
 import os
 import re
@@ -343,6 +344,7 @@ def observable_stream_text(value: object, limit: int = 1600) -> str:
             _redact_observable_value(value),
             ensure_ascii=False,
             sort_keys=True,
+            indent=2,
         )
     else:
         text = str(value or "")
@@ -352,11 +354,15 @@ def observable_stream_text(value: object, limit: int = 1600) -> str:
     return text[: max(0, limit - 3)].rstrip() + "..."
 
 
-def observable_stream_block(label: str, value: object) -> list[str]:
+def observable_stream_block(label: str, value: object, *, call_id: object = None) -> list[str]:
+    # Keep native identity in our readable journal, including across subprocess
+    # boundaries. Consumers hide this metadata, never infer identity from a name.
+    metadata = (["  Call ID: " + json.dumps(observable_stream_text(call_id, limit=256))]
+                if call_id else [])
     text = observable_stream_text(value)
     if not text:
-        return [label]
-    return [label, *(f"  {line}" for line in text.splitlines())]
+        return [label, *metadata]
+    return [label, *metadata, *(f"  {line}" for line in text.splitlines())]
 
 
 def codex_item_lines(item: dict[str, Any], event_type: str) -> list[str]:
@@ -380,7 +386,8 @@ def codex_item_lines(item: dict[str, Any], event_type: str) -> list[str]:
             if value
         ]
         label = "Tool call" + (f" ({', '.join(metadata)})" if metadata else "")
-        lines = observable_stream_block(label, f"$ {command}" if command else "")
+        lines = observable_stream_block(label + " · Shell", f"$ {command}" if command else "",
+                                        call_id=item.get("id"))
         output = observable_stream_text(item.get("aggregated_output"))
         if output and not event_type.endswith("started"):
             lines.extend(["  Output", *(f"    {line}" for line in output.splitlines())])
@@ -404,7 +411,10 @@ def codex_item_lines(item: dict[str, Any], event_type: str) -> list[str]:
             )
             if value
         )
-        label = f"MCP tool call{f' · {target}' if target else ''}"
+        status = status or ("in_progress" if event_type.endswith("started") else "completed")
+        if item.get("error"):
+            status = "failed"
+        label = f"MCP tool call ({status}){f' · {target}' if target else ''}"
         details: list[str] = []
         if item.get("arguments") is not None:
             details.append(f"Arguments: {observable_stream_text(item['arguments'])}")
@@ -412,7 +422,7 @@ def codex_item_lines(item: dict[str, Any], event_type: str) -> list[str]:
             details.append(f"Result: {observable_stream_text(item['result'])}")
         if item.get("error") is not None:
             details.append(f"Error: {observable_stream_text(item['error'])}")
-        return observable_stream_block(label, "\n".join(details) or status)
+        return observable_stream_block(label, "\n".join(details) or status, call_id=item.get("id"))
     if item_type == "web_search":
         return observable_stream_block("Web search", item.get("query"))
     if item_type == "todo_list":
@@ -496,7 +506,8 @@ def kilo_event_lines(event: dict[str, Any], state: dict[str, Any]) -> list[str]:
             details.append(f"Output: {observable_stream_text(tool_state['output'])}")
         if tool_state.get("error") is not None:
             details.append(f"Error: {observable_stream_text(tool_state['error'])}")
-        rendered = observable_stream_block(label, "\n".join(details))
+        rendered = observable_stream_block(label, "\n".join(details),
+                                           call_id=part.get("callID") or part.get("id"))
     elif event_type == "error" or part_type == "error":
         detail = nested_value(event, {"message", "error", "detail"})
         rendered = observable_stream_block("Adapter error", detail or "Unknown Kilo error")
@@ -530,9 +541,106 @@ def kilo_event_lines(event: dict[str, Any], state: dict[str, Any]) -> list[str]:
 def adapter_event_lines(event: dict[str, Any], state: dict[str, Any]) -> list[str]:
     """Project a supported harness JSON event through one presentation seam."""
 
-    if isinstance(event.get("part"), dict) and event.get("sessionID"):
+    if event.get("type") in {"assistant", "user", "result", "stream_event", "system"}:
+        return claude_event_lines(event, state)
+    if isinstance(event.get("part"), dict):
         return kilo_event_lines(event, state)
     return codex_event_lines(event, state)
+
+
+def claude_event_lines(event: dict[str, Any], state: dict[str, Any]) -> list[str]:
+    """Render Claude's public message blocks, never signatures or hidden thinking.
+
+    Completed message blocks are emitted throughout the run, before tools run.
+    Partial events are ignored so an optional delta stream cannot duplicate them.
+    """
+
+    kind = event.get("type")
+    if kind == "result":
+        if event.get("is_error"):
+            return observable_stream_block("Agent error", event.get("errors") or event.get("result"))
+        if not state.get("claude_message") and event.get("result"):
+            return observable_stream_block("Agent message", event["result"])
+        return []
+    message = event.get("message")
+    if kind not in {"assistant", "user"} or not isinstance(message, dict):
+        return []
+    content = message.get("content")
+    if not isinstance(content, list):
+        return []
+    lines: list[str] = []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        block_type = block.get("type")
+        if kind == "assistant" and block_type == "thinking":
+            lines.extend(observable_stream_block("Reasoning", block.get("thinking")))
+        elif kind == "assistant" and block_type == "text":
+            state["claude_message"] = True
+            lines.extend(observable_stream_block("Agent message", block.get("text")))
+        elif kind == "assistant" and block_type == "tool_use":
+            label = "Tool call · " + observable_stream_text(block.get("name") or "tool")
+            lines.extend(observable_stream_block(label, block.get("input"), call_id=block.get("id")))
+        elif block_type == "tool_result":
+            label = "Tool result" + (" (failed)" if block.get("is_error") else "")
+            value = block.get("content")
+            if isinstance(value, list):
+                value = "\n".join(
+                    str(part.get("text") or "") for part in value
+                    if isinstance(part, dict) and part.get("type") == "text"
+                )
+            lines.extend(observable_stream_block(label, value, call_id=block.get("tool_use_id")))
+    return lines
+
+
+def structured_stream_format(command: Sequence[str]) -> str:
+    """Identify only opted-in, documented machine output contracts."""
+
+    if not command:
+        return ""
+    name = Path(command[0]).stem.casefold()
+    options = list(command[1:])
+    if is_codex_json_stream(command):
+        return "codex"
+    if is_kilo_json_stream(command):
+        return "kilo"
+    def option_value(option: str) -> str:
+        for index, value in enumerate(options):
+            if value.startswith(option + "="):
+                return value.split("=", 1)[1]
+            if value == option and index + 1 < len(options):
+                return options[index + 1]
+        return ""
+    if name in {"claude", "claude-code"} and option_value("--output-format") == "stream-json":
+        return "claude"
+    if name == "opencode" and options[:1] == ["run"] and option_value("--format") == "json":
+        return "opencode"
+    return ""
+
+
+def structured_final_message(value: bytes, stream_format: str) -> bytes:
+    """Keep stage artifacts separate from the observable event transcript."""
+
+    if stream_format in {"kilo", "opencode"}:
+        return kilo_final_message(value)
+    answer = ""
+    for line in value.decode("utf-8", errors="replace").splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") == "result" and not event.get("is_error"):
+            answer = str(event.get("result") or answer)
+        elif event.get("type") == "assistant" and isinstance(event.get("message"), dict):
+            content = event["message"].get("content", [])
+            if isinstance(content, list):
+                texts = [str(block.get("text") or "") for block in content
+                         if isinstance(block, dict) and block.get("type") == "text"]
+                if texts:
+                    answer = "\n".join(texts)
+    return answer.encode("utf-8")
 
 
 def kilo_final_message(value: bytes) -> bytes:
@@ -575,32 +683,51 @@ class StreamPresenter:
         *,
         parse_codex_json: bool = False,
         parse_kilo_json: bool = False,
+        stream_format: str = "",
+        plain_text: bool = False,
+        text_blocks: bool = False,
         codex_text: bool = False,
     ):
         self.target = target
         self.parse_codex_json = parse_codex_json
         self.parse_kilo_json = parse_kilo_json
+        self.stream_format = stream_format
+        self.plain_text = plain_text
+        self.text_blocks = text_blocks
+        self.decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         self.codex_text = codex_text
         self.buffer = ""
         self.state: dict[str, Any] = {}
         self.noted_diagnostic = False
 
     def write(self, chunk: bytes) -> None:
-        if not self.parse_codex_json and not self.parse_kilo_json and not self.codex_text:
+        if not (self.parse_codex_json or self.parse_kilo_json or self.stream_format or self.codex_text or self.plain_text or self.text_blocks):
             self.target.buffer.write(chunk)
             self.target.buffer.flush()
             return
-        text = chunk.decode("utf-8", errors="replace")
+        text = self.decoder.decode(chunk)
         self.buffer += text
+        if self.text_blocks:
+            while "\n\n" in self.buffer:
+                block, self.buffer = self.buffer.split("\n\n", 1)
+                self.target.write(block + "\n")
+                self.target.flush()
+            if len(self.buffer) > 8000:
+                self.target.write(observable_stream_text(self.buffer, limit=8000) + "\n")
+                self.buffer = ""
+            return
         while "\n" in self.buffer:
             line, self.buffer = self.buffer.split("\n", 1)
             self.write_line(line.rstrip("\r"))
+        if len(self.buffer) > 262_144:
+            self.buffer = ""
+            self.target.write("Adapter: oversized output event omitted\n")
 
     def write_line(self, line: str) -> None:
         stripped = line.strip()
         if not stripped:
             return
-        if self.parse_codex_json or self.parse_kilo_json:
+        if self.parse_codex_json or self.parse_kilo_json or self.stream_format:
             try:
                 event = json.loads(stripped)
             except json.JSONDecodeError:
@@ -609,21 +736,29 @@ class StreamPresenter:
                     self.noted_diagnostic = True
                 return
             if isinstance(event, dict):
-                rendered = (
-                    kilo_event_lines(event, self.state)
-                    if self.parse_kilo_json
-                    else codex_event_lines(event, self.state)
-                )
+                rendered = adapter_event_lines(event, self.state)
                 if rendered:
-                    print("\n".join(rendered), file=self.target, flush=True)
+                    self.target.write("\n".join(rendered) + "\n\n")
+                    self.target.flush()
+            return
+        if self.plain_text:
+            safe = observable_stream_text(line, limit=4000)
+            if safe:
+                self.target.write(safe + "\n\n")
+                self.target.flush()
             return
         if not self.noted_diagnostic:
             print(f"Adapter: {compact_stream_text(stripped)}", file=self.target, flush=True)
             self.noted_diagnostic = True
 
     def close(self) -> None:
+        self.buffer += self.decoder.decode(b"", final=True)
         if self.buffer:
-            self.write_line(self.buffer)
+            if self.text_blocks:
+                self.target.write(self.buffer)
+                self.target.flush()
+            else:
+                self.write_line(self.buffer)
             self.buffer = ""
 
 
@@ -728,6 +863,7 @@ def run_adapter(
     )
     kilo_prepared = is_kilo_command(resolved_command)
     present_kilo_json = kilo_prepared and is_kilo_json_stream(resolved_command)
+    stream_format = structured_stream_format(resolved_command)
     prepared_command = (
         command_without_windows_batch_launcher(resolved_command)
         if kilo_prepared
@@ -806,6 +942,8 @@ def run_adapter(
                     sys.stdout,
                     parse_codex_json=present_codex_json,
                     parse_kilo_json=present_kilo_json,
+                    stream_format=stream_format,
+                    plain_text=not stream_format and not present_codex_text,
                     codex_text=present_codex_text,
                 ),
             ),

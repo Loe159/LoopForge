@@ -74,7 +74,11 @@ def load_run_agent_snapshot(
     )
 
     system_prompt = _clean_text(_read_text(prompt_path))
-    agent_output = _agent_output(_read_bounded(stdout_path, 20_000))
+    transcript_path = _artifact_path(run_dir, None, session_dir / "agent-transcript.log")
+    has_transcript = transcript_path is not None and transcript_path.is_file()
+    agent_output = _agent_output(
+        _read_transcript_tail(transcript_path) if has_transcript else _read_bounded(stdout_path, 20_000)
+    )
     contract = _implementation_contract(
         result_path,
         attempt if use_record else None,
@@ -87,6 +91,7 @@ def load_run_agent_snapshot(
         system_prompt=system_prompt,
         agent_output=agent_output,
         implementation_contract=contract,
+        has_live_transcript=has_transcript,
     )
 
 
@@ -219,19 +224,18 @@ def _stage_snapshot(
     events: Iterable[OperationEvent],
 ) -> RunAgentSnapshot:
     adapter = _stage_adapter(stage_dir) or _adapter_from_events(events)
+    transcript_path = _artifact_path(run_dir, None, stage_dir / "agent-transcript.log")
+    has_transcript = transcript_path is not None and transcript_path.is_file()
     return RunAgentSnapshot(
         attempt_number=None,
         adapter=adapter,
         system_prompt=_clean_text(
             _read_text(_artifact_path(run_dir, None, stage_dir / "prompt.md"))
         ),
-        agent_output=_agent_output(
-            _read_bounded(
-                _artifact_path(run_dir, None, stage_dir / "adapter.stdout"),
-                20_000,
-            )
-        ),
+        agent_output=_agent_output(_read_transcript_tail(transcript_path) if has_transcript else
+            _read_bounded(_artifact_path(run_dir, None, stage_dir / "adapter.stdout"), 20_000)),
         implementation_contract="",
+        has_live_transcript=has_transcript,
     )
 
 
@@ -288,6 +292,22 @@ def _read_bounded(path: Path | None, limit: int) -> str:
         return ""
 
 
+def _read_transcript_tail(path: Path | None, limit: int = 15_000) -> str:
+    if path is None:
+        return ""
+    try:
+        with path.open("rb") as handle:
+            size = handle.seek(0, 2)
+            handle.seek(max(0, size - limit))
+            raw = handle.read(limit)
+        if size > limit:
+            raw = raw.partition(b"\n")[2]
+            return "Earlier output omitted; showing recent activity.\n" + raw.decode("utf-8", errors="replace")
+        return raw.decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
 def _read_text(path: Path | None) -> str:
     if path is None:
         return ""
@@ -329,7 +349,8 @@ def _agent_output(value: str) -> str:
             continue
         safe_line = _observable_text(line, limit=4000)
         if safe_line:
-            lines.append(safe_line)
+            indent = len(line) - len(line.lstrip())
+            lines.append(" " * min(indent, 16) + safe_line)
     return _clean_text("\n".join(lines), 16_000)
 
 

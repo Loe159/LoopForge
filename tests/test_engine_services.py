@@ -94,7 +94,7 @@ class InstallationTests(unittest.TestCase):
                     [
                         sys.executable,
                         "-c",
-                        "import loopforge, prompt_toolkit, rich, textual",
+                        "import loopforge, rich, textual",
                     ],
                 ],
             )

@@ -38,6 +38,13 @@ KNOWN_ENGINE_ACTION_IDS = frozenset(
         "prepare-draft",
         "status",
         "choose-adapter",
+        "inspect-verification",
+        "inspect-attempt",
+        "approve-memory",
+        "show-plan",
+        "check-contract",
+        "review-contract",
+        "review-autonomy-stop",
     }
 )
 
@@ -122,7 +129,7 @@ class ActionDescriptorTests(unittest.TestCase):
         descriptor = action_descriptor(_guided_action("unknown-action"))
 
         self.assertEqual(descriptor.executor_key, "command")
-        self.assertTrue(descriptor.available)
+        self.assertFalse(descriptor.available)
         self.assertEqual(descriptor.command_fallback, "loopforge unknown-action")
 
     def test_action_descriptors_preserve_order_and_availability(self) -> None:

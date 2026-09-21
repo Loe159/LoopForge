@@ -41,7 +41,7 @@ class InteractiveAdapterCommandTests(unittest.TestCase):
         self.assertNotIn("--color", command)
         self.assertEqual(command[-1], "Implement the approved plan.")
         self.assertIn("--cd", command)
-        self.assertIn("C:\\worktree", command)
+        self.assertIn(str(Path("C:/worktree")), command)
 
     def test_codex_interactive_command_forces_run_worktree_and_sandbox(self) -> None:
         command = interactive_implementation_command(
@@ -64,7 +64,7 @@ class InteractiveAdapterCommandTests(unittest.TestCase):
         )
 
         self.assertEqual(command.count("--cd"), 1)
-        self.assertEqual(command[command.index("--cd") + 1], "C:\\worktree")
+        self.assertEqual(command[command.index("--cd") + 1], str(Path("C:/worktree")))
         self.assertEqual(command.count("-s"), 1)
         self.assertEqual(command[command.index("-s") + 1], "workspace-write")
         self.assertNotIn("C:/control-checkout", command)
@@ -207,17 +207,25 @@ class InteractiveAdapterCommandTests(unittest.TestCase):
 
         self.assertEqual(args.execution_mode, "headless")
 
-    def test_run_parser_exposes_terminal_headless_choice_for_agentic_stages(self) -> None:
-        args = CliParserBuilder().build().parse_args(
-            ["run", "--execution-mode", "headless"]
-        )
+    def test_run_creation_rejects_stage_execution_flags(self) -> None:
+        from loopforge.cli.errors import CliUsageError
 
-        self.assertEqual(args.execution_mode, "headless")
+        with self.assertRaises(CliUsageError):
+            CliParserBuilder().build().parse_args(["run", "--execution-mode", "headless"])
 
 
 class TerminalLauncherTests(unittest.TestCase):
     def setUp(self) -> None:
         self.job = mock.Mock()
+        import shutil
+        original_which = shutil.which
+        def find_executable(name, *args, **kwargs):
+            if name in {"powershell.exe", "powershell"}:
+                return str(Path(sys.executable).resolve())
+            return original_which(name, *args, **kwargs)
+        powershell = mock.patch("loopforge.engine.terminal.shutil.which", side_effect=find_executable)
+        powershell.start()
+        self.addCleanup(powershell.stop)
         patcher = mock.patch(
             "loopforge.engine.terminal._WindowsJob.create", return_value=self.job
         )
@@ -647,7 +655,7 @@ class TerminalAttemptIntegrationTests(unittest.TestCase):
         self.assertEqual(attempt["terminal_launcher"], "test-terminal")
         self.assertTrue(attempt["workspace_changed"])
 
-    def test_terminal_attempt_streams_the_visible_console_into_agent_output(self) -> None:
+    def test_terminal_attempt_observes_hooks_and_retains_the_raw_console(self) -> None:
         with TemporaryDirectory() as temp:
             root = Path(temp)
             workspace = root / "workspace"
@@ -661,6 +669,11 @@ class TerminalAttemptIntegrationTests(unittest.TestCase):
             def launch(request: TerminalLaunchRequest) -> TerminalSessionResult:
                 self.assertIsNotNone(request.output_chunk_callback)
                 request.output_chunk_callback("stdout", console_output)
+                from loopforge.adapters.observation_hook import record_hook
+                record_hook({"cwd": str(request.cwd), "session_id": "test-session",
+                             "hook_event_name": "Stop",
+                             "last_assistant_message": "Thinking about the implementation."},
+                            Path(request.environment["LOOPFORGE_OBSERVATION_DIR"]), request.cwd)
                 (request.cwd / "terminal-change.txt").write_text(
                     "changed\n", encoding="utf-8"
                 )

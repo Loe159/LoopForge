@@ -46,6 +46,7 @@ class RunAgentSnapshot:
     system_prompt: str = ""
     agent_output: str = ""
     implementation_contract: str = ""
+    has_live_transcript: bool = False
 
 
 @dataclass(frozen=True)

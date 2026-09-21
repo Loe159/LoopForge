@@ -52,8 +52,8 @@ class CliParserBuilder:
             prog="loopforge",
             description="LoopForge is a portable agentic workflow engine.",
             epilog=(
-                "Workflow: loopforge init -> loopforge run --task \"...\" -> loopforge run cockpit\n"
-                "The cockpit advances one stage at a time: task validation, task approval, "
+                "Workflow: loopforge init -> loopforge run --task \"...\" -> loopforge\n"
+                "The Textual TUI guides the workflow: task validation, task approval, "
                 "read-only research, read-only plan, plan approval, implementation, "
                 "deterministic verification, read-only review, review approval, and local "
                 "draft publication artifact.\n\n"
@@ -143,17 +143,18 @@ class CliParserBuilder:
 
         run_parser = subcommands.add_parser(
             "run",
-            help="Create or resume the LoopForge cockpit for a task.",
+            help="Create a run from explicit input, or show the active run.",
             epilog=(
-                "`loopforge run` is the cockpit for the staged workflow. With an active run "
-                "and no new task/source, it resumes that run and can prompt for at most one "
-                "eligible stage: task validation, task approval, read-only research, read-only "
+                "`loopforge run` creates a run from --task or an issue source. With an active run "
+                "and no new task/source, it only reports status. Open `loopforge` for the Textual "
+                "TUI or use `loopforge shell --command '/do <action-id> --confirm'` to advance "
+                "an eligible stage: task validation, task approval, read-only research, read-only "
                 "plan, plan approval, implementation, deterministic verification, read-only "
                 "review, review approval, or a local draft PR publication artifact. GitHub "
                 "issue runs require the "
-                "`agent:approved` label before creation; manual tasks ask for local approval. "
-                "Verification is evidence for review, not publication authority. --no-input "
-                "only reports status and never approves, executes, or publishes a stage.\n\n"
+                "`agent:approved` label before creation; manual tasks require explicit approval. "
+                "Verification is evidence for review, not publication authority. Run creation "
+                "never approves, executes, or publishes a stage.\n\n"
                 "Examples:\n"
                 "  loopforge run --task \"Improve the CLI help\"\n"
                 "  loopforge run\n"
@@ -206,16 +207,6 @@ class CliParserBuilder:
             type=int,
             default=1800,
             help="Maximum wall-clock seconds allowed by the loop contract.",
-        )
-        run_parser.add_argument(
-            "--execution-mode",
-            choices=AGENT_EXECUTION_MODES,
-            default=DEFAULT_AGENT_EXECUTION_MODE,
-            help=(
-                "Use visible supervised harness terminals for agentic stages, use the "
-                "headless runners, or automatically fall back to headless when no "
-                "interactive launcher exists."
-            ),
         )
         run_parser.add_argument(
             "--rubric",
@@ -429,7 +420,7 @@ class CliParserBuilder:
         shell_parser = subcommands.add_parser(
             "shell",
             aliases=("interactive",),
-            help="Start the LoopForge interactive shell.",
+            help="Open the Textual TUI, or execute scriptable slash commands.",
             epilog=(
                 "Examples:\n"
                 "  loopforge shell\n"

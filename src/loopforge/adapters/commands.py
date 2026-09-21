@@ -92,6 +92,22 @@ def headless_implementation_command(
             adapter_args,
             default_agent=DEFAULT_IMPLEMENTATION_AGENT,
         )
+    if adapter == "claude-code":
+        args = _without_options(
+            adapter_args,
+            flags={"-p", "--print", "--verbose", "--include-partial-messages"},
+            value_options={"--output-format"},
+        )
+        return ["claude", "-p", "--verbose", "--output-format", "stream-json", *args]
+    if adapter == "opencode":
+        args = list(adapter_args)
+        if args[:1] == ["run"]:
+            args = args[1:]
+        args = _without_options(args, value_options={"--format"}, flags={"--thinking"})
+        return ["opencode", "run", *args, "--format", "json", "--thinking"]
+    if adapter == "aider":
+        args = _without_options(adapter_args, flags={"--pretty", "--no-pretty"})
+        return ["aider", *args, "--no-pretty"]
     return adapter_command(adapter, adapter_args)
 
 

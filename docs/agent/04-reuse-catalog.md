@@ -11,7 +11,7 @@
 | Terminal renderer | `cli/ui.py` | Semantic Rich/plain panels, tables, operation context, status/guidance/dashboard views, workflow progress | Direct ANSI, command-local palettes, duplicate status mapping |
 | Presentation/actions | `cli/presentation.py`, `cli/actions.py` | Pack-driven stage snapshots and eligible primary actions for text and TUI | Local status mapping or action eligibility |
 | Interactive console | `cli/tui.py`, `cli/operations.py`, `cli/evidence.py` | Default TTY navigation, foreground operation receipts, evidence and approval views | Another full-screen layout or fake progress source |
-| Interactive shell | `cli/interactive.py` | Headless slash commands and `--plain` prompt history/completion | Another command registry or prompt loop |
+| Interactive shell | `cli/interactive.py` | Shared TUI and headless slash-command dispatch; no prompt input | Another command registry or prompt loop |
 | Lifecycle APIs | `engine/__init__.py` | Run state, gates, status/guidance, verification, local draft artifact | Direct lifecycle edits in `run.json` |
 | JSON persistence | `engine/storage.py`, engine wrappers | Atomic JSON object reads/writes | Direct non-atomic writes |
 | Project registry | `engine/projects.py`, engine exports | Project ids, migrated storage roots, global projects/runs, moved/clone resolution | Basename-keyed roots or manual `LOOPFORGE_HOME` scans |

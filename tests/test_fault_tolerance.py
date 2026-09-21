@@ -446,8 +446,8 @@ class TestJsonStoreAtomicity(unittest.TestCase):
         self.assertEqual(recovered, data)
 
 
-class TestFileLockStaleDetection(unittest.TestCase):
-    """FileLock stale detection when holder PID is dead."""
+class TestFileLockRecovery(unittest.TestCase):
+    """Persistent lock files are reusable without deleting their inode."""
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -465,7 +465,7 @@ class TestFileLockStaleDetection(unittest.TestCase):
         self.assertTrue(lock.lock_path.exists())
         lock.release()
         self.assertFalse(lock.acquired)
-        self.assertFalse(lock.lock_path.exists())
+        self.assertTrue(lock.lock_path.exists())
 
     def test_context_manager_releases_lock(self):
         from loopforge.engine.locking import FileLock
@@ -477,8 +477,8 @@ class TestFileLockStaleDetection(unittest.TestCase):
         self.assertFalse(lock.acquired)
 
     @unittest.skipIf(sys.platform == "win32", "PID not written to lock file on Windows (mandatory locks prevent reading)")
-    def test_stale_pid_lock_is_detected_and_removed(self):
-        from loopforge.engine.locking import FileLock, _pid_is_alive
+    def test_unlocked_file_with_stale_pid_is_reused(self):
+        from loopforge.engine.locking import FileLock
         target = Path(self.temp.name) / "stale.json"
         lock_path = Path(str(target) + ".lock")
         lock_path.write_text(str(99999))

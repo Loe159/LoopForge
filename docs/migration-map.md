@@ -1,7 +1,10 @@
 # Migration Map From ABL Workflow
 
-This document records what was copied, what was intentionally left behind, and
-what must be refactored.
+This document records the historical bootstrap import. Paths in the tables
+below describe that import, not the current repository. On September 21, 2026,
+unused standalone prototypes and duplicate data were removed. The current
+layout is documented in [repository layout](repository-layout.md) and the
+remaining launchers in [support matrix](support-matrix.md).
 
 ## Copied As Bootstrap Core
 
@@ -63,8 +66,8 @@ product milestone.
 6. Add a CLI layer that hides low-level script choreography.
 7. Build tests around product commands, not only individual guardrail scripts.
 
-## Compatibility Rule
+## Current Compatibility Rule
 
-Do not delete `.agent/**` wholesale. The migrated active scripts are thin
-compatibility wrappers; the remaining inherited material stays available until
-it has a product-owned replacement.
+Do not delete `.agent/**` wholesale. The remaining active scripts are thin
+compatibility wrappers for `src/loopforge/`. Do not restore the removed
+standalone bootstrap implementations or duplicate product contracts there.
