@@ -182,17 +182,31 @@ def verify_run(
         from loopforge.engine.packs import pack_trust_store as _pts
         trust_check = _pts(home=None)
         frozen_contract = run_data.get("pack_contract", {})
-        pack_hash = frozen_contract.get("checks_content_hash", "") if isinstance(frozen_contract, dict) else ""
-        pack_source = frozen_contract.get("source") if isinstance(frozen_contract, dict) else None
+        pack_hash = (
+            frozen_contract.get("checks_content_hash", "")
+            if isinstance(frozen_contract, dict)
+            else ""
+        )
+        checks_source = (
+            frozen_contract.get("checks_source")
+            if isinstance(frozen_contract, dict)
+            else None
+        )
         if not pack_hash:
             pack_config = load_pack_checks(status.project_dir, pack)
             pack_hash = pack_config.get("content_hash", "")
-            pack_source = pack_config.get("source") if not pack_source else pack_source
-        if pack_hash and pack_source is not None:
+            checks_source = pack_config.get("source")
+        if pack_hash:
             registry = _pack_registry(status.project_dir)
-            bundled_root = str(registry.bundled_packs_path())
-            pack_is_bundled = pack_source.startswith(bundled_root)
-            if not pack_is_bundled and not trust_check.is_trusted(pack_hash):
+            bundled_root = registry.bundled_packs_path().resolve()
+            checks_are_bundled = False
+            if isinstance(checks_source, str) and checks_source:
+                try:
+                    Path(checks_source).resolve().relative_to(bundled_root)
+                    checks_are_bundled = True
+                except ValueError:
+                    pass
+            if not checks_are_bundled and not trust_check.is_trusted(pack_hash):
                 blocker_msg = (
                     f"Pack '{pack}' is not trusted. "
                     f"Run `loopforge trust pack {pack}` or use interactive mode."
@@ -455,7 +469,7 @@ def verify_run(
         else:
             frozen_checks = run_data.get("pack_contract", {}).get("checks")
             if frozen_checks is not None and isinstance(frozen_checks, list):
-                pack_checks_source = run_data.get("pack_contract", {}).get("source")
+                pack_checks_source = run_data.get("pack_contract", {}).get("checks_source")
                 pack_checks = frozen_checks
             else:
                 pack_config = load_pack_checks(status.project_dir, str(run_data.get("pack") or DEFAULT_PACK))

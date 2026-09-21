@@ -6379,10 +6379,23 @@ Only this section is present.
             (ws_dir / "README.md").write_text("# Project\n\nUpdated.\n", encoding="utf-8")
             run_json_path.write_text(json.dumps(run_json), encoding="utf-8")
 
-            # First verify
-            r1 = verify_run(repo)
-            # Second verify — should detect stagnation
-            r2 = verify_run(repo)
+            with mock.patch.dict(
+                os.environ,
+                {"LOOPFORGE_HOME": str(loopforge_home)},
+            ):
+                from loopforge.engine.packs import pack_trust_store
+
+                frozen = run_json["pack_contract"]
+                pack_trust_store().trust(
+                    frozen["checks_content_hash"],
+                    "generic-code",
+                    ["always-fails"],
+                )
+
+                # First verify
+                r1 = verify_run(repo)
+                # Second verify — should detect stagnation
+                r2 = verify_run(repo)
 
             run_after = json.loads(run_json_path.read_text(encoding="utf-8"))
             verification = run_after.get("verification", {})
@@ -7143,6 +7156,101 @@ Only this section is present.
 
             os.environ.pop("LOOPFORGE_HOME", None)
             os.environ.pop("LOOPFORGE_SNAPSHOT_BACKEND", None)
+
+    def test_local_checks_override_of_bundled_pack_requires_trust(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            repo = root / "repo"
+            repo.mkdir(parents=True)
+            loopforge_home = root / "home"
+            self.initialize_git_project(repo)
+
+            pack_dir = repo / ".loopforge" / "packs" / "generic-code"
+            pack_dir.mkdir(parents=True)
+            marker_name = "lf01-local-check-ran.txt"
+            (pack_dir / "checks.json").write_text(
+                json.dumps(
+                    {
+                        "checks": [
+                            {
+                                "name": "local-override",
+                                "command": [
+                                    fixture_python(),
+                                    "-c",
+                                    (
+                                        "from pathlib import Path; "
+                                        f"Path({marker_name!r}).write_text('ran', encoding='utf-8')"
+                                    ),
+                                ],
+                                "timeout_seconds": 10,
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.assertFalse((pack_dir / "pack.json").exists())
+
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "LOOPFORGE_HOME": str(loopforge_home),
+                        "LOOPFORGE_SNAPSHOT_BACKEND": "1",
+                    },
+                ),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(
+                        [
+                            "run",
+                            "--task",
+                            "Exercise a local checks override",
+                            "--success-check",
+                            "README is updated",
+                            "--pack",
+                            "generic-code",
+                        ]
+                    ),
+                    0,
+                )
+                config = json.loads(
+                    (repo / ".loopforge" / "config.json").read_text(encoding="utf-8")
+                )
+                run_dir = Path(config["run_root"]) / config["current_run_id"]
+                run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+                workspace_dir = Path(run_json["workspace"]["path"])
+                (workspace_dir / "README.md").write_text(
+                    "# Project\n\nUpdated.\n",
+                    encoding="utf-8",
+                )
+                self.approve_current_run_for_implementation(repo, loopforge_home)
+                self.add_implementation_candidate(run_dir)
+
+                frozen = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))[
+                    "pack_contract"
+                ]
+                from loopforge.engine.packs import pack_trust_store
+
+                self.assertFalse(
+                    pack_trust_store().is_trusted(frozen["checks_content_hash"])
+                )
+                self.assertIn(
+                    str(Path("loopforge") / "packs" / "generic-code" / "pack.json"),
+                    frozen["source"],
+                )
+                self.assertEqual(
+                    frozen["checks_source"],
+                    str(pack_dir / "checks.json"),
+                )
+
+                result = main(["verify"])
+
+            self.assertNotEqual(result, 0)
+            self.assertFalse((workspace_dir / marker_name).exists())
 
     def test_bundled_pack_always_trusted_in_verify(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

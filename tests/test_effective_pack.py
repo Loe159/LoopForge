@@ -88,6 +88,7 @@ class TestFreezePackContract(unittest.TestCase):
             self.assertIsNotNone(contract.frozen_at)
             self.assertIsNotNone(contract.contract_hash)
             self.assertIsNotNone(contract.checks_content_hash)
+            self.assertEqual(contract.checks_source, str(packs_dir / "checks.json"))
 
     def test_frozen_contract_includes_checks(self):
         """Frozen contract includes checks with content hashes."""

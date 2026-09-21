@@ -780,6 +780,7 @@ def freeze_pack_contract(
         description=contract.get("description", ""),
         checks=checks,
         checks_content_hash=checks_hash,
+        checks_source=checks_data.get("source"),
         protected_paths=protected,
         protected_paths_content_hash=protected_hash,
         memory_rules=memory_rules,
