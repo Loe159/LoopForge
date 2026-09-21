@@ -990,6 +990,38 @@ class PackRegistryTests(unittest.TestCase):
                 ["infra/**"],
             )
 
+    def test_load_bundled_checks_rejects_absolute_pack_outside_bundled_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            project_dir = root / "project"
+            bundled_root = root / "bundled"
+            external_pack = root / "external-pack"
+            external_pack.mkdir(parents=True)
+            (external_pack / "checks.json").write_text(
+                json.dumps(
+                    {
+                        "checks": [
+                            {
+                                "name": "external",
+                                "command": ["python", "--version"],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            registry = PackRegistry(
+                project_dir,
+                bundled_root=bundled_root,
+                store=JsonStore(),
+            )
+
+            checks = registry.load_bundled_checks(str(external_pack))
+
+            self.assertEqual(checks["checks"], [])
+            self.assertIsNone(checks["source"])
+            self.assertIsNone(checks["origin"])
+
 
 class PackTrustStoreTests(unittest.TestCase):
     def _make_store(self) -> tuple[PackTrustStore, Path]:

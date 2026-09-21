@@ -16,6 +16,8 @@ class EffectivePackContract:
 
     checks: list[dict] = field(default_factory=list)
     checks_content_hash: str = ""
+    checks_source: str | None = None
+    checks_origin: str | None = None
     protected_paths: list[dict] = field(default_factory=list)
     protected_paths_content_hash: str = ""
     memory_rules: str = ""
@@ -42,6 +44,8 @@ class EffectivePackContract:
             "description",
             "checks",
             "checks_content_hash",
+            "checks_source",
+            "checks_origin",
             "protected_paths",
             "protected_paths_content_hash",
             "memory_rules",
@@ -70,6 +74,8 @@ class EffectivePackContract:
             "description": self.description,
             "checks": self.checks,
             "checks_content_hash": self.checks_content_hash,
+            "checks_source": self.checks_source,
+            "checks_origin": self.checks_origin,
             "protected_paths": self.protected_paths,
             "protected_paths_content_hash": self.protected_paths_content_hash,
             "memory_rules": self.memory_rules,
@@ -99,6 +105,8 @@ class EffectivePackContract:
             description=data.get("description", ""),
             checks=data.get("checks", []),
             checks_content_hash=data.get("checks_content_hash", ""),
+            checks_source=data.get("checks_source"),
+            checks_origin=data.get("checks_origin"),
             protected_paths=data.get("protected_paths", []),
             protected_paths_content_hash=data.get("protected_paths_content_hash", ""),
             memory_rules=data.get("memory_rules", ""),

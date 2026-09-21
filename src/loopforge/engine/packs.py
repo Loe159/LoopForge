@@ -587,47 +587,68 @@ class PackRegistry:
     def check_paths(self, pack: str) -> list[Path]:
         return self.file_candidates(pack, "checks.json")
 
+    def _load_checks_from_path(self, path: Path, *, origin: str) -> dict[str, Any]:
+        data = self.store.read_object(path)
+        checks = data.get("checks", [])
+        if not isinstance(checks, list):
+            raise ValueError(f"{path} must contain a checks list")
+        normalized: list[dict[str, Any]] = []
+        for index, check in enumerate(checks, start=1):
+            if not isinstance(check, dict):
+                raise ValueError(f"{path} check {index} must be an object")
+            name = str(check.get("name") or f"check-{index}").strip()
+            command = check.get("command")
+            if not isinstance(command, list) or not command or not all(
+                isinstance(part, str) and part for part in command
+            ):
+                raise ValueError(f"{path} check {name} must define a non-empty command list")
+            env = check.get("env", {})
+            if not isinstance(env, dict) or not all(
+                isinstance(key, str) and isinstance(value, str)
+                for key, value in env.items()
+            ):
+                raise ValueError(f"{path} check {name} env must be an object of strings")
+            timeout = check.get("timeout_seconds", 300)
+            if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout < 1:
+                raise ValueError(f"{path} check {name} timeout_seconds must be positive")
+            entry: dict[str, Any] = {
+                "name": name,
+                "command": command,
+                "env": env,
+                "timeout_seconds": timeout,
+            }
+            criterion = check.get("criterion")
+            if isinstance(criterion, str) and criterion.strip():
+                entry["criterion"] = criterion.strip()
+            normalized.append(entry)
+        return {
+            "source": str(path),
+            "origin": origin,
+            "checks": normalized,
+            "content_hash": PackRegistry._compute_content_hash(normalized),
+        }
+
     def load_checks(self, pack: str) -> dict[str, Any]:
-        for path in self.check_paths(pack):
+        candidates = self.check_paths(pack)
+        for index, path in enumerate(candidates):
             if not path.exists():
                 continue
-            data = self.store.read_object(path)
-            checks = data.get("checks", [])
-            if not isinstance(checks, list):
-                raise ValueError(f"{path} must contain a checks list")
-            normalized: list[dict[str, Any]] = []
-            for index, check in enumerate(checks, start=1):
-                if not isinstance(check, dict):
-                    raise ValueError(f"{path} check {index} must be an object")
-                name = str(check.get("name") or f"check-{index}").strip()
-                command = check.get("command")
-                if not isinstance(command, list) or not command or not all(
-                    isinstance(part, str) and part for part in command
-                ):
-                    raise ValueError(f"{path} check {name} must define a non-empty command list")
-                env = check.get("env", {})
-                if not isinstance(env, dict) or not all(
-                    isinstance(key, str) and isinstance(value, str)
-                    for key, value in env.items()
-                ):
-                    raise ValueError(f"{path} check {name} env must be an object of strings")
-                timeout = check.get("timeout_seconds", 300)
-                if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout < 1:
-                    raise ValueError(f"{path} check {name} timeout_seconds must be positive")
-                entry: dict[str, Any] = {
-                    "name": name,
-                    "command": command,
-                    "env": env,
-                    "timeout_seconds": timeout,
-                }
-                criterion = check.get("criterion")
-                if isinstance(criterion, str) and criterion.strip():
-                    entry["criterion"] = criterion.strip()
-                normalized.append(entry)
-            result = {"source": str(path), "checks": normalized}
-            result["content_hash"] = PackRegistry._compute_content_hash(normalized)
-            return result
-        return {"source": None, "checks": [], "content_hash": ""}
+            origin = "project" if index < 2 else "bundled"
+            return self._load_checks_from_path(path, origin=origin)
+        return {"source": None, "origin": None, "checks": [], "content_hash": ""}
+
+    def load_bundled_checks(self, pack: str) -> dict[str, Any]:
+        bundled_root = self.bundled_packs_path().resolve()
+        for path in self.check_paths(pack)[2:]:
+            if not path.exists():
+                continue
+            try:
+                resolved = path.resolve(strict=True)
+                resolved.relative_to(bundled_root)
+            except (OSError, ValueError):
+                continue
+            return self._load_checks_from_path(resolved, origin="bundled")
+        return {"source": None, "origin": None, "checks": [], "content_hash": ""}
 
     def protected_path_paths(self, pack: str) -> list[Path]:
         return self.file_candidates(pack, "protected-paths.json")
@@ -780,6 +801,8 @@ def freeze_pack_contract(
         description=contract.get("description", ""),
         checks=checks,
         checks_content_hash=checks_hash,
+        checks_source=checks_data.get("source"),
+        checks_origin=checks_data.get("origin"),
         protected_paths=protected,
         protected_paths_content_hash=protected_hash,
         memory_rules=memory_rules,

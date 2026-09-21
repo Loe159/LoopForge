@@ -337,7 +337,6 @@ def create_run(
         ensure_project_memory,
         freeze_pack_contract,
         initial_workflow_state,
-        load_pack_checks,
         load_pack_contract,
         loop_contract_status,
         normalize_config,
@@ -394,8 +393,14 @@ def create_run(
         pack_contract = load_pack_contract(project_dir, selected_pack)
         pack_detection = "explicit"
 
-    pack_check_config = load_pack_checks(project_dir, selected_pack)
-    pack_checks = pack_check_config.get("checks", [])
+    frozen_pack_contract = freeze_pack_contract(
+        project_dir,
+        selected_pack,
+        registry=_pack_registry(project_dir),
+        detection_mode=pack_detection,
+        detection_score=pack_contract.get("detection_score", 0),
+    )
+    pack_checks = frozen_pack_contract.checks
     acceptance_criteria: list[str] = list(normalized_success_checks)
     verification_commands: list[dict[str, Any]] = []
     if pack_checks:
@@ -480,13 +485,7 @@ def create_run(
         "profile": run_profile,
         "profile_policy": profile_policy(run_profile),
         "pack": selected_pack,
-        "pack_contract": freeze_pack_contract(
-            project_dir,
-            selected_pack,
-            registry=_pack_registry(project_dir),
-            detection_mode=pack_detection,
-            detection_score=pack_contract.get("detection_score", 0),
-        ).to_dict(),
+        "pack_contract": frozen_pack_contract.to_dict(),
         "status": contract_status,
         **initial_workflow_state(),
         "task_validation": task_validation,

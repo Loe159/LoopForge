@@ -33,6 +33,125 @@ def load_pack_checks(project_dir: Path, pack: str) -> dict[str, Any]:
     return _pack_registry(project_dir).load_checks(pack)
 
 
+def _checks_match_bundled(
+    registry: Any,
+    pack: str,
+    checks: list[dict[str, Any]],
+    checks_hash: str,
+) -> bool:
+    try:
+        bundled = registry.load_bundled_checks(pack)
+    except (OSError, ValueError):
+        return False
+    bundled_checks = bundled.get("checks", [])
+    return (
+        bool(checks_hash)
+        and isinstance(bundled_checks, list)
+        and _checks_execute_equivalently(checks, bundled_checks)
+    )
+
+
+def _checks_execute_equivalently(
+    left: list[dict[str, Any]],
+    right: list[dict[str, Any]],
+) -> bool:
+    if len(left) != len(right):
+        return False
+    for left_check, right_check in zip(left, right):
+        if left_check.get("command") != right_check.get("command"):
+            return False
+        if (left_check.get("env") or {}) != (right_check.get("env") or {}):
+            return False
+        if left_check.get("timeout_seconds", 300) != right_check.get(
+            "timeout_seconds",
+            300,
+        ):
+            return False
+    return True
+
+
+def _verification_checks_snapshot(
+    run_data: dict[str, Any],
+    project_dir: Path,
+    pack: str,
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    str | None,
+    str | None,
+]:
+    frozen_contract = run_data.get("pack_contract", {})
+    frozen_checks = (
+        frozen_contract.get("checks")
+        if isinstance(frozen_contract, dict)
+        else None
+    )
+    checks_source = (
+        frozen_contract.get("checks_source")
+        if isinstance(frozen_contract, dict)
+        else None
+    )
+    checks_origin = (
+        frozen_contract.get("checks_origin")
+        if isinstance(frozen_contract, dict)
+        else None
+    )
+
+    verification_commands = run_data.get("verification_commands")
+    if isinstance(verification_commands, list) and verification_commands:
+        execution_checks: list[dict[str, Any]] = []
+        for command_config in verification_commands:
+            if not isinstance(command_config, dict):
+                continue
+            command = command_config.get("command", [])
+            if not isinstance(command, list) or not command:
+                continue
+            execution_checks.append(
+                {
+                    "name": command_config.get("criterion", ""),
+                    "command": command,
+                    "env": command_config.get("env") or {},
+                    "timeout_seconds": command_config.get("timeout", 300),
+                    "criterion": command_config.get("criterion", ""),
+                }
+            )
+
+        if isinstance(frozen_checks, list) and _checks_execute_equivalently(
+            execution_checks,
+            frozen_checks,
+        ):
+            return execution_checks, frozen_checks, checks_source, checks_origin
+
+        pack_config = load_pack_checks(project_dir, pack)
+        current_checks = pack_config.get("checks", [])
+        if isinstance(current_checks, list) and _checks_execute_equivalently(
+            execution_checks,
+            current_checks,
+        ):
+            return (
+                execution_checks,
+                current_checks,
+                pack_config.get("source"),
+                pack_config.get("origin"),
+            )
+
+        return execution_checks, execution_checks, None, None
+
+    if isinstance(frozen_checks, list):
+        return frozen_checks, frozen_checks, checks_source, checks_origin
+
+    pack_config = load_pack_checks(project_dir, pack)
+    current_checks = pack_config.get("checks", [])
+    if not isinstance(current_checks, list):
+        current_checks = []
+    return (
+        current_checks,
+        current_checks,
+        pack_config.get("source"),
+        pack_config.get("origin"),
+    )
+
+
 def verify_run(
     project_dir: Path,
     *,
@@ -178,39 +297,144 @@ def verify_run(
         )
 
     pack = str(run_data.get("pack") or DEFAULT_PACK)
+    from loopforge.engine.packs import pack_trust_store as _pts
+
+    def blocked_before_execution(blocker: str) -> VerifyResult:
+        now = utc_now()
+        acceptance_criteria = (
+            run_data.get("acceptance_criteria")
+            if isinstance(run_data.get("acceptance_criteria"), list)
+            else []
+        )
+        verification = {
+            "version": 1,
+            "started_at": now,
+            "finished_at": now,
+            "status": "blocked",
+            "patch": {
+                "generated": False,
+                "path": None,
+                "size_bytes": 0,
+                "sha256": None,
+                "status": "not_run",
+            },
+            "diff_policy": {
+                "allowed": None,
+                "facts": {},
+                "violations": [],
+                "status": "not_run",
+            },
+            "risk": {
+                "risk": None,
+                "route": None,
+                "policy_allowed": None,
+                "reasons": [],
+                "facts": {},
+                "status": "not_run",
+            },
+            "pack": pack,
+            "pack_checks_source": None,
+            "acceptance_criteria": acceptance_criteria,
+            "criterion_results": [
+                {
+                    "criterion": criterion,
+                    "status": "blocked",
+                    "checks": [],
+                }
+                for criterion in acceptance_criteria
+            ],
+            "checks": [],
+            "checks_total": 0,
+            "checks_passed": 0,
+            "blockers": [blocker],
+        }
+        updated_run = normalize_run_workflow_state(run_data)
+        updated_run["verification"] = verification
+        updated_run["updated_at"] = now
+        updated_run["status"] = VERIFICATION_FAILED
+        updated_run["blockers"] = [blocker]
+        updated_run["current_stage"] = RunStage.VERIFICATION_BLOCKED.value
+        updated_run["stage_statuses"]["verification"] = StageStatus.BLOCKED.value
+        if updated_run["stage_statuses"].get("review") not in {"approved", "complete"}:
+            updated_run["stage_statuses"]["review"] = StageStatus.PENDING.value
+        updated_run["publish_eligibility"] = {
+            "eligible": False,
+            "reasons": ["deterministic verification is blocked"],
+        }
+        persist_run_json(status.project_dir, run_json_path, updated_run)
+        (run_dir / "verification.md").write_text(
+            render_verification_markdown(verification),
+            encoding="utf-8",
+        )
+        update_loop_diagnostic(run_dir, verification)
+        emit_operation_event(
+            operation_callback,
+            "blocked",
+            blocker,
+            artifact=str(run_dir / "verification.md"),
+            status="blocked",
+        )
+        return VerifyResult(
+            project_dir=status.project_dir,
+            run_dir=run_dir,
+            run=updated_run,
+            ok=False,
+            message="LoopForge verification is blocked.",
+            blockers=[blocker],
+            verification=verification,
+        )
+
+    trust_check = _pts(home=None)
+    registry = _pack_registry(status.project_dir)
     try:
-        from loopforge.engine.packs import pack_trust_store as _pts
-        trust_check = _pts(home=None)
-        frozen_contract = run_data.get("pack_contract", {})
-        pack_hash = frozen_contract.get("checks_content_hash", "") if isinstance(frozen_contract, dict) else ""
-        pack_source = frozen_contract.get("source") if isinstance(frozen_contract, dict) else None
-        if not pack_hash:
-            pack_config = load_pack_checks(status.project_dir, pack)
-            pack_hash = pack_config.get("content_hash", "")
-            pack_source = pack_config.get("source") if not pack_source else pack_source
-        if pack_hash and pack_source is not None:
-            registry = _pack_registry(status.project_dir)
-            bundled_root = str(registry.bundled_packs_path())
-            pack_is_bundled = pack_source.startswith(bundled_root)
-            if not pack_is_bundled and not trust_check.is_trusted(pack_hash):
-                blocker_msg = (
+        (
+            pack_checks,
+            trust_checks,
+            pack_checks_source,
+            checks_origin,
+        ) = _verification_checks_snapshot(
+            run_data,
+            status.project_dir,
+            pack,
+        )
+    except (OSError, ValueError) as error:
+        return blocked_before_execution(
+            f"pack checks could not be loaded: {error}"
+        )
+    pack_hash = (
+        registry._compute_content_hash(trust_checks)
+        if trust_checks
+        else ""
+    )
+
+    if pack_hash:
+        bundled_match = _checks_match_bundled(
+            registry,
+            pack,
+            trust_checks,
+            pack_hash,
+        )
+        checks_are_bundled = (
+            checks_origin == "bundled"
+            or checks_origin is None
+        ) and bundled_match
+        if not checks_are_bundled and not trust_check.is_trusted(pack_hash):
+            blocker_msg = (
+                f"Pack '{pack}' is not trusted. "
+                f"Run `loopforge trust pack {pack}` or use interactive mode."
+            )
+            return VerifyResult(
+                project_dir=status.project_dir,
+                run_dir=run_dir,
+                run=run_data,
+                ok=False,
+                message=(
                     f"Pack '{pack}' is not trusted. "
                     f"Run `loopforge trust pack {pack}` or use interactive mode."
-                )
-                return VerifyResult(
-                    project_dir=status.project_dir,
-                    run_dir=run_dir,
-                    run=run_data,
-                    ok=False,
-                    message=(
-                        f"Pack '{pack}' is not trusted. "
-                        f"Run `loopforge trust pack {pack}` or use interactive mode."
-                    ),
-                    blockers=[blocker_msg],
-                    verification=verification_state(run_data),
-                )
-    except ValueError:
-        pass
+                ),
+                blockers=[blocker_msg],
+                verification=verification_state(run_data),
+            )
 
     started = utc_now()
     patch_dir = run_dir / "artifacts" / "patches"
@@ -238,7 +462,6 @@ def verify_run(
         "status": "not_run",
     }
     checks: list[dict[str, Any]] = []
-    pack_checks_source: str | None = None
     risk_policy_sources: list[str] = []
     risk_policy_path: Path | None = None
 
@@ -432,35 +655,6 @@ def verify_run(
         emit_operation_event(operation_callback, "check_finished", "Patch risk classification finished.", current=3, total=4)
 
     try:
-        verification_commands = run_data.get("verification_commands")
-        if isinstance(verification_commands, list) and verification_commands:
-            run_checks = []
-            for vc in verification_commands:
-                if not isinstance(vc, dict):
-                    continue
-                command = vc.get("command", [])
-                if not isinstance(command, list) or not command:
-                    continue
-                run_checks.append(
-                    {
-                        "name": vc.get("criterion", ""),
-                        "command": command,
-                        "env": vc.get("env") or {},
-                        "timeout_seconds": vc.get("timeout", 300),
-                        "criterion": vc.get("criterion", ""),
-                    }
-                )
-            pack_checks_source = run_data.get("pack_contract", {}).get("checks_file")
-            pack_checks = run_checks
-        else:
-            frozen_checks = run_data.get("pack_contract", {}).get("checks")
-            if frozen_checks is not None and isinstance(frozen_checks, list):
-                pack_checks_source = run_data.get("pack_contract", {}).get("source")
-                pack_checks = frozen_checks
-            else:
-                pack_config = load_pack_checks(status.project_dir, str(run_data.get("pack") or DEFAULT_PACK))
-                pack_checks_source = pack_config.get("source")
-                pack_checks = pack_config["checks"]
         for index, check in enumerate(pack_checks, start=1):
             interrupted = cancelled_result()
             if interrupted is not None:
