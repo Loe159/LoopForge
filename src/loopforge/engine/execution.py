@@ -1095,8 +1095,8 @@ def continue_run(
         codex_workspace_preflight_blockers,
         current_status,
         implementation_gate_blockers,
+        invalidate_post_implementation_evidence,
         loop_contract_state,
-        normalize_run_workflow_state,
         persist_run_json,
         profile_transition_blockers,
         run_workspace_path,
@@ -1218,14 +1218,14 @@ def continue_run(
             blockers=profile_blockers,
         )
 
-    run = normalize_run_workflow_state(status.run)
-    current_stage = run.get("current_stage", "")
-    if current_stage == "plan_approved":
-        run["current_stage"] = "implementation_ready"
-        run["stage_statuses"]["implementation"] = "in_progress"
-    elif current_stage == "implementation_ready":
-        run["current_stage"] = "implementation_in_progress"
-        run["stage_statuses"]["implementation"] = "in_progress"
+    run = invalidate_post_implementation_evidence(status.run)
+    run["current_stage"] = "implementation_in_progress"
+    run["stage_statuses"]["implementation"] = "in_progress"
+    persist_run_json(
+        status.project_dir,
+        status.run_json_path or (status.run_dir / "run.json"),
+        run,
+    )
 
     try:
         attempt = execute_attempt(
@@ -1248,9 +1248,11 @@ def continue_run(
         )
     except (OSError, RuntimeError, ValueError) as error:
         blocker = f"adapter execution could not start: {error}"
-        updated_run = dict(status.run)
+        updated_run = dict(run)
         updated_run["status"] = ADAPTER_BLOCKED
         updated_run["blockers"] = [blocker]
+        updated_run["stage_statuses"]["implementation"] = "blocked"
+        updated_run["current_stage"] = "implementation_in_progress"
         if status.run_json_path is not None:
             persist_run_json(status.project_dir, status.run_json_path, updated_run)
         return ContinueResult(

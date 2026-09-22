@@ -107,6 +107,7 @@ def initial_workflow_state() -> dict[str, Any]:
             "eligible": False,
             "reasons": ["workflow has not reached publication"],
         },
+        "candidate_revision": 0,
         "acceptance_criteria": [],
         "verification_commands": [],
     }
@@ -194,6 +195,13 @@ def normalize_run_workflow_state(run: dict[str, Any]) -> dict[str, Any]:
         normalized["publish_eligibility"]["reasons"] = defaults["publish_eligibility"][
             "reasons"
         ]
+    candidate_revision = normalized.get("candidate_revision")
+    if (
+        not isinstance(candidate_revision, int)
+        or isinstance(candidate_revision, bool)
+        or candidate_revision < 0
+    ):
+        normalized["candidate_revision"] = 0
     return normalized
 
 
@@ -273,6 +281,13 @@ def apply_review_approval(
 
     normalized = normalize_run_workflow_state(run)
     clean_source = source.strip() if isinstance(source, str) else ""
+    verification = normalized.get("verification", {})
+    patch = verification.get("patch", {}) if isinstance(verification, dict) else {}
+    verification_patch_sha256 = (
+        patch.get("sha256")
+        if isinstance(patch, dict) and isinstance(patch.get("sha256"), str)
+        else None
+    )
     normalized["current_stage"] = RunStage.REVIEW_READY.value
     normalized["stage_statuses"]["review"] = StageStatus.APPROVED.value
     normalized["human_gates"]["review_approval"] = {
@@ -280,6 +295,8 @@ def apply_review_approval(
         "status": "approved",
         "source": clean_source or "local",
         "approved_at": approved_at or utc_now(),
+        "candidate_revision": normalized["candidate_revision"],
+        "verification_patch_sha256": verification_patch_sha256,
     }
     normalized["publish_eligibility"] = {
         "eligible": True,
@@ -287,6 +304,36 @@ def apply_review_approval(
         "reasons": ["verified work has explicit review approval"],
     }
     normalized["blockers"] = []
+    return normalized
+
+
+def invalidate_post_implementation_evidence(run: dict[str, Any]) -> dict[str, Any]:
+    """Start a new implementation candidate and revoke downstream authority."""
+    normalized = normalize_run_workflow_state(run)
+    previous_verification = normalized.get("verification")
+    if isinstance(previous_verification, dict) and previous_verification:
+        history = normalized.get("verification_history")
+        if not isinstance(history, list):
+            history = []
+        history.append(dict(previous_verification))
+        normalized["verification_history"] = history
+
+    normalized["candidate_revision"] += 1
+    normalized.pop("verification", None)
+    normalized.pop("publication", None)
+    normalized["stage_statuses"]["verification"] = StageStatus.PENDING.value
+    normalized["stage_statuses"]["review"] = StageStatus.PENDING.value
+    normalized["stage_statuses"]["publication"] = StageStatus.PENDING.value
+    normalized["human_gates"]["review_approval"] = {
+        **initial_workflow_state()["human_gates"]["review_approval"],
+        "status": "pending",
+    }
+    normalized["publish_eligibility"] = {
+        "eligible": False,
+        "reasons": [
+            "implementation candidate changed; verification and review must be repeated"
+        ],
+    }
     return normalized
 
 
@@ -636,7 +683,13 @@ def approve_review(
     *,
     source: str = "local",
 ) -> StageResult:
-    from loopforge.engine import current_status, persist_run_json, utc_now
+    from loopforge.engine import (
+        current_status,
+        parse_frontmatter,
+        persist_run_json,
+        utc_now,
+        validate_readonly_stage_artifact,
+    )
 
     status = current_status(project_dir)
     if not status.initialized:
@@ -670,6 +723,29 @@ def approve_review(
     verification = run.get("verification", {})
     if not isinstance(verification, dict) or verification.get("status") != "passed":
         blockers.append("review approval requires passed deterministic verification.")
+    candidate_revision = run.get("candidate_revision", 0)
+    verification_revision = (
+        verification.get(
+            "candidate_revision",
+            0 if candidate_revision == 0 else None,
+        )
+        if isinstance(verification, dict)
+        else None
+    )
+    if verification_revision != candidate_revision:
+        blockers.append(
+            "review approval requires verification for the current implementation candidate."
+        )
+    patch = verification.get("patch", {}) if isinstance(verification, dict) else {}
+    patch_sha256 = patch.get("sha256") if isinstance(patch, dict) else None
+    if candidate_revision > 0 and (
+        not isinstance(patch_sha256, str)
+        or len(patch_sha256) != 64
+        or any(character not in "0123456789abcdefABCDEF" for character in patch_sha256)
+    ):
+        blockers.append(
+            "review approval requires a valid verification patch sha256 for the current candidate."
+        )
     if statuses.get("review") == "approved":
         blockers.append("review approval has already been recorded.")
     elif statuses.get("review") != "complete":
@@ -680,6 +756,25 @@ def approve_review(
     review_path = status.run_dir / "review.md"
     if not review_path.exists():
         blockers.append("review approval requires review.md in the run directory.")
+    else:
+        try:
+            review_text = review_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            blockers.append(f"review approval could not read review.md: {error}")
+        else:
+            blockers.extend(validate_readonly_stage_artifact("review", review_text))
+            if candidate_revision > 0:
+                review_metadata = parse_frontmatter(review_text)
+                if review_metadata.get("candidate_revision") != str(
+                    candidate_revision
+                ):
+                    blockers.append(
+                        "review approval requires review evidence for the current implementation candidate."
+                    )
+                if review_metadata.get("verification_patch_sha256") != patch_sha256:
+                    blockers.append(
+                        "review approval requires review evidence for the current verification patch."
+                    )
     if blockers:
         return StageResult(
             project_dir=status.project_dir,

@@ -33,6 +33,20 @@ def load_pack_checks(project_dir: Path, pack: str) -> dict[str, Any]:
     return _pack_registry(project_dir).load_checks(pack)
 
 
+def _previous_verification_for_stagnation(run: dict[str, Any]) -> dict[str, Any] | None:
+    verification = run.get("verification")
+    if isinstance(verification, dict):
+        return verification
+
+    history = run.get("verification_history")
+    if not isinstance(history, list):
+        return None
+    for previous in reversed(history):
+        if isinstance(previous, dict):
+            return previous
+    return None
+
+
 def _checks_match_bundled(
     registry: Any,
     pack: str,
@@ -702,6 +716,7 @@ def verify_run(
     checks_passed = sum(1 for check in checks if check.get("status") == "passed")
     verification: dict[str, Any] = {
         "version": 1,
+        "candidate_revision": normalize_run_workflow_state(run_data)["candidate_revision"],
         "started_at": started,
         "finished_at": finished,
         "status": "blocked" if blockers else "passed",
@@ -722,7 +737,7 @@ def verify_run(
     }
     signature = failure_signature(verification)
     if signature:
-        previous = verification_state(run)
+        previous = _previous_verification_for_stagnation(run)
         if (
             isinstance(previous, dict)
             and previous.get("failure_signature") == signature

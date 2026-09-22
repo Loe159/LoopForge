@@ -164,10 +164,26 @@ def prepare_draft_publication(project_dir: Path) -> StageResult:
         patch = {}
 
     blockers: list[str] = []
+    candidate_revision = run.get("candidate_revision", 0)
     if statuses.get("verification") != "complete" or verification.get("status") != "passed":
         blockers.append("draft publication requires passed deterministic verification.")
+    if candidate_revision and verification.get("candidate_revision") != candidate_revision:
+        blockers.append(
+            "draft publication requires verification for the current implementation candidate."
+        )
     if statuses.get("review") not in {"approved", "complete"} or review_gate.get("status") != "approved":
         blockers.append("draft publication requires explicit review approval.")
+    if candidate_revision and review_gate.get("candidate_revision") != candidate_revision:
+        blockers.append(
+            "draft publication requires review approval for the current implementation candidate."
+        )
+    if (
+        candidate_revision > 0
+        and review_gate.get("verification_patch_sha256") != patch.get("sha256")
+    ):
+        blockers.append(
+            "draft publication requires review approval for the verified patch sha256."
+        )
     if not bool(eligibility.get("eligible")) or eligibility.get("mode") != "draft":
         blockers.append("draft publication requires draft publish eligibility.")
     patch_path_value = patch.get("path")
@@ -210,6 +226,14 @@ def prepare_draft_publication(project_dir: Path) -> StageResult:
         },
         "publisher": "local-draft-artifact",
         "run_id": run_id,
+        "candidate_revision": candidate_revision,
+        "verification_candidate_revision": verification.get(
+            "candidate_revision",
+            0 if candidate_revision == 0 else None,
+        ),
+        "verification_patch_sha256": review_gate.get(
+            "verification_patch_sha256"
+        ),
         "task": run.get("task"),
         "title": f"LoopForge: {title}",
         "body": draft_publication_body(run, verification),
@@ -225,11 +249,24 @@ def prepare_draft_publication(project_dir: Path) -> StageResult:
         },
         "verification": {
             "status": verification.get("status"),
+            "candidate_revision": verification.get(
+                "candidate_revision",
+                0 if candidate_revision == 0 else None,
+            ),
             "patch": {
                 "path": patch.get("path"),
                 "sha256": patch.get("sha256"),
                 "size_bytes": patch.get("size_bytes", 0),
             },
+        },
+        "review": {
+            "candidate_revision": review_gate.get(
+                "candidate_revision",
+                0 if candidate_revision == 0 else None,
+            ),
+            "verification_patch_sha256": review_gate.get(
+                "verification_patch_sha256"
+            ),
         },
         "source": {
             "run_id": run.get("run_id"),
@@ -818,6 +855,22 @@ def execute_readonly_stage(
         )
 
     artifact_path = status.run_dir / f"{stage}.md"
+    if stage == "review":
+        verification = run.get("verification", {})
+        patch = verification.get("patch", {}) if isinstance(verification, dict) else {}
+        patch_sha256 = patch.get("sha256") if isinstance(patch, dict) else None
+        frontmatter_end = artifact_text.find("\n---", 4)
+        if frontmatter_end >= 0:
+            metadata = (
+                f"\ncandidate_revision: {run.get('candidate_revision', 0)}"
+                f"\nverification_patch_sha256: {patch_sha256 or ''}"
+            )
+            artifact_text = (
+                artifact_text[:frontmatter_end]
+                + metadata
+                + artifact_text[frontmatter_end:]
+            )
+            artifact_stdout = artifact_text.encode("utf-8")
     artifact_path.write_bytes(artifact_stdout)
     updated = normalize_run_workflow_state(run)
     stage_status, current_stage = READONLY_STAGE_SUCCESS[stage]

@@ -4,15 +4,20 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from loopforge.checks import validate_implementation_result
 from loopforge.engine import (
     ADAPTER_BLOCKED,
+    continue_run,
+    describe_next_step,
     execute_attempt,
     expected_session_for,
+    initial_workflow_state,
     synthetic_adapter_result,
     update_run_after_attempt,
+    workflow_stage_guidance,
 )
 
 
@@ -137,6 +142,115 @@ class ImplementationResultIntegrityTests(unittest.TestCase):
             self.assertEqual(updated["status"], ADAPTER_BLOCKED)
             self.assertEqual(updated["stage_statuses"]["implementation"], "blocked")
             self.assertEqual(updated["current_stage"], "implementation_in_progress")
+
+    def test_new_attempt_revokes_stale_verification_even_when_adapter_start_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            project = root / "project"
+            workspace = root / "workspace"
+            run_dir = root / "run"
+            project.mkdir()
+            workspace.mkdir()
+            run_dir.mkdir()
+            run_json_path = run_dir / "run.json"
+
+            run = initial_workflow_state()
+            run.update(
+                {
+                    "status": "verified",
+                    "profile": "supervised",
+                    "workspace": {"path": str(workspace)},
+                    "limits": {"max_attempts": 3, "timeout_seconds": 30},
+                    "attempts": [],
+                    "current_stage": "review_ready",
+                    "pack_contract": {"workflow": [{"id": "implementation"}]},
+                    "verification": {
+                        "status": "passed",
+                        "patch": {
+                            "generated": True,
+                            "status": "generated",
+                            "path": "artifacts/patches/complete.patch",
+                            "sha256": "old-patch",
+                        },
+                    },
+                }
+            )
+            run["stage_statuses"]["task"] = "approved"
+            run["approval"] = {
+                "approved": True,
+                "source": "human",
+                "approved_at": "2026-09-22T00:00:00Z",
+            }
+            run["stage_statuses"]["research"] = "complete"
+            run["stage_statuses"]["plan"] = "approved"
+            run["stage_statuses"]["implementation"] = "complete"
+            run["stage_statuses"]["verification"] = "complete"
+            run["stage_statuses"]["review"] = "approved"
+            run["human_gates"]["plan_approval"] = {
+                "required": True,
+                "status": "approved",
+            }
+            run["human_gates"]["review_approval"] = {
+                "required": True,
+                "status": "approved",
+            }
+            run["publish_eligibility"] = {
+                "eligible": True,
+                "mode": "draft",
+                "reasons": ["verified work has explicit review approval"],
+            }
+            status = SimpleNamespace(
+                initialized=True,
+                project_dir=project,
+                run_dir=run_dir,
+                run_json_path=run_json_path,
+                run=run,
+                loop_contract={
+                    "status": "valid",
+                    "errors": [],
+                    "success_checks": ["python -m unittest"],
+                    "subjective": False,
+                },
+                blockers=[],
+                next_step="",
+            )
+
+            with (
+                mock.patch("loopforge.engine.current_status", return_value=status),
+                mock.patch("loopforge.engine.run_workspace_path", return_value=workspace),
+                mock.patch("loopforge.engine.codex_workspace_preflight_blockers", return_value=[]),
+                mock.patch("loopforge.engine.profile_transition_blockers", return_value=[]),
+                mock.patch(
+                    "loopforge.engine.execution.execute_attempt",
+                    side_effect=RuntimeError("workspace is dirty"),
+                ),
+                mock.patch("loopforge.engine.persist_run_json") as persist,
+            ):
+                result = continue_run(project, adapter="codex", confirmed=True)
+
+            self.assertFalse(result.ok)
+            self.assertIn("candidate_revision", result.run, result.blockers)
+            self.assertEqual(result.run["candidate_revision"], 1)
+            self.assertEqual(result.run["current_stage"], "implementation_in_progress")
+            self.assertEqual(result.run["stage_statuses"]["implementation"], "blocked")
+            guidance = workflow_stage_guidance(
+                result.run,
+                adapter="codex",
+                profile=str(result.run.get("profile") or "guided"),
+            )
+            self.assertIsNotNone(guidance)
+            self.assertEqual(guidance[0], "implementation_blocked")
+            self.assertIn("loopforge continue", describe_next_step(result.run))
+            self.assertNotIn("verification", result.run)
+            self.assertEqual(result.run["stage_statuses"]["verification"], "pending")
+            self.assertEqual(result.run["stage_statuses"]["review"], "pending")
+            self.assertEqual(result.run["human_gates"]["review_approval"]["status"], "pending")
+            self.assertFalse(result.run["publish_eligibility"]["eligible"])
+            self.assertEqual(
+                result.run["verification_history"][0]["patch"]["sha256"],
+                "old-patch",
+            )
+            self.assertGreaterEqual(persist.call_count, 2)
 
 
     def test_public_continue_fixture_uses_protocol_wrapper(self) -> None:

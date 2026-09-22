@@ -21,4 +21,5 @@ artifacts/
 /.idea/
 /.agents/
 /.codex/
+/.ai-bridge/
 node_modules/

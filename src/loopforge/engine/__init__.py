@@ -588,6 +588,7 @@ from loopforge.engine.workflow import (
     approve_plan,
     approve_review,
     complete_task_definition,
+    invalidate_post_implementation_evidence,
     implementation_gate_blockers,
     initial_workflow_state,
     normalize_run_workflow_state,
