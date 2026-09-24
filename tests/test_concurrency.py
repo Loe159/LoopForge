@@ -11,6 +11,7 @@ import time
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
 from loopforge.engine.locking import FileLock, LockTimeoutError, _read_lock_pid
 from loopforge.engine.repositories import (
@@ -116,6 +117,39 @@ class TestFileLock(unittest.TestCase):
         t_holder.join(timeout=5)
         self.assertEqual(acquire_result, ["timeout"])
 
+    @unittest.skipIf(_WIN, "POSIX file-lock semantics")
+    def test_threads_are_excluded_independently_of_process_file_lock(self):
+        held = threading.Event()
+        release = threading.Event()
+        outcome = []
+
+        def holder():
+            with FileLock(self.target, timeout=1.0):
+                held.set()
+                release.wait(timeout=2)
+
+        def waiter():
+            held.wait(timeout=2)
+            try:
+                with FileLock(self.target, timeout=0.1):
+                    outcome.append("acquired")
+            except LockTimeoutError:
+                outcome.append("timeout")
+
+        with mock.patch("loopforge.engine.locking.fcntl.flock"):
+            t_holder = threading.Thread(target=holder)
+            t_waiter = threading.Thread(target=waiter)
+            t_holder.start()
+            self.assertTrue(held.wait(timeout=2))
+            t_waiter.start()
+            t_waiter.join(timeout=2)
+            release.set()
+            t_holder.join(timeout=2)
+
+        self.assertFalse(t_waiter.is_alive())
+        self.assertFalse(t_holder.is_alive())
+        self.assertEqual(outcome, ["timeout"])
+
     def test_stale_lock_recovery_dead_pid(self):
         lock_path = Path(str(self.target) + ".lock")
         if _WIN:
@@ -193,6 +227,36 @@ class TestFileLock(unittest.TestCase):
         result = subprocess.run(command, capture_output=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    @unittest.skipIf(_WIN, "POSIX file-lock semantics")
+    def test_other_process_respects_deadline_before_holder_releases(self):
+        script = (
+            "from pathlib import Path; import sys, time\n"
+            "from loopforge.engine.locking import FileLock\n"
+            "with FileLock(Path(sys.argv[1]), timeout=2):\n"
+            "    print('held', flush=True)\n"
+            "    time.sleep(1.2)\n"
+        )
+        process = subprocess.Popen(
+            [sys.executable, "-u", "-c", script, str(self.target)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            self.assertEqual(process.stdout.readline().strip(), "held")
+            started = time.monotonic()
+            with self.assertRaises(LockTimeoutError):
+                with FileLock(self.target, timeout=0.1):
+                    pass
+            self.assertLess(time.monotonic() - started, 0.7)
+            self.assertEqual(process.wait(timeout=3), 0)
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=3)
+            process.stdout.close()
+            process.stderr.close()
+
     def test_lock_reentry_does_not_lose_the_original_lock(self):
         with FileLock(self.target) as lock:
             with self.assertRaises(RuntimeError):
@@ -204,6 +268,91 @@ class TestFileLock(unittest.TestCase):
             inode = lock.lock_path.stat().st_ino
         with FileLock(self.target) as lock:
             self.assertEqual(lock.lock_path.stat().st_ino, inode)
+
+    @unittest.skipIf(_WIN, "POSIX inode semantics")
+    def test_waiting_process_and_new_contender_use_same_lock_inode(self):
+        script = (
+            "from pathlib import Path; import sys\n"
+            "from loopforge.engine import locking\n"
+            "original_open = locking.os.open\n"
+            "def opened(*args, **kwargs):\n"
+            "    fd = original_open(*args, **kwargs)\n"
+            "    print('opened', flush=True)\n"
+            "    return fd\n"
+            "locking.os.open = opened\n"
+            "with locking.FileLock(Path(sys.argv[1]), timeout=2):\n"
+            "    print('acquired', flush=True)\n"
+            "    sys.stdin.readline()\n"
+        )
+        with FileLock(self.target) as first:
+            inode = first.lock_path.stat().st_ino
+            process = subprocess.Popen(
+                [sys.executable, "-u", "-c", script, str(self.target)],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            try:
+                self.assertEqual(process.stdout.readline().strip(), "opened")
+            except BaseException:
+                process.terminate()
+                process.wait(timeout=3)
+                raise
+        try:
+            self.assertEqual(process.stdout.readline().strip(), "acquired")
+            self.assertEqual(first.lock_path.stat().st_ino, inode)
+            with self.assertRaises(LockTimeoutError):
+                with FileLock(self.target, timeout=0.1):
+                    pass
+        finally:
+            if process.poll() is None:
+                process.stdin.write("\n")
+                process.stdin.flush()
+            process.wait(timeout=3)
+            process.stdin.close()
+            process.stdout.close()
+            process.stderr.close()
+
+    @unittest.skipUnless(hasattr(os, "fork"), "requires POSIX fork")
+    def test_forked_child_uses_fresh_thread_locks(self):
+        child_read, parent_write = os.pipe()
+        parent_read, child_write = os.pipe()
+        child_pid = None
+        try:
+            with FileLock(self.target) as inherited:
+                child_pid = os.fork()
+                if child_pid == 0:
+                    os.close(parent_write)
+                    os.close(parent_read)
+                    try:
+                        os.write(child_write, b"R")
+                        os.read(child_read, 1)
+                        outcome = bytearray()
+                        try:
+                            with FileLock(self.target, timeout=0.5):
+                                outcome.extend(b"A")
+                        except LockTimeoutError:
+                            outcome.extend(b"T")
+                        try:
+                            with inherited:
+                                outcome.extend(b"A")
+                        except (LockTimeoutError, RuntimeError):
+                            outcome.extend(b"T")
+                        os.write(child_write, outcome)
+                    finally:
+                        os._exit(0)
+                os.close(child_read)
+                os.close(child_write)
+                self.assertEqual(os.read(parent_read, 1), b"R")
+            os.write(parent_write, b"G")
+            self.assertEqual(os.read(parent_read, 2), b"AA")
+        finally:
+            os.close(parent_write)
+            os.close(parent_read)
+            if child_pid:
+                _, status = os.waitpid(child_pid, 0)
+                self.assertEqual(status, 0)
 
 
 class TestRepositoryLocking(unittest.TestCase):
