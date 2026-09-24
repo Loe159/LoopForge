@@ -21,7 +21,7 @@ from loopforge.engine.lifecycle import (
     RunStage,
     StageStatus,
 )
-from loopforge.engine.workflow import VerifyResult
+from loopforge.engine.workflow import VerifyResult, revoke_verification_review_authority
 from loopforge.engine.path_resolvers import resolve_confined, resolve_run_dir
 from loopforge.engine.storage import DEFAULT_JSON_STORE
 from loopforge.engine.execution import OperationCallback
@@ -45,6 +45,28 @@ def _previous_verification_for_stagnation(run: dict[str, Any]) -> dict[str, Any]
         if isinstance(previous, dict):
             return previous
     return None
+
+
+def _has_admissible_implementation_candidate(attempts: object) -> bool:
+    """Only the latest attempt can supply the candidate being verified.
+
+    An interactive terminal can exit nonzero after changing the workspace;
+    execute_attempt deliberately records that case as completed for recovery.
+    """
+    if not isinstance(attempts, list) or not attempts:
+        return False
+    latest = attempts[-1]
+    if not isinstance(latest, dict) or latest.get("status") != "completed":
+        return False
+    returncode = latest.get("returncode")
+    if not isinstance(returncode, int) or isinstance(returncode, bool):
+        return False
+    if returncode != 0 and not (
+        latest.get("execution_mode") == "terminal"
+        and latest.get("workspace_changed") is True
+    ):
+        return False
+    return True
 
 
 def _checks_match_bundled(
@@ -186,7 +208,6 @@ def verify_run(
         default_risk_policy,
         emit_operation_event,
         failure_signature,
-        initial_workflow_state,
         loopforge_module_command,
         merged_risk_policy_path,
         normalize_run_workflow_state,
@@ -254,20 +275,27 @@ def verify_run(
         gate_blockers.append("task_not_approved")
     if stage_statuses.get("plan") not in ("approved", "complete"):
         gate_blockers.append("plan_not_approved")
-    attempts = run_data.get("attempts", [])
-    has_candidate = isinstance(attempts, list) and any(
-        isinstance(a, dict) and a.get("returncode") is not None for a in attempts
-    )
-    if not has_candidate:
+    if not _has_admissible_implementation_candidate(run_data.get("attempts")):
         gate_blockers.append("no_implementation_candidate")
     if gate_blockers:
-        failed_run = normalize_run_workflow_state(run_data)
+        failed_run = revoke_verification_review_authority(
+            run_data,
+            reason="deterministic verification is blocked",
+        )
         failed_run["updated_at"] = utc_now()
         failed_run["status"] = VERIFICATION_FAILED
         failed_run["blockers"] = gate_blockers
         failed_run["current_stage"] = RunStage.VERIFICATION_BLOCKED.value
         failed_run["stage_statuses"]["verification"] = "blocked"
-        failed_run["verification"] = verification_state(failed_run)
+        failed_run["verification"] = {
+            "version": 1,
+            "candidate_revision": failed_run["candidate_revision"],
+            "status": "blocked",
+            "blockers": gate_blockers,
+            "checks": [],
+            "checks_total": 0,
+            "checks_passed": 0,
+        }
         persist_run_json(status.project_dir, run_json_path, failed_run)
         return VerifyResult(
             project_dir=status.project_dir,
@@ -292,13 +320,24 @@ def verify_run(
         }
     base_commit = run_data.get("base_commit")
     if not isinstance(base_commit, str) or not base_commit:
-        failed_run = normalize_run_workflow_state(run_data)
+        failed_run = revoke_verification_review_authority(
+            run_data,
+            reason="deterministic verification is blocked",
+        )
         failed_run["updated_at"] = utc_now()
         failed_run["status"] = VERIFICATION_FAILED
         failed_run["blockers"] = ["no_base_commit"]
         failed_run["current_stage"] = RunStage.VERIFICATION_BLOCKED.value
         failed_run["stage_statuses"]["verification"] = "blocked"
-        failed_run["verification"] = verification_state(failed_run)
+        failed_run["verification"] = {
+            "version": 1,
+            "candidate_revision": failed_run["candidate_revision"],
+            "status": "blocked",
+            "blockers": ["no_base_commit"],
+            "checks": [],
+            "checks_total": 0,
+            "checks_passed": 0,
+        }
         persist_run_json(status.project_dir, run_json_path, failed_run)
         return VerifyResult(
             project_dir=status.project_dir,
@@ -322,6 +361,7 @@ def verify_run(
         )
         verification = {
             "version": 1,
+            "candidate_revision": run_data["candidate_revision"],
             "started_at": now,
             "finished_at": now,
             "status": "blocked",
@@ -362,19 +402,16 @@ def verify_run(
             "checks_passed": 0,
             "blockers": [blocker],
         }
-        updated_run = normalize_run_workflow_state(run_data)
+        updated_run = revoke_verification_review_authority(
+            run_data,
+            reason="deterministic verification is blocked",
+        )
         updated_run["verification"] = verification
         updated_run["updated_at"] = now
         updated_run["status"] = VERIFICATION_FAILED
         updated_run["blockers"] = [blocker]
         updated_run["current_stage"] = RunStage.VERIFICATION_BLOCKED.value
         updated_run["stage_statuses"]["verification"] = StageStatus.BLOCKED.value
-        if updated_run["stage_statuses"].get("review") not in {"approved", "complete"}:
-            updated_run["stage_statuses"]["review"] = StageStatus.PENDING.value
-        updated_run["publish_eligibility"] = {
-            "eligible": False,
-            "reasons": ["deterministic verification is blocked"],
-        }
         persist_run_json(status.project_dir, run_json_path, updated_run)
         (run_dir / "verification.md").write_text(
             render_verification_markdown(verification),
@@ -485,12 +522,24 @@ def verify_run(
         if cancel_event is None or not cancel_event.is_set():
             return None
         blocker = "verification was interrupted before the next check."
-        interrupted_run = normalize_run_workflow_state(run)
+        interrupted_run = revoke_verification_review_authority(
+            run_data,
+            reason="deterministic verification is blocked",
+        )
         interrupted_run["updated_at"] = utc_now()
         interrupted_run["status"] = VERIFICATION_FAILED
         interrupted_run["blockers"] = [blocker]
         interrupted_run["current_stage"] = "verification_blocked"
         interrupted_run["stage_statuses"]["verification"] = "blocked"
+        interrupted_run["verification"] = {
+            "version": 1,
+            "candidate_revision": interrupted_run["candidate_revision"],
+            "status": "blocked",
+            "blockers": [blocker],
+            "checks": [],
+            "checks_total": 0,
+            "checks_passed": 0,
+        }
         persist_run_json(status.project_dir, run_json_path, interrupted_run)
         emit_operation_event(operation_callback, "cancelled", blocker, status="cancelled")
         return VerifyResult(
@@ -548,6 +597,17 @@ def verify_run(
                     "status": "generated" if artifact.get("retained") else "not_retained",
                 }
             )
+            if patch_summary["generated"]:
+                try:
+                    actual_patch_size = patch_path.stat().st_size
+                except OSError as error:
+                    patch_summary.update({"status": "failed", "error": str(error)})
+                    blockers.append(f"generated patch could not be inspected: {error}")
+                else:
+                    patch_summary["size_bytes"] = actual_patch_size
+                    if actual_patch_size == 0:
+                        patch_summary["status"] = "empty"
+                        blockers.append("no_implementation_changes")
             diff_summary.update(
                 {
                     "allowed": bool(patch_result.get("allowed", False)),
@@ -756,7 +816,14 @@ def verify_run(
     )
     update_loop_diagnostic(run_dir, verification)
 
-    updated_run = normalize_run_workflow_state(run_data)
+    updated_run = revoke_verification_review_authority(
+        run_data,
+        reason=(
+            "deterministic verification is blocked"
+            if blockers
+            else "read-only review and approval are required before draft publication"
+        ),
+    )
     updated_run["verification"] = verification
     updated_run["updated_at"] = utc_now()
     updated_run["status"] = VERIFIED if not blockers else VERIFICATION_FAILED
@@ -764,24 +831,9 @@ def verify_run(
     if not blockers:
         updated_run["current_stage"] = RunStage.VERIFICATION_READY.value
         updated_run["stage_statuses"]["verification"] = "complete"
-        updated_run["stage_statuses"]["review"] = StageStatus.PENDING.value
-        updated_run["human_gates"]["review_approval"] = {
-            **initial_workflow_state()["human_gates"]["review_approval"],
-            "status": "pending",
-        }
-        updated_run["publish_eligibility"] = {
-            "eligible": False,
-            "reasons": ["read-only review and approval are required before draft publication"],
-        }
     else:
         updated_run["current_stage"] = RunStage.VERIFICATION_BLOCKED.value
         updated_run["stage_statuses"]["verification"] = StageStatus.BLOCKED.value
-        if updated_run["stage_statuses"].get("review") not in {"approved", "complete"}:
-            updated_run["stage_statuses"]["review"] = StageStatus.PENDING.value
-        updated_run["publish_eligibility"] = {
-            "eligible": False,
-            "reasons": ["deterministic verification is blocked"],
-        }
     persist_run_json(status.project_dir, run_json_path, updated_run)
     emit_operation_event(
         operation_callback,

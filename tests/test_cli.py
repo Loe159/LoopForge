@@ -1139,8 +1139,11 @@ class CliTests(unittest.TestCase):
                 )
                 self.assertEqual(main(["init"]), 0)
                 self.assertEqual(main(["shell", "--command", run_command]), 0)
-                (repo / "README.md").write_text("# Project\n\nUpdated.\n", encoding="utf-8")
                 run_dir = self.approve_current_run_for_implementation(repo, loopforge_home)
+                run_data = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+                (Path(run_data["workspace"]["path"]) / "README.md").write_text(
+                    "# Project\n\nUpdated.\n", encoding="utf-8"
+                )
                 self.add_implementation_candidate(run_dir)
                 self.assertEqual(main(["shell", "--command", "/verify"]), 0)
 
@@ -5469,10 +5472,13 @@ Only this section is present.
                     ),
                     0,
                 )
-                (repo / "README.md").write_text("# Project\n\nUpdated.\n", encoding="utf-8")
                 self.approve_current_run_for_implementation(repo, loopforge_home)
                 config = json.loads((repo / ".loopforge" / "config.json").read_text(encoding="utf-8"))
                 run_dir = Path(config["run_root"]) / config["current_run_id"]
+                run_data = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+                (Path(run_data["workspace"]["path"]) / "README.md").write_text(
+                    "# Project\n\nUpdated.\n", encoding="utf-8"
+                )
                 self.add_implementation_candidate(run_dir)
                 with contextlib.redirect_stderr(verify_error):
                     self.assertEqual(main(["verify"]), 1)
@@ -6266,6 +6272,179 @@ Only this section is present.
             self.assertIn("Verified", output.getvalue())
             self.assertIn("status  passed", output.getvalue())
             self.assertIn("risk    low", output.getvalue())
+
+    def test_verify_rejects_failed_or_stale_implementation_attempt(self) -> None:
+        from loopforge.engine import verify_run
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            repo = root / "project"
+            repo.mkdir()
+            home = root / "loopforge-home"
+            self.initialize_git_project(repo)
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(["run", "--task", "Create missing.txt", "--success-check", "diff-whitespace"]),
+                    0,
+                )
+                run_dir = self.approve_current_run_for_implementation(repo, home)
+                run_path = run_dir / "run.json"
+                run_data = json.loads(run_path.read_text(encoding="utf-8"))
+
+                for attempts in (
+                    [{"id": "failed", "status": "failed", "returncode": 1}],
+                    [{"id": "failed", "status": "failed", "returncode": 0}],
+                    [{"id": "invalid", "status": "completed", "returncode": 1}],
+                    [
+                        {"id": "old", "status": "completed", "returncode": 0},
+                        {"id": "failed", "status": "failed", "returncode": 1},
+                    ],
+                ):
+                    with self.subTest(attempts=attempts):
+                        run_data["attempts"] = attempts
+                        run_path.write_text(json.dumps(run_data), encoding="utf-8")
+                        result = verify_run(repo)
+                        persisted = json.loads(run_path.read_text(encoding="utf-8"))
+                        self.assertFalse(result.ok)
+                        self.assertIn("no_implementation_candidate", result.blockers)
+                        self.assertEqual(persisted["stage_statuses"]["verification"], "blocked")
+                        self.assertEqual(persisted["human_gates"]["review_approval"]["status"], "pending")
+                        self.assertFalse(persisted["publish_eligibility"]["eligible"])
+                        self.assertFalse((Path(run_data["workspace"]["path"]) / "missing.txt").exists())
+
+                run_data["attempts"] = [{
+                    "id": "claimed",
+                    "status": "completed",
+                    "returncode": 0,
+                    "workspace_changed": True,
+                }]
+                run_path.write_text(json.dumps(run_data), encoding="utf-8")
+                result = verify_run(repo)
+                persisted = json.loads(run_path.read_text(encoding="utf-8"))
+                self.assertFalse(result.ok)
+                self.assertIn("no_implementation_changes", result.blockers)
+                self.assertEqual(persisted["verification"]["patch"]["size_bytes"], 0)
+                self.assertEqual(persisted["stage_statuses"]["review"], "pending")
+                self.assertFalse(persisted["publish_eligibility"]["eligible"])
+                self.assertFalse((Path(run_data["workspace"]["path"]) / "missing.txt").exists())
+
+                candidate_path = Path(run_data["workspace"]["path"]) / "missing.txt"
+                candidate_path.write_text("Implemented.\n", encoding="utf-8")
+                run_data["acceptance_criteria"] = ["missing.txt exists"]
+                run_data["attempts"] = [{"id": "recovered", "status": "completed", "returncode": 0}]
+                run_path.write_text(json.dumps(run_data), encoding="utf-8")
+                result = verify_run(repo)
+                persisted = json.loads(run_path.read_text(encoding="utf-8"))
+                self.assertTrue(result.ok, result.blockers)
+                self.assertEqual(
+                    persisted["verification"]["criterion_results"][0]["status"],
+                    "not_evaluated",
+                )
+                self.assertEqual(persisted["stage_statuses"]["review"], "pending")
+                self.assertFalse(persisted["publish_eligibility"]["eligible"])
+                self.assertFalse(approve_review(repo).ok)
+                self.assertFalse(prepare_draft_publication(repo).ok)
+
+                self.complete_current_review(run_dir)
+                self.assertTrue(approve_review(repo).ok)
+                reviewed = json.loads(run_path.read_text(encoding="utf-8"))
+                self.assertEqual(
+                    reviewed["verification"]["criterion_results"][0]["status"],
+                    "not_evaluated",
+                )
+                publication = prepare_draft_publication(repo)
+                self.assertTrue(publication.ok, publication.blockers)
+                self.assertIn(
+                    "missing.txt exists: not_evaluated",
+                    publication.artifact_path.read_text(encoding="utf-8"),
+                )
+
+                approved_run = json.loads(run_path.read_text(encoding="utf-8"))
+                for failure in ("candidate", "base", "cancelled", "checks"):
+                    with self.subTest(reverification_failure=failure):
+                        rerun = json.loads(json.dumps(approved_run))
+                        if failure == "candidate":
+                            rerun["attempts"][-1]["status"] = "failed"
+                        elif failure == "base":
+                            rerun["base_commit"] = None
+                        run_path.write_text(json.dumps(rerun), encoding="utf-8")
+                        if failure == "checks":
+                            with mock.patch(
+                                "loopforge.engine.verification._verification_checks_snapshot",
+                                side_effect=ValueError("invalid pack checks"),
+                            ):
+                                failed_reverification = verify_run(repo)
+                        else:
+                            cancelled = threading.Event()
+                            if failure == "cancelled":
+                                cancelled.set()
+                            failed_reverification = verify_run(repo, cancel_event=cancelled)
+                        revoked = json.loads(run_path.read_text(encoding="utf-8"))
+                        self.assertFalse(failed_reverification.ok)
+                        self.assertEqual(revoked["stage_statuses"]["review"], "pending")
+                        self.assertEqual(revoked["human_gates"]["review_approval"]["status"], "pending")
+                        self.assertEqual(revoked["stage_statuses"]["publication"], "pending")
+                        self.assertNotIn("publication", revoked)
+                        self.assertFalse(revoked["publish_eligibility"]["eligible"])
+
+                candidate_path.unlink()
+                run_path.write_text(json.dumps(approved_run), encoding="utf-8")
+                failed_reverification = verify_run(repo)
+                revoked = json.loads(run_path.read_text(encoding="utf-8"))
+                self.assertFalse(failed_reverification.ok)
+                self.assertIn("no_implementation_changes", failed_reverification.blockers)
+                self.assertEqual(revoked["stage_statuses"]["review"], "pending")
+                self.assertEqual(revoked["human_gates"]["review_approval"]["status"], "pending")
+                self.assertEqual(revoked["stage_statuses"]["publication"], "pending")
+                self.assertNotIn("publication", revoked)
+                self.assertFalse(revoked["publish_eligibility"]["eligible"])
+                self.assertFalse(prepare_draft_publication(repo).ok)
+                candidate_path.write_text("Implemented.\n", encoding="utf-8")
+
+                run_data["acceptance_criteria"] = ["diff-whitespace"]
+                for recovered in (
+                    {"id": "recovered", "status": "completed", "returncode": 0},
+                    {
+                        "id": "terminal-recovered",
+                        "status": "completed",
+                        "returncode": 1,
+                        "execution_mode": "terminal",
+                        "workspace_changed": True,
+                    },
+                ):
+                    with self.subTest(recovered=recovered):
+                        run_data["attempts"] = [
+                            {"id": "failed", "status": "failed", "returncode": 1},
+                            recovered,
+                        ]
+                        run_path.write_text(json.dumps(run_data), encoding="utf-8")
+                        result = verify_run(repo)
+                        persisted = json.loads(run_path.read_text(encoding="utf-8"))
+                        self.assertTrue(result.ok, result.blockers)
+                        self.assertEqual(persisted["stage_statuses"]["verification"], "complete")
+                        self.assertEqual(persisted["stage_statuses"]["review"], "pending")
+                        self.assertFalse(persisted["publish_eligibility"]["eligible"])
+
+    def test_criterion_without_matching_check_is_not_proven(self) -> None:
+        from loopforge.engine import _build_criterion_results
+
+        self.assertEqual(
+            _build_criterion_results(["critical requirement"], []),
+            [{"criterion": "critical requirement", "status": "not_evaluated", "checks": []}],
+        )
+        self.assertEqual(
+            _build_criterion_results(
+                ["critical requirement"],
+                [{"name": "generic tests", "status": "passed"}],
+            ),
+            [{"criterion": "critical requirement", "status": "not_evaluated", "checks": []}],
+        )
 
     def test_scripted_workflow_approves_verified_work_for_review(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -307,6 +307,27 @@ def apply_review_approval(
     return normalized
 
 
+def revoke_verification_review_authority(
+    run: dict[str, Any],
+    *,
+    reason: str,
+) -> dict[str, Any]:
+    """A new verification result cannot inherit review or draft authority."""
+    normalized = normalize_run_workflow_state(run)
+    normalized["stage_statuses"]["review"] = StageStatus.PENDING.value
+    normalized["stage_statuses"]["publication"] = StageStatus.PENDING.value
+    normalized["human_gates"]["review_approval"] = {
+        **initial_workflow_state()["human_gates"]["review_approval"],
+        "status": "pending",
+    }
+    normalized["publish_eligibility"] = {
+        "eligible": False,
+        "reasons": [reason],
+    }
+    normalized.pop("publication", None)
+    return normalized
+
+
 def invalidate_post_implementation_evidence(run: dict[str, Any]) -> dict[str, Any]:
     """Start a new implementation candidate and revoke downstream authority."""
     normalized = normalize_run_workflow_state(run)
@@ -319,21 +340,12 @@ def invalidate_post_implementation_evidence(run: dict[str, Any]) -> dict[str, An
         normalized["verification_history"] = history
 
     normalized["candidate_revision"] += 1
+    normalized = revoke_verification_review_authority(
+        normalized,
+        reason="implementation candidate changed; verification and review must be repeated",
+    )
     normalized.pop("verification", None)
-    normalized.pop("publication", None)
     normalized["stage_statuses"]["verification"] = StageStatus.PENDING.value
-    normalized["stage_statuses"]["review"] = StageStatus.PENDING.value
-    normalized["stage_statuses"]["publication"] = StageStatus.PENDING.value
-    normalized["human_gates"]["review_approval"] = {
-        **initial_workflow_state()["human_gates"]["review_approval"],
-        "status": "pending",
-    }
-    normalized["publish_eligibility"] = {
-        "eligible": False,
-        "reasons": [
-            "implementation candidate changed; verification and review must be repeated"
-        ],
-    }
     return normalized
 
 

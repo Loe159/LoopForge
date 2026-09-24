@@ -2339,8 +2339,8 @@ def merged_risk_policy_path(
 def verification_failure_parts(verification: dict[str, Any]) -> list[Any]:
     parts: list[Any] = []
     patch = verification.get("patch", {})
-    if isinstance(patch, dict) and patch.get("status") == "failed":
-        parts.append({"patch_error": patch.get("error")})
+    if isinstance(patch, dict) and patch.get("status") in {"failed", "empty"}:
+        parts.append({"patch_error": patch.get("error") or patch.get("status")})
     diff_policy = verification.get("diff_policy", {})
     if isinstance(diff_policy, dict) and diff_policy.get("allowed") is False:
         violations = diff_policy.get("violations", [])
@@ -2380,19 +2380,18 @@ def _build_criterion_results(
     for criterion in acceptance_criteria:
         criterion_checks = [
             check for check in checks
-            if check.get("criterion", "") == criterion
+            if isinstance(check, dict) and check.get("criterion", "") == criterion
         ]
         if not criterion_checks:
-            criterion_checks = checks
-        passed = all(
-            check.get("status") == "passed"
-            for check in criterion_checks
-            if isinstance(check, dict)
-        )
+            status = "not_evaluated"
+        elif all(check.get("status") == "passed" for check in criterion_checks):
+            status = "passed"
+        else:
+            status = "failed"
         results.append(
             {
                 "criterion": criterion,
-                "status": "passed" if passed else "failed",
+                "status": status,
                 "checks": criterion_checks,
             }
         )

@@ -494,12 +494,17 @@ def draft_publication_body(run: dict[str, Any], verification: dict[str, Any]) ->
         f"- Checks: {checks_passed}/{checks_total}",
         f"- Patch: {patch.get('path') or 'none'}",
         f"- Patch SHA-256: {patch.get('sha256') or 'none'}",
-        "",
-        "## Publication",
-        "",
-        "- Draft: true",
-        "- Network: not performed",
     ]
+    criterion_results = verification.get("criterion_results", [])
+    if isinstance(criterion_results, list) and criterion_results:
+        lines.extend(["", "## Acceptance Criteria", ""])
+        for item in criterion_results:
+            if isinstance(item, dict):
+                lines.append(
+                    f"- {compact_text(item.get('criterion'))}: "
+                    f"{compact_text(item.get('status')) or 'unknown'}"
+                )
+    lines.extend(["", "## Publication", "", "- Draft: true", "- Network: not performed"])
     return "\n".join(lines) + "\n"
 
 
