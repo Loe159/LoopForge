@@ -2367,6 +2367,149 @@ class CliTests(unittest.TestCase):
                 "pending",
             )
 
+    def test_draft_rejects_patch_changed_after_review_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            repo = workspace / "project"
+            repo.mkdir()
+            self.initialize_git_project(repo)
+            home = workspace / "loopforge-home"
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(["run", "--task", "Protect draft patch", "--success-check", "Tests pass"]),
+                    0,
+                )
+                run_dir = self.approve_current_run_for_implementation(repo, home)
+                run_path = run_dir / "run.json"
+                run = json.loads(run_path.read_text(encoding="utf-8"))
+                Path(run["workspace"]["path"], "README.md").write_text(
+                    "# Project\n\nChanged.\n", encoding="utf-8"
+                )
+                self.add_implementation_candidate(run_dir)
+                self.assertEqual(main(["verify"]), 0)
+                self.complete_current_review(run_dir)
+                run = json.loads(run_path.read_text(encoding="utf-8"))
+                patch_path = run_dir / run["verification"]["patch"]["path"]
+                original = patch_path.read_bytes()
+                patch_path.write_bytes(original[:-1] + bytes([original[-1] ^ 1]))
+                approval = approve_review(repo, source="test")
+                self.assertFalse(approval.ok)
+                self.assertIn("sha256", "\n".join(approval.blockers))
+                self.assertEqual(
+                    json.loads(run_path.read_text(encoding="utf-8"))["human_gates"]["review_approval"]["status"],
+                    "pending",
+                )
+                patch_path.write_bytes(original)
+                self.assertTrue(approve_review(repo, source="test").ok)
+                approved_run = json.loads(run_path.read_text(encoding="utf-8"))
+
+                patch_path.write_bytes(original + b"\n")
+                result = prepare_draft_publication(repo)
+                self.assertFalse(result.ok)
+                self.assertIn("size", "\n".join(result.blockers))
+                self.assertFalse((run_dir / "artifacts" / "publication" / "draft-pr.json").exists())
+                revoked = json.loads(run_path.read_text(encoding="utf-8"))
+                self.assertEqual(revoked["human_gates"]["review_approval"]["status"], "pending")
+                self.assertEqual(revoked["stage_statuses"]["verification"], "blocked")
+                self.assertFalse(revoked["publish_eligibility"]["eligible"])
+
+                run_path.write_text(json.dumps(approved_run), encoding="utf-8")
+                patch_path.write_bytes(original[:-1] + bytes([original[-1] ^ 1]))
+                result = prepare_draft_publication(repo)
+                self.assertFalse(result.ok)
+                self.assertIn("sha256", "\n".join(result.blockers))
+
+                run_path.write_text(json.dumps(approved_run), encoding="utf-8")
+                patch_path.write_bytes(original)
+                outside_patch = run_dir.parent / "outside.patch"
+                outside_patch.write_bytes(original)
+                run = json.loads(run_path.read_text(encoding="utf-8"))
+                run["verification"]["patch"]["path"] = "../outside.patch"
+                run_path.write_text(json.dumps(run), encoding="utf-8")
+                result = prepare_draft_publication(repo)
+                self.assertFalse(result.ok)
+                self.assertIn("within the run directory", "\n".join(result.blockers))
+
+                run_path.write_text(json.dumps(approved_run), encoding="utf-8")
+                self.assertTrue(prepare_draft_publication(repo).ok)
+                prepared_run = json.loads(run_path.read_text(encoding="utf-8"))
+                patch_path.write_bytes(original + b"\n")
+                result = prepare_draft_publication(repo)
+                self.assertFalse(result.ok)
+                persisted = json.loads(run_path.read_text(encoding="utf-8"))
+                self.assertEqual(persisted["stage_statuses"]["publication"], "pending")
+                self.assertFalse(persisted["publish_eligibility"]["eligible"])
+                self.assertEqual(persisted["human_gates"]["review_approval"]["status"], "pending")
+                self.assertFalse((run_dir / "artifacts" / "publication" / "draft-pr.json").exists())
+
+                # The patch can also change while the draft payload is being written.
+                from loopforge.engine import write_json_atomic
+
+                patch_path.write_bytes(original)
+                run_path.write_text(json.dumps(approved_run), encoding="utf-8")
+
+                def mutate_after_write(path: Path, payload: dict) -> None:
+                    write_json_atomic(path, payload)
+                    patch_path.write_bytes(original + b"\n")
+
+                with mock.patch("loopforge.engine.write_json_atomic", side_effect=mutate_after_write):
+                    result = prepare_draft_publication(repo)
+                self.assertFalse(result.ok)
+                self.assertIn("size", "\n".join(result.blockers))
+                persisted = json.loads(run_path.read_text(encoding="utf-8"))
+                self.assertEqual(persisted["stage_statuses"]["publication"], "pending")
+                self.assertFalse(persisted["publish_eligibility"]["eligible"])
+                self.assertFalse((run_dir / "artifacts" / "publication" / "draft-pr.json").exists())
+
+                from loopforge.engine import persist_run_json
+
+                patch_path.write_bytes(original)
+                run_path.write_text(json.dumps(approved_run), encoding="utf-8")
+                writes = 0
+
+                def mutate_after_persist(project_dir: Path, path: Path, data: dict) -> None:
+                    nonlocal writes
+                    persist_run_json(project_dir, path, data)
+                    writes += 1
+                    if writes == 1:
+                        patch_path.write_bytes(original + b"\n")
+
+                with mock.patch("loopforge.engine.persist_run_json", side_effect=mutate_after_persist):
+                    result = prepare_draft_publication(repo)
+                self.assertFalse(result.ok)
+                persisted = json.loads(run_path.read_text(encoding="utf-8"))
+                self.assertEqual(persisted["stage_statuses"]["publication"], "pending")
+                self.assertFalse(persisted["publish_eligibility"]["eligible"])
+                self.assertFalse((run_dir / "artifacts" / "publication" / "draft-pr.json").exists())
+
+                if os.name != "nt":
+                    patch_path.write_bytes(original + b"\n")
+                    run_path.write_text(json.dumps(prepared_run), encoding="utf-8")
+                    publication_dir = run_dir / "artifacts" / "publication"
+                    publication_dir.rmdir()
+                    outside_dir = workspace / "external-publication"
+                    outside_dir.mkdir()
+                    outside_draft = outside_dir / "draft-pr.json"
+                    outside_draft.write_text("external file must remain", encoding="utf-8")
+                    publication_dir.symlink_to(outside_dir, target_is_directory=True)
+                    result = prepare_draft_publication(repo)
+                    self.assertFalse(result.ok)
+                    self.assertEqual(outside_draft.read_text(encoding="utf-8"), "external file must remain")
+                    self.assertFalse(
+                        json.loads(run_path.read_text(encoding="utf-8"))["publish_eligibility"]["eligible"]
+                    )
+                    patch_path.write_bytes(original)
+                    run_path.write_text(json.dumps(approved_run), encoding="utf-8")
+                    result = prepare_draft_publication(repo)
+                    self.assertFalse(result.ok)
+                    self.assertIn("artifact path", "\n".join(result.blockers))
+                    self.assertEqual(outside_draft.read_text(encoding="utf-8"), "external file must remain")
+
     def test_prepare_draft_publication_rejects_review_hash_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)

@@ -32,7 +32,8 @@ from loopforge.engine.terminal import (
     launch_terminal_session,
 )
 from loopforge.engine.workflow import StageResult
-from loopforge.engine.path_resolvers import resolve_confined
+from loopforge.engine.path_resolvers import resolve_artifact, resolve_confined
+from loopforge.engine.patch_integrity import patch_integrity_blockers
 from loopforge.engine.execution import OperationCallback
 
 
@@ -114,6 +115,7 @@ def prepare_draft_publication(project_dir: Path) -> StageResult:
         current_git_branch,
         current_status,
         draft_publication_body,
+        invalidate_verification_patch_authority,
         normalize_run_workflow_state,
         persist_run_json,
         relative_to_run,
@@ -178,7 +180,7 @@ def prepare_draft_publication(project_dir: Path) -> StageResult:
             "draft publication requires review approval for the current implementation candidate."
         )
     if (
-        candidate_revision > 0
+        (candidate_revision > 0 or review_gate.get("verification_patch_sha256") is not None)
         and review_gate.get("verification_patch_sha256") != patch.get("sha256")
     ):
         blockers.append(
@@ -186,18 +188,46 @@ def prepare_draft_publication(project_dir: Path) -> StageResult:
         )
     if not bool(eligibility.get("eligible")) or eligibility.get("mode") != "draft":
         blockers.append("draft publication requires draft publish eligibility.")
-    patch_path_value = patch.get("path")
-    patch_path = status.run_dir / str(patch_path_value) if patch_path_value else None
     if not bool(patch.get("generated")) or patch.get("status") != "generated":
         blockers.append("draft publication requires a generated verification patch.")
-    if patch_path is None or not patch_path.is_file():
-        blockers.append("draft publication requires a retained verification patch.")
-    if not isinstance(patch.get("sha256"), str) or not str(patch.get("sha256")).strip():
-        blockers.append("draft publication requires a verification patch sha256.")
+    patch_blockers = patch_integrity_blockers(status.run_dir, patch)
+    blockers.extend(f"draft publication requires {reason}" for reason in patch_blockers)
+    try:
+        artifact_path = resolve_artifact(
+            status.run_dir, "artifacts/publication/draft-pr.json"
+        )
+    except (OSError, RuntimeError, ValueError):
+        artifact_path = None
+        blockers.append("draft publication artifact path must remain within the run directory.")
     base_commit = run.get("base_commit")
     if not isinstance(base_commit, str) or not base_commit:
         blockers.append("draft publication requires base_commit in run.json.")
+
+    def revoke_stale_draft(
+        reasons: list[str], current_run: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        reason = "draft publication evidence is stale; verification and review must be repeated"
+        revoked = invalidate_verification_patch_authority(
+            current_run if current_run is not None else run, reason=reason
+        )
+        revoked["updated_at"] = utc_now()
+        persist_run_json(
+            status.project_dir,
+            status.run_json_path or (status.run_dir / "run.json"),
+            revoked,
+        )
+        try:
+            stale_path = resolve_artifact(
+                status.run_dir, "artifacts/publication/draft-pr.json"
+            )
+            stale_path.unlink(missing_ok=True)
+        except (OSError, RuntimeError, ValueError) as error:
+            reasons.append(f"could not remove stale draft artifact: {error}")
+        return revoked
+
     if blockers:
+        if patch_blockers or (artifact_path is None and statuses.get("publication") == "draft_prepared"):
+            run = revoke_stale_draft(blockers)
         return StageResult(
             project_dir=status.project_dir,
             run_dir=status.run_dir,
@@ -208,9 +238,9 @@ def prepare_draft_publication(project_dir: Path) -> StageResult:
             blockers=blockers,
         )
 
-    publication_dir = status.run_dir / "artifacts" / "publication"
+    assert artifact_path is not None
+    publication_dir = artifact_path.parent
     publication_dir.mkdir(parents=True, exist_ok=True)
-    artifact_path = publication_dir / "draft-pr.json"
     relative_artifact_path = relative_to_run(status.run_dir, artifact_path)
     run_id = str(run.get("run_id") or "run")
     title = str(run.get("task") or "LoopForge run").strip() or "LoopForge run"
@@ -276,6 +306,20 @@ def prepare_draft_publication(project_dir: Path) -> StageResult:
         },
     }
     write_json_atomic(artifact_path, payload)
+    # Recheck after writing: the retained patch may change while the payload is built.
+    post_write_blockers = patch_integrity_blockers(status.run_dir, patch)
+    if post_write_blockers:
+        blockers = [f"draft publication requires {reason}" for reason in post_write_blockers]
+        run = revoke_stale_draft(blockers)
+        return StageResult(
+            project_dir=status.project_dir,
+            run_dir=status.run_dir,
+            run=run,
+            stage="publication",
+            ok=False,
+            message="LoopForge draft publication is blocked.",
+            blockers=blockers,
+        )
     updated = apply_draft_publication_prepared(
         run,
         artifact_path=relative_artifact_path,
@@ -283,6 +327,19 @@ def prepare_draft_publication(project_dir: Path) -> StageResult:
     updated.setdefault("artifacts", {})["draft_publication"] = str(artifact_path)
     updated["updated_at"] = utc_now()
     persist_run_json(status.project_dir, status.run_json_path or (status.run_dir / "run.json"), updated)
+    final_blockers = patch_integrity_blockers(status.run_dir, patch)
+    if final_blockers:
+        blockers = [f"draft publication requires {reason}" for reason in final_blockers]
+        revoked = revoke_stale_draft(blockers, current_run=updated)
+        return StageResult(
+            project_dir=status.project_dir,
+            run_dir=status.run_dir,
+            run=revoked,
+            stage="publication",
+            ok=False,
+            message="LoopForge draft publication is blocked.",
+            blockers=blockers,
+        )
     return StageResult(
         project_dir=status.project_dir,
         run_dir=status.run_dir,
