@@ -931,14 +931,11 @@ def persist_run_json(project_dir: Path, run_json_path: Path, run: dict[str, Any]
     try:
         run_indexes.mark_dirty(DEFAULT_JSON_STORE, run_root, timestamp=timestamp)
     except OSError:
-        write_json_atomic(run_json_path, run)
-        return
-    from loopforge.engine.repositories import RunRepository
-    try:
-        repo = RunRepository(run_json_path.parent)
-        repo.write(run)
-    except Exception:
-        write_json_atomic(run_json_path, run)
+        # An index is recoverable; the run still needs its repository lock.
+        pass
+    from loopforge.engine.repositories import RunRepository, RevisionConflictError
+    repo = RunRepository(run_json_path.parent)
+    repo.write(run, expected_revision=run.get("run_revision", 0))
     try:
         index = run_indexes.update_run_index(
             DEFAULT_JSON_STORE,
@@ -953,7 +950,7 @@ def persist_run_json(project_dir: Path, run_json_path: Path, run: dict[str, Any]
             str(config.get("project_id") or ""),
             _project_summary_from_index(project_dir, config, index),
         )
-    except OSError:
+    except (OSError, RevisionConflictError):
         return
     run_indexes.clear_dirty(run_root)
 
@@ -969,16 +966,13 @@ def persist_project_config(project_dir: Path, config_path: Path, config: dict[st
             indexed = True
         except OSError:
             pass
-    from loopforge.engine.repositories import ConfigRepository
-    try:
-        repo = ConfigRepository(config_path.parent, lock_timeout=2.0)
-        repo.write(config)
-    except Exception:
-        write_json_atomic(config_path, config)
+    from loopforge.engine.repositories import ConfigRepository, RevisionConflictError
+    repo = ConfigRepository(config_path.parent, lock_timeout=2.0)
+    repo.write(config, expected_revision=config.get("config_revision", 0))
     if indexed:
         try:
             _sync_project_indexes(project_dir, config)
-        except OSError:
+        except (OSError, RevisionConflictError):
             return
         run_indexes.clear_dirty(run_root)
 
@@ -1020,15 +1014,18 @@ def run_doctor(
 
     if rebuild_indexes_flag:
         rebuilt = 0
+        rebuild_failed = False
         messages: list[str] = []
         for diag in result.diagnostics:
             if diag.category == "stale_index" and diag.repairable:
                 ok, msg = service.repair(diag)
                 if ok:
                     rebuilt += 1
+                else:
+                    rebuild_failed = True
                 messages.append(msg)
         return {
-            "ok": result.ok,
+            "ok": result.ok and not rebuild_failed,
             "diagnostics": [
                 {
                     "level": d.level,

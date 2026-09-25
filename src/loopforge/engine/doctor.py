@@ -9,11 +9,14 @@ from pathlib import Path
 from typing import Any
 
 from loopforge.engine.storage import DEFAULT_JSON_STORE
+from loopforge.engine.repositories import ConfigRepository, RegistryRepository, RunRepository, IndexRepository
 from loopforge.engine.recovery import safe_read_json
 from loopforge.engine.projects import registered_projects, load_registry
 from loopforge.engine.indexes import (
     read_run_index,
     rebuild_run_index,
+    mark_dirty,
+    clear_dirty,
     run_index_path,
     dirty_marker_path,
 )
@@ -470,12 +473,14 @@ class DoctorService:
 
         try:
             current_run_id = None
+            mark_dirty(self._store, run_root, timestamp=_utc_now())
             index = rebuild_run_index(
                 self._store,
                 run_root,
                 current_run_id=current_run_id,
                 timestamp=_utc_now(),
             )
+            clear_dirty(run_root)
             return True, f"Index rebuilt for {run_root}: {len(index.get('runs', []))} run(s)"
         except Exception as exc:
             return False, f"Failed to rebuild index for {run_root}: {exc}"
@@ -531,7 +536,14 @@ class DoctorService:
             if file_name == "run.json":
                 data = migrate_run(data)
             data["schema_version"] = target_schema
-            self._store.write_object(path, data)
+            repositories = {
+                "run.json": (RunRepository(path.parent, store=self._store), "run_revision"),
+                "config.json": (ConfigRepository(path.parent, store=self._store), "config_revision"),
+                "registry.json": (RegistryRepository(path, store=self._store), "registry_revision"),
+                "index.json": (IndexRepository(path, store=self._store), "index_revision"),
+            }
+            repository, revision_field = repositories[file_name]
+            repository.write(data, expected_revision=data.get(revision_field, 0))
             return True, f"Migrated {file_name} to schema v{target_schema}"
         except Exception as exc:
             return False, f"Migration failed for {path}: {exc}"
@@ -550,7 +562,9 @@ class DoctorService:
         from loopforge.engine import utc_now as _utc_now
         data["updated_at"] = _utc_now()
         try:
-            self._store.write_object(config_path, data)
+            ConfigRepository(config_path.parent, store=self._store).write(
+                data, expected_revision=data.get("config_revision", 0)
+            )
             return True, f"Reset current_run_id from '{old_run_id}' to None in {config_path}"
         except Exception as exc:
             return False, f"Failed to write config: {exc}"

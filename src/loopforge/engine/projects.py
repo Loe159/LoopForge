@@ -15,6 +15,7 @@ from loopforge.engine.git_state import DEFAULT_GIT_STATE_SERVICE
 from loopforge.engine.path_resolvers import validate_identifier, resolve_confined
 from loopforge.engine.models.schema import CURRENT_REGISTRY_SCHEMA
 from loopforge.engine.recovery import safe_read_json
+from loopforge.engine.locking import LockTimeoutError
 
 logger = logging.getLogger(__name__)
 
@@ -75,16 +76,18 @@ def load_registry(home: Path) -> dict[str, Any]:
     if not isinstance(projects, dict):
         logger.error("Registry schema invalid: projects is not a dict")
         return empty_registry()
-    return {"schema_version": int(CURRENT_REGISTRY_SCHEMA), "registry_version": 1, "projects": projects}
+    return {
+        "schema_version": int(CURRENT_REGISTRY_SCHEMA),
+        "registry_version": 1,
+        "registry_revision": data.get("registry_revision", 0),
+        "projects": projects,
+    }
 
 
 def save_registry(home: Path, registry: dict[str, Any]) -> None:
     from loopforge.engine.repositories import RegistryRepository
-    try:
-        repo = RegistryRepository(registry_path(home), lock_timeout=3.0)
-        repo.write(registry)
-    except Exception:
-        DEFAULT_JSON_STORE.write_object(registry_path(home), registry)
+    repo = RegistryRepository(registry_path(home), lock_timeout=3.0)
+    repo.write(registry, expected_revision=registry.get("registry_revision", 0))
 
 
 def git_branch(project_dir: Path) -> str | None:
@@ -154,6 +157,8 @@ def register_project(
     projects[project_id] = record
     try:
         save_registry(home, registry)
+    except LockTimeoutError:
+        raise
     except OSError:
         # A project remains usable when a locked-down environment cannot host
         # the optional global index; its local identity is still persisted.

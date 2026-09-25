@@ -116,11 +116,8 @@ def rebuild_run_index(
     runs.sort(key=lambda value: str(value.get("updated_at") or value.get("created_at") or ""), reverse=True)
     index = {"schema_version": int(CURRENT_INDEX_SCHEMA), "index_version": RUN_INDEX_VERSION, "updated_at": timestamp, "runs": runs}
     from loopforge.engine.repositories import IndexRepository
-    try:
-        repo = IndexRepository(run_index_path(run_root), store=store, lock_timeout=3.0)
-        repo.write(index)
-    except Exception:
-        store.write_object(run_index_path(run_root), index)
+    repo = IndexRepository(run_index_path(run_root), store=store, lock_timeout=3.0)
+    repo.write(index)
     return index
 
 
@@ -141,9 +138,6 @@ def update_run_index(
     entries.sort(key=lambda value: str(value.get("updated_at") or value.get("created_at") or ""), reverse=True)
     updated = {"schema_version": int(CURRENT_INDEX_SCHEMA), "index_version": RUN_INDEX_VERSION, "updated_at": timestamp, "runs": entries}
     from loopforge.engine.repositories import IndexRepository
-    try:
-        repo = IndexRepository(run_index_path(run_root), store=store, lock_timeout=3.0)
-        repo.write(updated)
-    except Exception:
-        store.write_object(run_index_path(run_root), updated)
+    repo = IndexRepository(run_index_path(run_root), store=store, lock_timeout=3.0)
+    repo.write(updated)
     return updated

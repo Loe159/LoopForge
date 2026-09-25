@@ -50,19 +50,22 @@ class BaseRepository:
         finally:
             self._lock.release()
 
-    def write(self, data: dict[str, Any]) -> None:
-        """Write data to the JSON file under lock, incrementing revision."""
+    def write(self, data: dict[str, Any], *, expected_revision: int | None = None) -> None:
+        """Write under lock, rejecting a stale caller when a revision is supplied."""
         try:
             self._lock.acquire()
         except LockTimeoutError:
             logger.error("Lock timeout writing %s", self._path)
             raise
         try:
-            try:
-                current = self._store.read_object(self._path) if self._path.exists() else {}
-            except (OSError, ValueError):
-                current = {}
-            revision = current.get(self._revision_field, 0) + 1
+            current = self._store.read_object(self._path) if self._path.exists() else {}
+            current_revision = current.get(self._revision_field, 0)
+            if expected_revision is not None and current_revision != expected_revision:
+                raise RevisionConflictError(
+                    f"Stale {self._path}: expected revision {expected_revision}, "
+                    f"got {current_revision}"
+                )
+            revision = current_revision + 1
             data[self._revision_field] = revision
             self._store.write_object(self._path, data)
         finally:

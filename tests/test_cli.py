@@ -346,6 +346,7 @@ class CliTests(unittest.TestCase):
                     "created_at",
                     "updated_at",
                     "schema_version",
+                    "config_revision",
                 },
             )
             self.assertEqual(config["project_name"], repo.name)

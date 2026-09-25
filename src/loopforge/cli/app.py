@@ -15,6 +15,9 @@ import traceback
 from typing import Any, Sequence
 
 from loopforge.cli.context import CliContext
+from loopforge.cli.errors import persistence_error
+from loopforge.engine.locking import LockTimeoutError
+from loopforge.engine.repositories import RevisionConflictError
 from loopforge.cli.workflow import (
     ContinueCommandHandler,
     LearnCommandHandler,
@@ -492,6 +495,9 @@ class ProjectCommandHandler:
                 items.append((d["category"], f"[{d['level']}] {d['message']}"))
             if result.get("rebuilt_indexes", 0) > 0:
                 items.append(("rebuilt", f"{result['rebuilt_indexes']} index(es) rebuilt"))
+            for message in result.get("rebuild_messages", []):
+                if message.startswith("Failed to rebuild index"):
+                    items.append(("repair", message))
             next_cmd = (
                 "loopforge doctor --rebuild-indexes"
                 if result.get("repairs_available", 0) > 0 and not args.rebuild_indexes
@@ -688,6 +694,10 @@ class LoopForgeCli:
         except self.api.CliError as error:
             self.api.render_cli_error(error, options)
             return error.exit_code
+        except (LockTimeoutError, RevisionConflictError) as error:
+            cli_error = persistence_error(error)
+            self.api.render_cli_error(cli_error, options)
+            return cli_error.exit_code
         except SystemExit as error:
             return int(error.code) if isinstance(error.code, int) else 2
         except Exception as error:  # pragma: no cover - defensive top-level guard.
