@@ -22,6 +22,14 @@ from loopforge.engine.repositories import (
     RevisionConflictError,
 )
 from loopforge.engine.storage import JsonStore
+from loopforge.engine import persist_run_json, persist_project_config, rebuild_indexes, run_doctor
+from loopforge.engine.projects import empty_registry, load_registry, save_registry, registry_path
+from loopforge.engine.projects import register_project
+from loopforge.engine.doctor import DoctorService
+from loopforge.engine.indexes import (
+    dirty_marker_path, mark_dirty, read_run_index, rebuild_run_index, run_index_path,
+    update_run_index,
+)
 
 _WIN = sys.platform == "win32"
 
@@ -686,6 +694,321 @@ class TestConcurrentRunUpdates(unittest.TestCase):
         self.assertEqual(errors, [])
         final = repo.read()
         self.assertEqual(final["counter"], threads_count)
+
+
+class TestAuthoritativePersistence(unittest.TestCase):
+    def setUp(self):
+        self.temp = TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.project = self.root / "project"
+        self.project.mkdir()
+        self.config_path = self.project / ".loopforge" / "config.json"
+        self.config_path.parent.mkdir()
+        self.run_root = self.root / "home" / "projects" / "project-test" / "runs"
+        self.run_root.mkdir(parents=True)
+        self.config = {
+            "project_id": "project-test", "project_name": "test", "profile": "guided",
+            "run_root": str(self.run_root), "current_run_id": "run-test",
+            "default_adapter": "manual", "default_adapter_args": [],
+        }
+        self.config_path.write_text(json.dumps(self.config), encoding="utf-8")
+        self.run_path = self.run_root / "run-test" / "run.json"
+        self.run_path.parent.mkdir()
+        self.run_path.write_text(json.dumps({"run_id": "run-test", "task": "original"}), encoding="utf-8")
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def test_run_lock_timeout_does_not_write_unlocked(self):
+        with mock.patch.object(RunRepository, "write", side_effect=LockTimeoutError("busy")):
+            with self.assertRaises(LockTimeoutError):
+                persist_run_json(self.project, self.run_path, {"run_id": "run-test", "task": "new"})
+        self.assertEqual(json.loads(self.run_path.read_text())["task"], "original")
+
+    def test_index_failure_does_not_bypass_run_lock(self):
+        with mock.patch("loopforge.engine.run_indexes.mark_dirty", side_effect=OSError("index unavailable")):
+            with mock.patch.object(RunRepository, "write", side_effect=LockTimeoutError("busy")):
+                with self.assertRaises(LockTimeoutError):
+                    persist_run_json(self.project, self.run_path, {"run_id": "run-test", "task": "new"})
+        self.assertEqual(json.loads(self.run_path.read_text())["task"], "original")
+
+    def test_config_lock_timeout_does_not_write_unlocked(self):
+        with mock.patch.object(ConfigRepository, "write", side_effect=LockTimeoutError("busy")):
+            with self.assertRaises(LockTimeoutError):
+                persist_project_config(self.project, self.config_path, {**self.config, "profile": "strict"})
+        self.assertEqual(json.loads(self.config_path.read_text())["profile"], "guided")
+
+    def test_registry_lock_timeout_does_not_write_unlocked(self):
+        home = self.root / "home"
+        registry = empty_registry()
+        registry["projects"]["project-test"] = {"name": "original"}
+        save_registry(home, registry)
+        with mock.patch.object(RegistryRepository, "write", side_effect=LockTimeoutError("busy")):
+            with self.assertRaises(LockTimeoutError):
+                save_registry(home, {**registry, "projects": {"project-test": {"name": "new"}}})
+        self.assertEqual(json.loads(registry_path(home).read_text())["projects"]["project-test"]["name"], "original")
+
+    def test_run_stale_revision_is_rejected(self):
+        repo = RunRepository(self.run_path.parent)
+        stale = repo.read()
+        repo.write({**stale, "task": "newer"})
+        with self.assertRaises(RevisionConflictError):
+            persist_run_json(self.project, self.run_path, {**stale, "task": "stale"})
+        self.assertEqual(repo.read()["task"], "newer")
+
+    def test_config_stale_revision_is_rejected(self):
+        repo = ConfigRepository(self.config_path.parent)
+        stale = repo.read()
+        repo.write({**stale, "profile": "newer"})
+        with self.assertRaises(RevisionConflictError):
+            persist_project_config(self.project, self.config_path, {**stale, "profile": "stale"})
+        self.assertEqual(repo.read()["profile"], "newer")
+
+    def test_shell_reports_lock_timeout_as_recoverable(self):
+        import io
+        from loopforge.cli.interactive import InteractiveShell
+
+        output = io.StringIO()
+        shell = InteractiveShell(self.project, output=output, error=output)
+        with mock.patch("loopforge.cli.interactive.set_default_adapter", side_effect=LockTimeoutError("busy")):
+            result = shell.dispatch(f"/adapter {shell.selected_adapter}")
+        self.assertEqual(result.exit_code, 1)
+        self.assertIn("Retry", output.getvalue())
+
+    def test_cli_reports_revision_conflict_as_recoverable(self):
+        import contextlib
+        import io
+        from loopforge.cli import main
+
+        output = io.StringIO()
+        with mock.patch("loopforge.cli.app.LoopForgeCli._dispatch", side_effect=RevisionConflictError("stale")):
+            with contextlib.redirect_stderr(output):
+                code = main(["--plain", "status"])
+        self.assertEqual(code, 1)
+        self.assertIn("LF_REVISION_CONFLICT", output.getvalue())
+
+    def test_tui_shell_action_reports_lock_timeout(self):
+        import io
+        from types import SimpleNamespace
+        from loopforge.cli.interactive import InteractiveShell
+        from loopforge.cli.textual_app.app import LoopForgeApp
+
+        shell = InteractiveShell(self.project, output=io.StringIO(), error=io.StringIO())
+        context = SimpleNamespace(shell=shell)
+        result = LoopForgeApp._capture_shell_result(
+            context, lambda: (_ for _ in ()).throw(LockTimeoutError("busy"))
+        )
+        self.assertEqual(result.exit_code, 1)
+        self.assertIn("Retry", result.message)
+
+    def test_registry_stale_revision_is_rejected(self):
+        home = self.root / "home"
+        registry = empty_registry()
+        save_registry(home, registry)
+        stale = load_registry(home)
+        newer = load_registry(home)
+        newer["projects"]["project-test"] = {"name": "newer"}
+        save_registry(home, newer)
+        stale["projects"]["project-test"] = {"name": "stale"}
+        with self.assertRaises(RevisionConflictError):
+            save_registry(home, stale)
+        self.assertEqual(load_registry(home)["projects"]["project-test"]["name"], "newer")
+
+
+class TestDoctorAuthoritativeRepairs(unittest.TestCase):
+    def setUp(self):
+        self.temp = TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.home = self.root / "home"
+        self.project = self.root / "project"
+        self.project.mkdir()
+        self.service = DoctorService(home=self.home, project_dir=self.project)
+        self.paths = {
+            "run.json": self.home / "projects" / "project-test" / "runs" / "run-test" / "run.json",
+            "config.json": self.project / ".loopforge" / "config.json",
+            "registry.json": registry_path(self.home),
+            "index.json": self.home / "projects" / "project-test" / "runs" / "index.json",
+        }
+        self.repositories = {
+            "run.json": (RunRepository, "run_revision"),
+            "config.json": (ConfigRepository, "config_revision"),
+            "registry.json": (RegistryRepository, "registry_revision"),
+            "index.json": (IndexRepository, "index_revision"),
+        }
+        for name, path in self.paths.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            data = {"schema_version": 1, "value": "original", "current_run_id": "missing-run"}
+            if name == "registry.json":
+                data["projects"] = {}
+            path.write_text(json.dumps(data), encoding="utf-8")
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def _repository(self, name, *, lock_timeout=5.0):
+        constructor, _ = self.repositories[name]
+        path = self.paths[name]
+        if name in {"registry.json", "index.json"}:
+            return constructor(path, lock_timeout=lock_timeout)
+        return constructor(path.parent, lock_timeout=lock_timeout)
+
+    def test_schema_repairs_refuse_held_locks(self):
+        for name, path in self.paths.items():
+            with self.subTest(name=name):
+                repository = self._repository(name, lock_timeout=0.01)
+                with FileLock(path, timeout=1.0):
+                    with mock.patch(f"loopforge.engine.doctor.{type(repository).__name__}",
+                                    return_value=repository):
+                        ok, message = self.service._repair_schema_migration(str(path))
+                self.assertFalse(ok, message)
+                self.assertIn("lock", message.lower())
+                self.assertEqual(json.loads(path.read_text())["schema_version"], 1)
+
+    def test_current_run_repair_refuses_held_lock(self):
+        path = self.paths["config.json"]
+        repository = self._repository("config.json", lock_timeout=0.01)
+        with FileLock(path, timeout=1.0):
+            with mock.patch("loopforge.engine.doctor.ConfigRepository", return_value=repository):
+                ok, message = self.service._repair_current_run_id(str(path))
+        self.assertFalse(ok, message)
+        self.assertIn("lock", message.lower())
+        self.assertEqual(json.loads(path.read_text())["current_run_id"], "missing-run")
+
+    def test_schema_repairs_reject_stale_revision(self):
+        for name, path in self.paths.items():
+            with self.subTest(name=name):
+                self._assert_stale_repair_preserves_newer_value(
+                    name, lambda: self.service._repair_schema_migration(str(path))
+                )
+
+    def test_current_run_repair_rejects_stale_revision(self):
+        self._assert_stale_repair_preserves_newer_value(
+            "config.json", lambda: self.service._repair_current_run_id(str(self.paths["config.json"]))
+        )
+
+    def test_repairs_increment_authoritative_revisions(self):
+        for name, path in self.paths.items():
+            with self.subTest(name=name):
+                ok, message = self.service._repair_schema_migration(str(path))
+                self.assertTrue(ok, message)
+                data = json.loads(path.read_text())
+                self.assertEqual(data["schema_version"], 2)
+                self.assertEqual(data[self.repositories[name][1]], 1)
+
+        config_path = self.paths["config.json"]
+        ok, message = self.service._repair_current_run_id(str(config_path))
+        self.assertTrue(ok, message)
+        config = json.loads(config_path.read_text())
+        self.assertIsNone(config["current_run_id"])
+        self.assertEqual(config["config_revision"], 2)
+
+    def _assert_stale_repair_preserves_newer_value(self, name, repair):
+        path = self.paths[name]
+        snapshot = json.loads(path.read_text())
+
+        def concurrent_update(_store, read_path):
+            self.assertEqual(read_path, path)
+            self._repository(name).write({**snapshot, "value": "newer"}, expected_revision=0)
+            return snapshot, None
+
+        with mock.patch("loopforge.engine.doctor.safe_read_json", side_effect=concurrent_update):
+            ok, message = repair()
+        self.assertFalse(ok, message)
+        self.assertIn("revision", message.lower())
+        self.assertEqual(json.loads(path.read_text())["value"], "newer")
+
+    def test_registration_refuses_registry_lock_timeout(self):
+        path = self.paths["registry.json"]
+        original = path.read_text()
+        short_timeout_repo = RegistryRepository(path, lock_timeout=0.01)
+        config = {"project_id": "project-test", "project_name": "test"}
+        with FileLock(path, timeout=1.0):
+            with mock.patch("loopforge.engine.repositories.RegistryRepository",
+                            return_value=short_timeout_repo):
+                with self.assertRaises(LockTimeoutError):
+                    register_project(self.project, config, self.home)
+        self.assertEqual(path.read_text(), original)
+
+
+class TestIndexLockFailures(unittest.TestCase):
+    def setUp(self):
+        self.temp = TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.project = self.root / "project"
+        self.project.mkdir()
+        self.home = self.root / "home"
+        self.run_root = self.home / "projects" / "project-test" / "runs"
+        self.run_dir = self.run_root / "run-test"
+        self.run_dir.mkdir(parents=True)
+        self.run_path = self.run_dir / "run.json"
+        self.run_path.write_text(json.dumps({"run_id": "run-test", "task": "original"}), encoding="utf-8")
+        self.config_path = self.project / ".loopforge" / "config.json"
+        self.config_path.parent.mkdir()
+        self.config = {"project_id": "project-test", "project_name": "test",
+                       "profile": "guided", "run_root": str(self.run_root),
+                       "current_run_id": "run-test", "default_adapter": "manual",
+                       "default_adapter_args": []}
+        self.config_path.write_text(json.dumps(self.config), encoding="utf-8")
+        self.store = JsonStore()
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def test_rebuild_and_update_never_write_index_after_lock_timeout(self):
+        index_path = run_index_path(self.run_root)
+        original = {"schema_version": 2, "index_version": 1, "runs": [], "sentinel": "original"}
+        self.store.write_object(index_path, original)
+
+        with mock.patch.object(IndexRepository, "write", side_effect=LockTimeoutError("busy")):
+            with self.assertRaises(LockTimeoutError):
+                rebuild_run_index(self.store, self.run_root, current_run_id=None, timestamp="now")
+            self.assertEqual(self.store.read_object(index_path), original)
+            with self.assertRaises(LockTimeoutError):
+                update_run_index(self.store, self.run_root, run_path=self.run_dir,
+                                 run={"run_id": "run-test"}, current_run_id=None, timestamp="now")
+        self.assertEqual(self.store.read_object(index_path), original)
+
+    def test_authoritative_writes_keep_dirty_marker_when_index_lock_times_out(self):
+        with mock.patch.object(IndexRepository, "write", side_effect=LockTimeoutError("busy")):
+            persist_run_json(self.project, self.run_path, {"run_id": "run-test", "task": "newer"})
+        self.assertEqual(json.loads(self.run_path.read_text())["task"], "newer")
+        self.assertTrue(dirty_marker_path(self.run_root).exists())
+        self.assertIsNone(read_run_index(self.store, self.run_root))
+
+        with mock.patch.object(IndexRepository, "write", side_effect=LockTimeoutError("busy")):
+            persist_project_config(self.project, self.config_path, {**self.config, "profile": "strict"})
+        self.assertEqual(json.loads(self.config_path.read_text())["profile"], "strict")
+        self.assertTrue(dirty_marker_path(self.run_root).exists())
+
+    def test_rebuild_indexes_reports_failure_and_keeps_dirty_marker(self):
+        with mock.patch.object(IndexRepository, "write", side_effect=LockTimeoutError("busy")):
+            result = rebuild_indexes(self.project)
+        self.assertFalse(result.ok)
+        self.assertIn("busy", result.blockers[0])
+        self.assertTrue(dirty_marker_path(self.run_root).exists())
+
+    def test_doctor_rebuild_failure_is_reported_by_api_and_cli(self):
+        import contextlib
+        import io
+        from loopforge.cli import main
+
+        mark_dirty(self.store, self.run_root, timestamp="now")
+        with mock.patch.object(IndexRepository, "write", side_effect=LockTimeoutError("busy")):
+            with mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(self.home)}):
+                result = run_doctor(rebuild_indexes_flag=True)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["rebuilt_indexes"], 0)
+            self.assertIn("Failed to rebuild index", result["rebuild_messages"][0])
+            self.assertTrue(dirty_marker_path(self.run_root).exists())
+
+            output = io.StringIO()
+            with mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(self.home)}):
+                with mock.patch("loopforge.cli.app.Path.cwd", return_value=self.project):
+                    with contextlib.redirect_stdout(output):
+                        code = main(["--plain", "doctor", "--rebuild-indexes"])
+        self.assertEqual(code, 1)
+        self.assertIn("Failed to rebuild index", output.getvalue())
+        self.assertTrue(dirty_marker_path(self.run_root).exists())
 
 
 if __name__ == "__main__":

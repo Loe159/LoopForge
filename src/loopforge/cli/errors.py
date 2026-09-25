@@ -33,3 +33,23 @@ class CliUsageError(CliError):
 
 class CliRuntimeError(CliError):
     pass
+
+
+def persistence_error(error: Exception) -> CliRuntimeError:
+    """Turn an authoritative write refusal into a recoverable command error."""
+
+    from loopforge.engine.locking import LockTimeoutError
+
+    if isinstance(error, LockTimeoutError):
+        return CliRuntimeError(
+            "LF_STORAGE_BUSY",
+            "LoopForge data is busy",
+            str(error),
+            fix="Retry the command after the other operation finishes.",
+        )
+    return CliRuntimeError(
+        "LF_REVISION_CONFLICT",
+        "LoopForge data changed",
+        str(error),
+        fix="Inspect the current status and retry the command.",
+    )

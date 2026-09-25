@@ -11,6 +11,7 @@ from loopforge.engine.path_resolvers import resolve_run_dir, validate_identifier
 from loopforge.engine.storage import DEFAULT_JSON_STORE
 from loopforge.engine.models.schema import CURRENT_CONFIG_SCHEMA
 from loopforge.engine.models.scope import ActionScope
+from loopforge.engine.repositories import ConfigRepository
 
 
 @dataclass(frozen=True)
@@ -161,7 +162,6 @@ def initialize_project(
         loopforge_home,
         project_config_path,
         read_json,
-        write_json_atomic,
     )
 
     if profile is None:
@@ -195,7 +195,9 @@ def initialize_project(
             config["run_root"] = str(target_root)
             repaired = True
         if repaired:
-            write_json_atomic(config_path, config)
+            ConfigRepository(config_path.parent).write(
+                config, expected_revision=config.get("config_revision", 0)
+            )
         registration = project_registry.register_project(project_dir, config, home_root)
         if migrated_run_root is not None:
             try:
@@ -213,7 +215,7 @@ def initialize_project(
         )
 
     config = new_config(project_dir, profile=profile, home=home)
-    write_json_atomic(config_path, config)
+    ConfigRepository(config_path.parent).write(config, expected_revision=0)
     registration = project_registry.register_project(project_dir, config, loopforge_home(home=home))
     return InitResult(
         project_dir=project_dir,
@@ -234,7 +236,7 @@ def open_project(
 ) -> OpenProjectResult:
     """Open or register a project, requiring an explicit duplicate-id decision."""
 
-    from loopforge.engine import loopforge_home, write_json_atomic
+    from loopforge.engine import loopforge_home
 
     home_root = loopforge_home(home=home)
     target: Path | None = current_project_dir.resolve()
@@ -284,7 +286,9 @@ def open_project(
             )
         elif identity_resolution == "clone":
             config = project_registry.regenerate_project_identity(target, result.config, home_root)
-            write_json_atomic(result.config_path, config)
+            ConfigRepository(result.config_path.parent).write(
+                config, expected_revision=config.get("config_revision", 0)
+            )
             registration = project_registry.register_project(target, config, home_root)
             result = InitResult(
                 result.project_dir,

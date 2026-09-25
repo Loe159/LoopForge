@@ -59,6 +59,9 @@ from loopforge.engine import (
     user_preferences,
 )
 from loopforge.engine.git_state import DEFAULT_GIT_STATE_SERVICE
+from loopforge.engine.locking import LockTimeoutError
+from loopforge.engine.repositories import RevisionConflictError
+from loopforge.cli.errors import persistence_error
 from loopforge.cli.actions import ActionDescriptor, action_descriptors, primary_action
 from loopforge.cli.ui import (
     TerminalRenderer,
@@ -269,6 +272,16 @@ class InteractiveShell:
         print(message, file=stream)
 
     def dispatch(self, raw_line: str) -> DispatchResult:
+        try:
+            return self._dispatch(raw_line)
+        except (LockTimeoutError, RevisionConflictError) as error:
+            refusal = persistence_error(error)
+            self.write(f"{refusal.title}: {refusal.detail}", error=True)
+            if refusal.fix:
+                self.write(refusal.fix, error=True)
+            return DispatchResult(refusal.exit_code)
+
+    def _dispatch(self, raw_line: str) -> DispatchResult:
         line = raw_line.strip()
         if not line:
             return DispatchResult(0)

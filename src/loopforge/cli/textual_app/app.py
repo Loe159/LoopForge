@@ -22,6 +22,9 @@ from textual.widgets import Collapsible, Footer, Header, Input, Static
 
 from loopforge import __version__
 from loopforge.cli.actions import ActionDescriptor
+from loopforge.cli.errors import persistence_error
+from loopforge.engine.locking import LockTimeoutError
+from loopforge.engine.repositories import RevisionConflictError
 from loopforge.cli.evidence import EvidenceIndex, EvidenceItem, approval_summary
 from loopforge.cli.models import UiSnapshot
 from loopforge.cli.operations import OperationController
@@ -857,6 +860,12 @@ class LoopForgeApp(App[None]):
         self.shell.renderer = TerminalRenderer(captured, mode="plain", theme=self.shell.theme)
         try:
             result = runner()
+        except (LockTimeoutError, RevisionConflictError) as error:
+            refusal = persistence_error(error)
+            captured.write(f"{refusal.title}: {refusal.detail}\n")
+            if refusal.fix:
+                captured.write(refusal.fix)
+            result = SimpleNamespace(exit_code=refusal.exit_code, should_exit=False)
         finally:
             self.shell.output = original_output
             self.shell.error = original_error
