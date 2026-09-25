@@ -24,6 +24,7 @@ from loopforge.engine.lifecycle import (
     StageStatus,
 )
 from loopforge.engine.models.migrations import migrate_run
+from loopforge.engine.patch_integrity import patch_integrity_blockers
 
 logger = logging.getLogger(__name__)
 
@@ -325,6 +326,27 @@ def revoke_verification_review_authority(
         "reasons": [reason],
     }
     normalized.pop("publication", None)
+    return normalized
+
+
+def invalidate_verification_patch_authority(
+    run: dict[str, Any], *, reason: str
+) -> dict[str, Any]:
+    """Revoke review and draft state when retained verification bytes are stale."""
+    from loopforge.engine import VERIFICATION_FAILED
+
+    normalized = revoke_verification_review_authority(run, reason=reason)
+    normalized["current_stage"] = RunStage.VERIFICATION_BLOCKED.value
+    normalized["stage_statuses"]["verification"] = StageStatus.BLOCKED.value
+    normalized["status"] = VERIFICATION_FAILED
+    normalized["blockers"] = [reason]
+    verification = normalized.get("verification")
+    if isinstance(verification, dict):
+        verification["status"] = "failed"
+        verification["blockers"] = [reason]
+    artifacts = normalized.get("artifacts")
+    if isinstance(artifacts, dict):
+        artifacts.pop("draft_publication", None)
     return normalized
 
 
@@ -757,6 +779,13 @@ def approve_review(
     ):
         blockers.append(
             "review approval requires a valid verification patch sha256 for the current candidate."
+        )
+    if candidate_revision > 0 or (isinstance(patch, dict) and patch.get("generated")):
+        blockers.extend(
+            f"review approval requires {reason}"
+            for reason in patch_integrity_blockers(
+                status.run_dir, patch if isinstance(patch, dict) else {}
+            )
         )
     if statuses.get("review") == "approved":
         blockers.append("review approval has already been recorded.")
