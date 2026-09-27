@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import os
 import queue
+import select
 import signal
 import subprocess
+import sys
 import threading
 import time
 from collections import deque
@@ -103,6 +105,7 @@ class ProcessRunner:
         stdin_data: str | None = None,
         cancel_event: Event | None = None,
         timeout: float | None = None,
+        supervise_descendants: bool = False,
     ) -> ProcessReceipt:
         """Execute a subprocess with output bounding and tree termination."""
         started_at = time.time()
@@ -177,6 +180,36 @@ class ProcessRunner:
             "stderr": subprocess.PIPE,
             "shell": False,
         }
+        report_reader: int | None = None
+        report_writer: int | None = None
+        windows_job: Any | None = None
+        if supervise_descendants and sys.platform == "linux":
+            report_reader, report_writer = os.pipe()
+            popen_kwargs["args"] = [
+                sys.executable,
+                "-I",
+                str(Path(__file__).with_name("process_supervisor.py")),
+                str(report_writer),
+                *exact_command,
+            ]
+            popen_kwargs["pass_fds"] = (report_writer,)
+        elif supervise_descendants and _is_windows():
+            try:
+                from loopforge.engine.terminal import _WindowsJob
+
+                windows_job = _WindowsJob.create()
+            except OSError as exc:
+                if stdin_reader is not None:
+                    os.close(stdin_reader)
+                if stdin_writer is not None:
+                    os.close(stdin_writer)
+                return ProcessReceipt(
+                    completed=False,
+                    stderr=f"Windows Job supervision unavailable: {exc}",
+                    started_at=started_at,
+                    finished_at=time.time(),
+                    issue="launch_failure",
+                )
         if _is_posix():
             popen_kwargs["preexec_fn"] = os.setsid
         elif _is_windows():
@@ -187,6 +220,10 @@ class ProcessRunner:
         except OSError as exc:
             if stdin_writer is not None:
                 os.close(stdin_writer)
+            if report_reader is not None:
+                os.close(report_reader)
+            if windows_job is not None:
+                windows_job.close()
             return ProcessReceipt(
                 completed=False,
                 stdout="",
@@ -198,8 +235,35 @@ class ProcessRunner:
         finally:
             if stdin_reader is not None:
                 os.close(stdin_reader)
+            if report_writer is not None:
+                os.close(report_writer)
 
         pid = process.pid
+        if windows_job is not None:
+            try:
+                windows_job.assign(process)
+            except OSError as exc:
+                _kill_tree(pid, None)
+                try:
+                    process.wait(timeout=5)
+                except (OSError, subprocess.TimeoutExpired):
+                    process.kill()
+                    process.wait()
+                if process.stdout is not None:
+                    process.stdout.close()
+                if process.stderr is not None:
+                    process.stderr.close()
+                windows_job.close()
+                if stdin_writer is not None:
+                    os.close(stdin_writer)
+                return ProcessReceipt(
+                    completed=False,
+                    stderr=f"Windows Job assignment failed: {exc}",
+                    started_at=started_at,
+                    finished_at=time.time(),
+                    pid=pid,
+                    issue="children_unverified",
+                )
         # setsid() ran in the child before Popen returned. Its PID is the
         # group ID even if it exits before we begin collecting output.
         pgid = pid if _is_posix() else None
@@ -219,6 +283,10 @@ class ProcessRunner:
             windows_cancel_api=windows_cancel_api,
             output_limit_bytes=self._output_limit_bytes,
             spool_dir=self._spool_dir,
+            report_fd=report_reader,
+            supervised=report_reader is not None,
+            supervision_requested=supervise_descendants,
+            windows_job=windows_job,
         )
 
 
@@ -235,6 +303,10 @@ def _collect_output(
     windows_cancel_api: Any | None = None,
     output_limit_bytes: int = 1_000_000,
     spool_dir: Path | None = None,
+    report_fd: int | None = None,
+    supervised: bool = False,
+    supervision_requested: bool = False,
+    windows_job: Any | None = None,
 ) -> ProcessReceipt:
     assert process.stdout is not None
     assert process.stderr is not None
@@ -260,6 +332,9 @@ def _collect_output(
 
     events: queue.Queue[tuple[str, bytes | None]] = queue.Queue(maxsize=32)
     stopped = threading.Event()
+    capture_failed = threading.Event()
+    capture_errors: list[str] = []
+    capture_errors_lock = threading.Lock()
 
     def _ring_append(coll: deque[bytes], chunk: bytes, held: int) -> tuple[int, int]:
         coll.append(chunk)
@@ -271,12 +346,23 @@ def _collect_output(
 
     def pump(name: str, stream: Any) -> None:
         try:
+            poller = None
+            if _is_posix():
+                # poll has no FD_SETSIZE ceiling; select.select silently loses
+                # capture when the caller already has many descriptors open.
+                poller = select.poll()
+                poller.register(stream.fileno(), select.POLLIN | select.POLLHUP | select.POLLERR)
             while not stopped.is_set():
-                chunk = (
-                    stream.read1(4096)
-                    if hasattr(stream, "read1")
-                    else stream.read(4096)
-                )
+                if poller is not None:
+                    if not poller.poll(50):
+                        continue
+                    chunk = os.read(stream.fileno(), 4096)
+                else:
+                    chunk = (
+                        stream.read1(4096)
+                        if hasattr(stream, "read1")
+                        else stream.read(4096)
+                    )
                 if not chunk:
                     break
                 while not stopped.is_set():
@@ -285,8 +371,11 @@ def _collect_output(
                         break
                     except queue.Full:
                         continue
-        except (OSError, ValueError):
-            pass
+        except (OSError, ValueError, AttributeError) as error:
+            if not stopped.is_set():
+                with capture_errors_lock:
+                    capture_errors.append(f"{name} capture failed: {error}")
+                capture_failed.set()
         finally:
             while not stopped.is_set():
                 try:
@@ -368,6 +457,8 @@ def _collect_output(
         return False
 
     while active_streams and not (timed_out or kill_requested):
+        if capture_failed.is_set():
+            break
         if _check_cancel():
             cancelled = True
             kill_requested = True
@@ -395,6 +486,8 @@ def _collect_output(
 
     if not timed_out and not output_limit_exceeded and not kill_requested:
         while returncode is None:
+            if capture_failed.is_set():
+                break
             if _check_cancel():
                 cancelled = True
                 kill_requested = True
@@ -424,33 +517,50 @@ def _collect_output(
                 break
             stdin_thread.join(timeout=min(remaining, 0.05))
 
-    if timed_out or output_limit_exceeded or kill_requested:
+    if timed_out or output_limit_exceeded or kill_requested or capture_failed.is_set():
         stopped.set()
         if windows_cancel_api is not None:
             with writer_handle_lock:
                 if writer_handle:
                     _cancel_windows_writer(writer_handle, windows_cancel_api)
-        _kill_tree(pid, pgid)
+        if windows_job is not None:
+            try:
+                windows_job.terminate()
+            except OSError:
+                _kill_tree(pid, pgid)
+        elif supervised and pid is not None:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        else:
+            _kill_tree(pid, pgid)
         kill_requested = True
         try:
-            returncode = process.wait(timeout=5)
+            returncode = process.wait(timeout=3 if supervised else 5)
         except (OSError, subprocess.TimeoutExpired):
-            pass
+            if supervised:
+                _kill_tree(pid, pgid)
+                try:
+                    returncode = process.wait(timeout=2)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
 
     if process.poll() is not None and returncode is None:
         returncode = process.returncode
 
     stopped.set()
-    try:
-        process.stdout.close()
-    except OSError:
-        pass
-    try:
-        process.stderr.close()
-    except OSError:
-        pass
     for thread in threads:
-        thread.join(timeout=3)
+        thread.join(timeout=0.2)
+    # BufferedReader.close() can block behind a concurrent read. Never close
+    # until its pump has released the stream lock; POSIX pumps use select so a
+    # descendant retaining stdout cannot hold the caller past its deadline.
+    for thread, stream in zip(threads, (process.stdout, process.stderr)):
+        if not thread.is_alive():
+            try:
+                stream.close()
+            except OSError:
+                pass
     if stdin_thread is not None:
         if windows_cancel_api is not None:
             cleanup_deadline = time.monotonic() + 0.2
@@ -466,13 +576,44 @@ def _collect_output(
             stdin_thread.join()
 
     finished_at = time.time()
-    children_terminated = _verify_no_descendants(pid)
+    supervision_diagnostic = ""
+    if windows_job is not None:
+        windows_job.close()
+        # A child can spawn between CreateProcess and AssignProcessToJobObject.
+        # The Job improves cleanup, but cannot prove that no child escaped.
+        supervision_diagnostic = "Windows Job assignment race prevents descendant verification"
+    if report_fd is not None:
+        try:
+            report = os.read(report_fd, 512).decode("utf-8", "replace").strip()
+            children_terminated = report.startswith("clean:")
+            if children_terminated and not kill_requested:
+                try:
+                    returncode = int(report.partition(":")[2])
+                except ValueError:
+                    children_terminated = False
+                    report = "unverified:invalid supervisor exit status"
+            if not children_terminated:
+                supervision_diagnostic = report or "supervisor ended without a cleanup report"
+        except OSError as error:
+            supervision_diagnostic = f"supervisor report unavailable: {error}"
+        finally:
+            os.close(report_fd)
+    elif supervision_requested and not supervision_diagnostic:
+        supervision_diagnostic = "descendant supervision unavailable on this platform"
+    else:
+        children_terminated = _verify_no_descendants(pid)
 
     stdout_str = b"".join(stdout_chunks).decode("utf-8", errors="replace")
     stderr_str = b"".join(stderr_chunks).decode("utf-8", errors="replace")
     output_truncated = output_limit_exceeded
 
-    if stdin_cleanup_failed:
+    if supervision_diagnostic:
+        issue = "children_unverified"
+        stderr_str += f"\n{supervision_diagnostic}"
+    elif capture_failed.is_set():
+        issue = "output_capture_failure"
+        stderr_str += "\n" + "; ".join(capture_errors)
+    elif stdin_cleanup_failed:
         issue = "stdin_cleanup_failure"
         stderr_str += "\nstdin writer remained active after cancellation"
     elif stdin_delivery_failed:
@@ -516,6 +657,8 @@ def _collect_output(
             and not kill_requested
             and not stdin_cleanup_failed
             and not stdin_delivery_failed
+            and not capture_failed.is_set()
+            and not supervision_diagnostic
             and returncode == 0
         ),
         timed_out=timed_out,
@@ -561,24 +704,7 @@ def _kill_tree(pid: int | None, pgid: int | None) -> None:
 
 
 def _verify_no_descendants(pid: int | None) -> bool:
-    if pid is None:
-        return True
-    if _is_posix():
-        try:
-            os.waitpid(pid, os.WNOHANG)
-        except OSError:
-            pass
-        return True
-    if _is_windows():
-        try:
-            result = subprocess.run(
-                ["tasklist", "/FI", f"PID eq {pid}"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-                check=False,
-            )
-            return str(pid) not in result.stdout
-        except (OSError, subprocess.TimeoutExpired):
-            return True
-    return True
+    # A missing original PID proves nothing about children that changed their
+    # session or were reparented. Only the subreaper's report can certify that
+    # all descendants have gone.
+    return False

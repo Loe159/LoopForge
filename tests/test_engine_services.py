@@ -5,6 +5,8 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -36,6 +38,7 @@ from loopforge.engine.metrics import MetricsService
 from loopforge.engine.packs import PackRegistry, PackTrustStore, pack_trust_store
 from loopforge.engine.storage import JsonStore
 from loopforge.engine.git_state import GitStateService
+from loopforge.engine.adapter_runtime import run_pack_check
 
 
 class JsonStoreTests(unittest.TestCase):
@@ -1275,6 +1278,405 @@ class ArchiveRunTests(unittest.TestCase):
             assert changed is not None
             self.assertEqual(changed.revision, 2)
             self.assertNotEqual(changed.run_id, "wrong-run-id")
+
+
+class PackCheckRuntimeTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "linux", "Linux high file descriptor capture")
+    def test_check_output_is_captured_above_fd_setsize(self) -> None:
+        import resource
+
+        if resource.getrlimit(resource.RLIMIT_NOFILE)[1] < 2048:
+            self.skipTest("hard file descriptor limit below 2048")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            script = (
+                "import json,os,resource,sys; from pathlib import Path; "
+                "from loopforge.engine.adapter_runtime import run_pack_check; "
+                "resource.setrlimit(resource.RLIMIT_NOFILE,(2048,resource.getrlimit(resource.RLIMIT_NOFILE)[1])); "
+                "fds=[os.open(os.devnull,os.O_RDONLY) for _ in range(1100)]; "
+                "r=run_pack_check({'name':'high-fd','command':[sys.executable,'-c',\"print('expected-output')\"], "
+                "'timeout_seconds':5},project_dir=Path(sys.argv[1]),run_dir=Path(sys.argv[1]),patch_path=None); "
+                "print(json.dumps(r))"
+            )
+            completed = subprocess.run(
+                [sys.executable, "-c", script, str(root)],
+                cwd=Path.cwd(), env={**os.environ, "PYTHONPATH": "src"},
+                capture_output=True, text=True, timeout=12, check=True,
+            )
+            result = json.loads(completed.stdout)
+            self.assertEqual(result["status"], "passed", result)
+            self.assertEqual(result["stdout"].strip(), "expected-output")
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux RLIMIT_NOFILE supervision")
+    def test_many_detached_children_under_low_file_limit_are_all_terminated(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            marker_dir = root / "markers"
+            marker_dir.mkdir()
+            ready = root / "ready.txt"
+            script = (
+                "import json,resource,sys; from pathlib import Path; "
+                "from loopforge.engine.adapter_runtime import run_pack_check; "
+                "resource.setrlimit(resource.RLIMIT_NOFILE,(32,resource.getrlimit(resource.RLIMIT_NOFILE)[1])); "
+                "child=\"import pathlib,sys,time; time.sleep(2.4); "
+                "pathlib.Path(sys.argv[1]).write_text('late')\"; "
+                "parent=\"import pathlib,subprocess,sys,time; "
+                "[subprocess.Popen([sys.executable,'-c',sys.argv[1],str(pathlib.Path(sys.argv[2]) / str(i))], "
+                "start_new_session=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL) "
+                "for i in range(35)]; pathlib.Path(sys.argv[3]).write_text('ready'); time.sleep(10)\"; "
+                "r=run_pack_check({'name':'many-children','command':[sys.executable,'-c',parent,child,sys.argv[1],sys.argv[2]], "
+                "'timeout_seconds':2},project_dir=Path(sys.argv[1]),run_dir=Path(sys.argv[1]),patch_path=None); "
+                "print(json.dumps(r))"
+            )
+            completed = subprocess.run(
+                [sys.executable, "-c", script, str(marker_dir), str(ready)],
+                cwd=Path.cwd(), env={**os.environ, "PYTHONPATH": "src"},
+                capture_output=True, text=True, timeout=12, check=True,
+            )
+            result = json.loads(completed.stdout)
+            time.sleep(2.6)
+            self.assertTrue(ready.exists(), result)
+            self.assertEqual(result["status"], "timed_out", result)
+            self.assertTrue(result["children_terminated"], result)
+            self.assertEqual(list(marker_dir.iterdir()), [])
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux inherited pipe cleanup")
+    def test_timeout_with_detached_child_inheriting_stdout_returns_promptly(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            marker = root / "late-stdout.txt"
+            child = (
+                "import pathlib,sys,time; time.sleep(1.4); "
+                "pathlib.Path(sys.argv[1]).write_text('late')"
+            )
+            parent = (
+                "import subprocess,sys,time; "
+                "subprocess.Popen([sys.executable,'-c',sys.argv[1],sys.argv[2]], "
+                "start_new_session=True); time.sleep(10)"
+            )
+            started = time.monotonic()
+            result = run_pack_check(
+                {"name": "inherited-stdout", "command": [sys.executable, "-c", parent, child,
+                                                          str(marker)], "timeout_seconds": 1},
+                project_dir=root, run_dir=root, patch_path=None,
+            )
+            elapsed = time.monotonic() - started
+            time.sleep(1.6)
+            self.assertEqual(result["status"], "timed_out", result)
+            self.assertTrue(result["children_terminated"], result)
+            self.assertLess(elapsed, 2.5, result)
+            self.assertFalse(marker.exists())
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux subreaper supervision")
+    def test_late_supervisor_inspection_failure_kills_detached_child(self) -> None:
+        from loopforge.engine import process_runner
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            ready = root / "ready.txt"
+            marker = root / "late-after-failure.txt"
+            source = Path(process_runner.__file__).with_name("process_supervisor.py").read_text(
+                encoding="utf-8"
+            )
+            injection = (
+                "\n_original_children = _children\n"
+                "def _children():\n"
+                f"    if os.path.exists({str(ready)!r}):\n"
+                "        raise OSError('injected late inspection failure')\n"
+                "    return _original_children()\n\n"
+            )
+            (root / "process_supervisor.py").write_text(
+                source.replace('if __name__ == "__main__":', injection + 'if __name__ == "__main__":'),
+                encoding="utf-8",
+            )
+            child = (
+                "import pathlib,sys,time; time.sleep(1.3); "
+                "pathlib.Path(sys.argv[1]).write_text('late', encoding='utf-8')"
+            )
+            parent = (
+                "import pathlib,subprocess,sys,time; "
+                "subprocess.Popen([sys.executable,'-c',sys.argv[1],sys.argv[2]], "
+                "start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); "
+                "pathlib.Path(sys.argv[3]).write_text('ready', encoding='utf-8'); time.sleep(10)"
+            )
+            with mock.patch.object(process_runner, "__file__", str(root / "process_runner.py")):
+                result = run_pack_check(
+                    {"name": "late-failure", "command": [sys.executable, "-c", parent, child,
+                                                         str(marker), str(ready)], "timeout_seconds": 5},
+                    project_dir=root, run_dir=root, patch_path=None,
+                )
+            time.sleep(1.5)
+            self.assertTrue(ready.exists(), result)
+            self.assertEqual(result["status"], "failed", result)
+            self.assertEqual(result["process_issue"], "children_unverified")
+            self.assertFalse(result["children_terminated"])
+            self.assertIn("injected late inspection failure", result["stderr"])
+            self.assertFalse(marker.exists())
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux isolated supervisor")
+    def test_supervisor_ignores_check_pythonpath_shadowing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "subprocess.py").write_text("raise RuntimeError('shadowed subprocess')\n", encoding="utf-8")
+            (root / "sitecustomize.py").write_text(
+                "raise RuntimeError('shadowed sitecustomize')\n", encoding="utf-8"
+            )
+            result = run_pack_check(
+                {"name": "isolated-helper", "command": [sys.executable, "-S", "-c",
+                                                       "import os; print(os.environ['PYTHONPATH'])"],
+                 "env": {"PYTHONPATH": str(root)}, "timeout_seconds": 5},
+                project_dir=root, run_dir=root, patch_path=None,
+            )
+            self.assertEqual(result["status"], "passed", result)
+            self.assertEqual(result["stdout"].strip(), str(root))
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux isolated supervisor")
+    def test_check_signal_returncode_is_preserved(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            result = run_pack_check(
+                {"name": "signal-exit", "command": [sys.executable, "-c",
+                                                    "import os,signal; os.kill(os.getpid(), signal.SIGTERM)"],
+                 "timeout_seconds": 5},
+                project_dir=root, run_dir=root, patch_path=None,
+            )
+            self.assertEqual(result["status"], "failed", result)
+            self.assertEqual(result["returncode"], -15, result)
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux subreaper supervision")
+    def test_timeout_terminates_detached_child_before_it_can_write(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            marker = root / "late-detached.txt"
+            child = (
+                "import pathlib,sys,time; time.sleep(1.3); "
+                "pathlib.Path(sys.argv[1]).write_text('late', encoding='utf-8')"
+            )
+            parent = (
+                "import subprocess,sys,time; "
+                "subprocess.Popen([sys.executable,'-c',sys.argv[1],sys.argv[2]], "
+                "start_new_session=True); time.sleep(10)"
+            )
+            result = run_pack_check(
+                {"name": "detached-timeout", "command": [sys.executable, "-c", parent, child, str(marker)],
+                 "timeout_seconds": 1},
+                project_dir=root, run_dir=root, patch_path=None,
+            )
+            time.sleep(1.5)
+            self.assertEqual(result["status"], "timed_out", result)
+            self.assertTrue(result["children_terminated"], result)
+            self.assertFalse(marker.exists())
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux subreaper supervision")
+    def test_timeout_terminates_detached_child_after_parent_exits(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            marker = root / "late-orphan.txt"
+            child = (
+                "import pathlib,sys,time; time.sleep(1.3); "
+                "pathlib.Path(sys.argv[1]).write_text('late', encoding='utf-8')"
+            )
+            parent = (
+                "import subprocess,sys; "
+                "subprocess.Popen([sys.executable,'-c',sys.argv[1],sys.argv[2]], "
+                "start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)"
+            )
+            result = run_pack_check(
+                {"name": "orphan-timeout", "command": [sys.executable, "-c", parent, child, str(marker)],
+                 "timeout_seconds": 1},
+                project_dir=root, run_dir=root, patch_path=None,
+            )
+            time.sleep(1.5)
+            self.assertEqual(result["status"], "timed_out", result)
+            self.assertTrue(result["children_terminated"], result)
+            self.assertFalse(marker.exists())
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux subreaper supervision")
+    def test_cancellation_terminates_detached_child_after_parent_exits(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            marker = root / "late-cancelled.txt"
+            ready = root / "ready.txt"
+            child = (
+                "import pathlib,sys,time; "
+                "pathlib.Path(sys.argv[2]).write_text('ready', encoding='utf-8'); "
+                "time.sleep(1.3); pathlib.Path(sys.argv[1]).write_text('late', encoding='utf-8')"
+            )
+            parent = (
+                "import subprocess,sys; "
+                "subprocess.Popen([sys.executable,'-c',*sys.argv[1:]], "
+                "start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)"
+            )
+            cancelled = threading.Event()
+            results: list[dict[str, object]] = []
+            worker = threading.Thread(target=lambda: results.append(run_pack_check(
+                {"name": "orphan-cancel", "command": [sys.executable, "-c", parent, child,
+                                                      str(marker), str(ready)], "timeout_seconds": 10},
+                project_dir=root, run_dir=root, patch_path=None, cancel_event=cancelled,
+            )))
+            worker.start()
+            try:
+                deadline = time.monotonic() + 3
+                while not ready.exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertTrue(ready.exists(), "detached child did not start")
+                cancelled.set()
+                worker.join(timeout=3)
+                self.assertFalse(worker.is_alive(), "cancelled check did not stop")
+                time.sleep(1.5)
+                self.assertEqual(results[0]["status"], "cancelled", results[0])
+                self.assertTrue(results[0]["children_terminated"], results[0])
+                self.assertFalse(marker.exists())
+            finally:
+                cancelled.set()
+                worker.join(timeout=12)
+
+    def test_timeout_terminates_child_before_it_can_write(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            marker = root / "late.txt"
+            child = (
+                "import pathlib,sys,time; time.sleep(1.4); "
+                "pathlib.Path(sys.argv[1]).write_text('late', encoding='utf-8')"
+            )
+            parent = (
+                "import subprocess,sys,time; "
+                "subprocess.Popen([sys.executable,'-c',sys.argv[1],sys.argv[2]]); "
+                "time.sleep(10)"
+            )
+            result = run_pack_check(
+                {
+                    "name": "tree-timeout",
+                    "command": [sys.executable, "-c", parent, child, str(marker)],
+                    "timeout_seconds": 1,
+                },
+                project_dir=root,
+                run_dir=root,
+                patch_path=None,
+            )
+            time.sleep(1.5)
+
+            self.assertEqual(result["status"], "timed_out")
+            self.assertTrue(result["timed_out"])
+            self.assertIsNone(result["returncode"])
+            self.assertFalse(marker.exists())
+
+    def test_cancellation_interrupts_active_check_and_child(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            spawned = root / "spawned.txt"
+            marker = root / "late.txt"
+            child = (
+                "import pathlib,sys,time; time.sleep(0.8); "
+                "pathlib.Path(sys.argv[1]).write_text('late', encoding='utf-8')"
+            )
+            parent = (
+                "import pathlib,subprocess,sys,time; "
+                "subprocess.Popen([sys.executable,'-c',sys.argv[1],sys.argv[2]]); "
+                "pathlib.Path(sys.argv[3]).write_text('ready', encoding='utf-8'); "
+                "time.sleep(10)"
+            )
+            cancelled = threading.Event()
+            results: list[dict[str, object]] = []
+            worker = threading.Thread(
+                target=lambda: results.append(
+                    run_pack_check(
+                        {
+                            "name": "tree-cancel",
+                            "command": [sys.executable, "-c", parent, child, str(marker), str(spawned)],
+                            "timeout_seconds": 10,
+                        },
+                        project_dir=root,
+                        run_dir=root,
+                        patch_path=None,
+                        cancel_event=cancelled,
+                    )
+                )
+            )
+            worker.start()
+            try:
+                deadline = time.monotonic() + 3
+                while not spawned.exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertTrue(spawned.exists(), "check did not start")
+                cancelled.set()
+                worker.join(timeout=3)
+                self.assertFalse(worker.is_alive(), "cancelled check did not stop")
+                time.sleep(1.2)
+                self.assertEqual(results[0]["status"], "cancelled")
+                self.assertFalse(marker.exists())
+            finally:
+                cancelled.set()
+                worker.join(timeout=12)
+
+    def test_output_limit_stops_check_and_keeps_capture_bounded(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            result = run_pack_check(
+                {
+                    "name": "noisy",
+                    "command": [
+                        sys.executable,
+                        "-c",
+                        "import sys,time; sys.stdout.write('x'*200000); sys.stdout.flush(); time.sleep(10)",
+                    ],
+                    "timeout_seconds": 10,
+                },
+                project_dir=root,
+                run_dir=root,
+                patch_path=None,
+            )
+
+            self.assertEqual(result["status"], "failed")
+            self.assertTrue(result["output_limit_exceeded"])
+            self.assertLessEqual(len(result["stdout"]), 4000)
+
+    def test_check_keeps_parent_environment_and_explicit_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            with mock.patch.dict(os.environ, {"LF_CHECK_PARENT": "parent"}):
+                result = run_pack_check(
+                    {
+                        "name": "environment",
+                        "command": [
+                            sys.executable,
+                            "-c",
+                            "import os; print(os.environ['LF_CHECK_PARENT'], os.environ['LF_CHECK_OVERRIDE'])",
+                        ],
+                        "env": {"LF_CHECK_PARENT": "overridden", "LF_CHECK_OVERRIDE": "{repo}"},
+                        "timeout_seconds": 5,
+                    },
+                    project_dir=root,
+                    run_dir=root,
+                    patch_path=None,
+                )
+
+            self.assertEqual(result["status"], "passed")
+            self.assertEqual(result["stdout"].strip(), f"overridden {root}")
+
+    @unittest.skipUnless(os.name == "posix", "requires executable symlinks")
+    def test_relative_check_executable_uses_project_cwd_and_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            (bin_dir / "check-python").symlink_to(sys.executable)
+            for executable in ("./bin/check-python", "check-python"):
+                with self.subTest(executable=executable):
+                    result = run_pack_check(
+                        {
+                            "name": "relative-executable",
+                            "command": [executable, "-c", "print('relative-ok')"],
+                            "env": {"PATH": "bin"},
+                            "timeout_seconds": 5,
+                        },
+                        project_dir=root,
+                        run_dir=root,
+                        patch_path=None,
+                    )
+
+                    self.assertEqual(result["status"], "passed", result)
+                    self.assertEqual(result["stdout"].strip(), "relative-ok")
 
 
 if __name__ == "__main__":
