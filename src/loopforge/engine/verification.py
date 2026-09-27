@@ -521,7 +521,7 @@ def verify_run(
     def cancelled_result() -> VerifyResult | None:
         if cancel_event is None or not cancel_event.is_set():
             return None
-        blocker = "verification was interrupted before the next check."
+        blocker = "verification was interrupted."
         interrupted_run = revoke_verification_review_authority(
             run_data,
             reason="deterministic verification is blocked",
@@ -745,7 +745,11 @@ def verify_run(
                 project_dir=workspace_dir,
                 run_dir=run_dir,
                 patch_path=patch_path if patch_path.exists() else None,
+                cancel_event=cancel_event,
             )
+            interrupted = cancelled_result()
+            if interrupted is not None:
+                return interrupted
             criterion = check.get("criterion", "")
             if criterion and isinstance(criterion, str) and criterion.strip():
                 result["criterion"] = criterion.strip()

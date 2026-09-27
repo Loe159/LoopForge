@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -389,6 +390,34 @@ class TimeoutTests(unittest.TestCase):
         self.assertFalse(receipt.completed)
         self.assertTrue(receipt.timed_out)
 
+    @unittest.skipUnless(sys.platform == "linux", "Linux detached pipe test")
+    def test_timeout_does_not_block_on_detached_inherited_stdout(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pid_file = root / "detached.pid"
+            script = (
+                "import pathlib,subprocess,sys,time; "
+                "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(10)'], "
+                "start_new_session=True); "
+                "pathlib.Path(sys.argv[1]).write_text(str(child.pid)); time.sleep(10)"
+            )
+            started = time.monotonic()
+            try:
+                receipt = ProcessRunner(timeout=0.5).run(
+                    [str(Path(sys.executable).resolve()), "-c", script, str(pid_file)],
+                    cwd=root,
+                )
+                self.assertTrue(pid_file.exists(), "detached child did not start")
+                self.assertTrue(receipt.timed_out)
+                self.assertLess(time.monotonic() - started, 1.5)
+                self.assertFalse(receipt.children_terminated)
+            finally:
+                if pid_file.exists():
+                    try:
+                        os.kill(int(pid_file.read_text()), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+
     @unittest.skipUnless(_IS_WINDOWS, "taskkill tree termination is Windows-only")
     def test_timeout_kills_process_tree_windows(self) -> None:
         runner = ProcessRunner(output_limit_bytes=100000, timeout=2.0)
@@ -537,6 +566,17 @@ class LaunchFailureTests(unittest.TestCase):
 
 
 class LargeOutputRingBufferTests(unittest.TestCase):
+    @unittest.skipUnless(_IS_POSIX, "POSIX poll capture")
+    def test_capture_error_cannot_report_success(self) -> None:
+        with mock.patch("loopforge.engine.process_runner.select.poll", side_effect=OSError("poll unavailable")):
+            receipt = ProcessRunner(timeout=3).run(
+                [str(Path(sys.executable).resolve()), "-c", "print('unread output')"],
+                cwd=Path.cwd(),
+            )
+        self.assertFalse(receipt.completed)
+        self.assertEqual(receipt.issue, "output_capture_failure")
+        self.assertIn("poll unavailable", receipt.stderr)
+
     def test_output_limit_applies_while_stdin_writer_is_blocked(self) -> None:
         runner = ProcessRunner(output_limit_bytes=5000, timeout=5)
         receipt = runner.run(
@@ -591,7 +631,7 @@ class ProcessReceiptFieldsTests(unittest.TestCase):
         self.assertFalse(receipt.output_truncated)
         self.assertGreater(receipt.finished_at, receipt.started_at)
         self.assertIsNotNone(receipt.pid)
-        self.assertTrue(receipt.children_terminated)
+        self.assertFalse(receipt.children_terminated)
         self.assertEqual(receipt.issue, "")
 
 

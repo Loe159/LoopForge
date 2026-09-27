@@ -6417,6 +6417,50 @@ Only this section is present.
             self.assertIn("status  passed", output.getvalue())
             self.assertIn("risk    low", output.getvalue())
 
+    def test_verify_interrupts_during_active_pack_check(self) -> None:
+        from loopforge.engine import verify_run
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            repo = root / "project"
+            repo.mkdir()
+            home = root / "loopforge-home"
+            self.initialize_git_project(repo)
+            cancelled = threading.Event()
+            seen_events: list[threading.Event | None] = []
+
+            def interrupt_check(check, **kwargs):  # type: ignore[no-untyped-def]
+                seen_events.append(kwargs.get("cancel_event"))
+                cancelled.set()
+                return {"name": check["name"], "status": "cancelled"}
+
+            with (
+                mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(home)}),
+                working_directory(repo),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["init"]), 0)
+                self.assertEqual(
+                    main(["run", "--task", "Update README", "--success-check", "README updated"]),
+                    0,
+                )
+                run_dir = self.approve_current_run_for_implementation(repo, home)
+                run_path = run_dir / "run.json"
+                run_data = json.loads(run_path.read_text(encoding="utf-8"))
+                workspace = Path(run_data["workspace"]["path"])
+                (workspace / "README.md").write_text("# Updated\n", encoding="utf-8")
+                self.add_implementation_candidate(run_dir)
+                with mock.patch("loopforge.engine.run_pack_check", side_effect=interrupt_check):
+                    result = verify_run(repo, cancel_event=cancelled)
+
+            persisted = json.loads(run_path.read_text(encoding="utf-8"))
+            self.assertEqual(seen_events, [cancelled], result.blockers)
+            self.assertFalse(result.ok)
+            self.assertIn("interrupted", result.message)
+            self.assertEqual(persisted["stage_statuses"]["verification"], "blocked")
+            self.assertEqual(persisted["stage_statuses"]["review"], "pending")
+            self.assertFalse(persisted["publish_eligibility"]["eligible"])
+
     def test_verify_rejects_failed_or_stale_implementation_attempt(self) -> None:
         from loopforge.engine import verify_run
 

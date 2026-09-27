@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -677,13 +678,10 @@ def run_pack_check(
     project_dir: Path,
     run_dir: Path,
     patch_path: Path | None,
+    cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
     from loopforge.engine import utc_now
 
-    # Exempt from ProcessRunner: pack checks are user-defined scripts
-    # that run in the full project environment (os.environ) with
-    # variable expansion. Migration would require environment
-    # normalization and pack-contract schema updates.
     command = [
         expand_check_value(
             part,
@@ -703,41 +701,53 @@ def run_pack_check(
         )
     started = utc_now()
     try:
-        completed = subprocess.run(
-            command,
+        # Resolve against the effective check PATH before ProcessRunner applies
+        # its absolute-executable validation. Checks retain their documented
+        # full parent environment plus explicit pack overrides.
+        executable = Path(command[0])
+        if executable.is_absolute():
+            resolved_executable = executable.resolve()
+        elif executable.parent != Path("."):
+            resolved_executable = (project_dir / executable).resolve()
+        else:
+            # Relative PATH entries are interpreted from the child cwd by
+            # subprocess; keep that behavior while resolving before launch.
+            search_path = os.pathsep.join(
+                str(Path(entry) if Path(entry).is_absolute() else project_dir / entry)
+                for entry in env.get("PATH", os.defpath).split(os.pathsep)
+            )
+            found = shutil.which(command[0], path=search_path)
+            resolved_executable = Path(found or project_dir / executable).resolve()
+        resolved_command = [str(resolved_executable), *command[1:]]
+        receipt = ProcessRunner(output_limit_bytes=131_072).run(
+            resolved_command,
             cwd=project_dir,
             env=env,
-            capture_output=True,
-            text=True,
+            cancel_event=cancel_event,
             timeout=int(check["timeout_seconds"]),
-            check=False,
+            supervise_descendants=True,
         )
+        if not receipt.children_terminated and receipt.pid is not None:
+            status = "failed"
+        elif receipt.issue == "cancellation":
+            status = "cancelled"
+        elif receipt.timed_out:
+            status = "timed_out"
+        else:
+            status = "passed" if receipt.completed else "failed"
         return {
             "name": check["name"],
             "command": command,
             "started_at": started,
             "finished_at": utc_now(),
-            "status": "passed" if completed.returncode == 0 else "failed",
-            "returncode": completed.returncode,
-            "stdout": completed.stdout[-4000:],
-            "stderr": completed.stderr[-4000:],
-            "timed_out": False,
-        }
-    except subprocess.TimeoutExpired as error:
-        return {
-            "name": check["name"],
-            "command": command,
-            "started_at": started,
-            "finished_at": utc_now(),
-            "status": "timed_out",
-            "returncode": None,
-            "stdout": (error.stdout or "")[-4000:]
-            if isinstance(error.stdout, str)
-            else "",
-            "stderr": (error.stderr or "")[-4000:]
-            if isinstance(error.stderr, str)
-            else "",
-            "timed_out": True,
+            "status": status,
+            "returncode": None if receipt.kill_requested else receipt.returncode,
+            "stdout": receipt.stdout[-4000:],
+            "stderr": receipt.stderr[-4000:],
+            "timed_out": receipt.timed_out,
+            "output_limit_exceeded": receipt.output_limit_exceeded,
+            "children_terminated": receipt.children_terminated,
+            "process_issue": receipt.issue,
         }
     except OSError as error:
         return {
@@ -750,6 +760,7 @@ def run_pack_check(
             "stdout": "",
             "stderr": str(error),
             "timed_out": False,
+            "output_limit_exceeded": False,
         }
 
 
