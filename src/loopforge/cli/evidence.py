@@ -7,6 +7,7 @@ indexes those artifacts for search, preview, and approval explanations.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 import re
 from typing import Any, Iterator
@@ -44,6 +45,7 @@ class ApprovalSummary:
     title: str
     artifact: str
     lines: tuple[str, ...]
+    artifact_sha256: str | None = None
 
 
 class EvidenceIndex:
@@ -192,7 +194,16 @@ def approval_summary(run_dir: Path | None, run: dict[str, Any] | None, stage: st
             artifact=artifact_name,
             lines=(f"{artifact_name} is not available yet.", "No workflow transition will be approved."),
         )
-    text = artifact_path.read_text(encoding="utf-8", errors="replace")
+    artifact_bytes = artifact_path.read_bytes()
+    fingerprint = sha256(artifact_bytes).hexdigest()
+    text = artifact_bytes.decode("utf-8", errors="replace")
+    if stage == "task":
+        return ApprovalSummary(
+            "Approve initial task?",
+            artifact_name,
+            (f"Evidence: {artifact_name}", "Approval allows the read-only research stage to begin."),
+            fingerprint,
+        )
     if stage == "plan":
         checks = _success_checks(run)
         steps = _section_item_count(text, "implementation") or _numbered_item_count(text)
@@ -202,7 +213,7 @@ def approval_summary(run_dir: Path | None, run: dict[str, Any] | None, stage: st
         if files:
             lines.append(f"{files} file{'s' if files != 1 else ''} in recorded scope.")
         lines.append(f"{len(checks)} success check{'s' if len(checks) != 1 else ''} required before review.")
-        return ApprovalSummary("Approve implementation plan?", artifact_name, tuple(lines))
+        return ApprovalSummary("Approve implementation plan?", artifact_name, tuple(lines), fingerprint)
 
     verification = run.get("verification", {}) if isinstance(run, dict) else {}
     verification = verification if isinstance(verification, dict) else {}
@@ -217,7 +228,7 @@ def approval_summary(run_dir: Path | None, run: dict[str, Any] | None, stage: st
     if changed_files:
         lines.append(f"{changed_files} changed file{'s' if changed_files != 1 else ''} recorded in the patch evidence.")
     lines.append("Approval permits local draft preparation only; it does not publish anything.")
-    return ApprovalSummary("Approve review for draft preparation?", artifact_name, tuple(lines))
+    return ApprovalSummary("Approve review for draft preparation?", artifact_name, tuple(lines), fingerprint)
 
 
 def _evidence_item(root: Path, path: Path) -> EvidenceItem | None:
