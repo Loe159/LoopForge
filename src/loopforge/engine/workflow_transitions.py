@@ -158,6 +158,13 @@ WORKFLOW_TRANSITIONS: list[WorkflowTransition] = [
     ),
     WorkflowTransition(
         "review_ready",
+        "complete review",
+        "review_complete",
+        guards=("has_completed_review",),
+        effects=("mark_review_complete",),
+    ),
+    WorkflowTransition(
+        "review_complete",
         "approve review",
         "review_approved",
         guards=("has_approved_review",),

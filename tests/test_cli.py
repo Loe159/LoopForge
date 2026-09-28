@@ -1838,6 +1838,12 @@ class CliTests(unittest.TestCase):
             self.assertEqual(run_json["current_stage"], "review_complete")
             self.assertEqual(run_json["stage_statuses"]["review"], "complete")
             self.assertEqual(run_json["human_gates"]["review_approval"]["status"], "pending")
+            with mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}):
+                reloaded = current_status(repo)
+            self.assertEqual(reloaded.run["current_stage"], "review_complete")
+            self.assertEqual(reloaded.run["stage_statuses"]["review"], "complete")
+            self.assertEqual(reloaded.run["human_gates"]["review_approval"]["status"], "pending")
+            self.assertFalse(reloaded.run["publish_eligibility"]["eligible"])
             prompt = (run_dir / "artifacts" / "stages" / "review" / "prompt.md").read_text(
                 encoding="utf-8"
             )
@@ -1990,7 +1996,7 @@ class CliTests(unittest.TestCase):
 
             run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
             review_gate = run_json["human_gates"]["review_approval"]
-            self.assertEqual(run_json["current_stage"], "review_ready")
+            self.assertEqual(run_json["current_stage"], "review_approved")
             self.assertEqual(run_json["stage_statuses"]["verification"], "complete")
             self.assertEqual(run_json["stage_statuses"]["review"], "approved")
             self.assertEqual(review_gate["status"], "approved")
@@ -1998,6 +2004,11 @@ class CliTests(unittest.TestCase):
             self.assertTrue(review_gate["approved_at"])
             self.assertTrue(run_json["publish_eligibility"]["eligible"])
             self.assertEqual(run_json["publish_eligibility"]["mode"], "draft")
+            with mock.patch.dict(os.environ, {"LOOPFORGE_HOME": str(loopforge_home)}):
+                reloaded = current_status(repo)
+            self.assertEqual(reloaded.run["current_stage"], "review_approved")
+            self.assertEqual(reloaded.run["stage_statuses"]["review"], "approved")
+            self.assertEqual(reloaded.run["human_gates"]["review_approval"]["status"], "approved")
             self.assertIn("Review approved", output.getvalue())
 
     def test_run_no_input_does_not_approve_review_after_verification(self) -> None:
@@ -2646,7 +2657,7 @@ class CliTests(unittest.TestCase):
 
             run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
             artifact_path = run_dir / "artifacts" / "publication" / "draft-pr.json"
-            self.assertEqual(run_json["current_stage"], "review_ready")
+            self.assertEqual(run_json["current_stage"], "review_approved")
             self.assertEqual(run_json["stage_statuses"]["publication"], "pending")
             self.assertFalse(artifact_path.exists())
             self.assertIn("Active LoopForge run", output.getvalue())
@@ -6682,7 +6693,7 @@ Only this section is present.
 
             run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
             review_gate = run_json["human_gates"]["review_approval"]
-            self.assertEqual(run_json["current_stage"], "review_ready")
+            self.assertEqual(run_json["current_stage"], "review_approved")
             self.assertEqual(run_json["stage_statuses"]["review"], "approved")
             self.assertEqual(review_gate["status"], "approved")
             self.assertEqual(review_gate["source"], "interactive")

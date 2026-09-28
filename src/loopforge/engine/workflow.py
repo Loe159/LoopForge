@@ -292,7 +292,7 @@ def apply_review_approval(
         if isinstance(patch, dict) and isinstance(patch.get("sha256"), str)
         else None
     )
-    normalized["current_stage"] = RunStage.REVIEW_READY.value
+    normalized["current_stage"] = RunStage.REVIEW_APPROVED.value
     normalized["stage_statuses"]["review"] = StageStatus.APPROVED.value
     normalized["human_gates"]["review_approval"] = {
         **initial_workflow_state()["human_gates"]["review_approval"],

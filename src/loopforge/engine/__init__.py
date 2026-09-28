@@ -263,7 +263,7 @@ PLAN_READY_STAGE = "plan_ready"
 IMPLEMENTATION_READY_STAGE = "implementation_ready"
 VERIFICATION_READY_STAGE = "verification_ready"
 REVIEW_READY_STAGE = "review_ready"
-REVIEW_COMPLETE_STAGE = "review_complete"
+REVIEW_COMPLETE_STAGE = RunStage.REVIEW_COMPLETE.value
 PUBLICATION_READY_STAGE = "draft_publication_ready"
 
 READONLY_WORKFLOW_STAGES = ("research", "plan", "review")
