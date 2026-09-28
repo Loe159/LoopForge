@@ -32,6 +32,7 @@ class ActionScopeTests(unittest.TestCase):
             run_id="run-abc",
             revision=2,
             snapshot="ok",
+            config_revision=3,
         )
         data = scope.to_dict()
         restored = ActionScope.from_dict(data)
@@ -39,6 +40,7 @@ class ActionScopeTests(unittest.TestCase):
         self.assertEqual(restored.run_id, scope.run_id)
         self.assertEqual(restored.revision, scope.revision)
         self.assertEqual(restored.snapshot, scope.snapshot)
+        self.assertEqual(restored.config_revision, scope.config_revision)
         self.assertEqual(Path(data["project_path"]), scope.project_path)
 
     def test_from_dict_rejects_unknown_keys(self) -> None:

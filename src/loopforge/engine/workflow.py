@@ -15,16 +15,19 @@ imports from the ``lifecycle`` sibling submodule.
 from __future__ import annotations
 
 import logging
+from hashlib import sha256
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from loopforge.engine.locking import FileLock
 from loopforge.engine.lifecycle import (
     RunStage,
     StageStatus,
 )
 from loopforge.engine.models.migrations import migrate_run
 from loopforge.engine.patch_integrity import patch_integrity_blockers
+from loopforge.engine.models.scope import ActionScope
 
 logger = logging.getLogger(__name__)
 
@@ -396,10 +399,67 @@ def apply_draft_publication_prepared(
     return normalized
 
 
+def _approval_scope_blockers(
+    status: Any, expected_scope: ActionScope | None, artifact_bytes: bytes | None
+) -> list[str]:
+    """Reject a modal confirmation whose target or shown evidence has changed."""
+
+    if expected_scope is None:
+        return []
+    config = status.config or {}
+    run = status.run or {}
+    if (
+        expected_scope.project_path.resolve() != status.project_dir
+        or expected_scope.project_id != config.get("project_id")
+        or (expected_scope.config_revision is not None and expected_scope.config_revision != config.get("config_revision", 0))
+        or expected_scope.run_id != config.get("current_run_id")
+        or expected_scope.run_id != run.get("run_id")
+        or expected_scope.revision != run.get("run_revision", 0)
+    ):
+        return ["approval context changed; inspect the current run and confirm again."]
+    if artifact_bytes is None:
+        return ["approval evidence is unavailable; inspect it and confirm again."]
+    fingerprint = sha256(artifact_bytes).hexdigest()
+    if not expected_scope.snapshot or expected_scope.snapshot != fingerprint:
+        return ["approval evidence changed; inspect the artifact and confirm again."]
+    return []
+
+
+def _approval_evidence_unchanged(artifact_path: Path, artifact_bytes: bytes) -> list[str]:
+    """Detect a direct artifact edit after validation, immediately before commit."""
+
+    try:
+        current = artifact_path.read_bytes()
+    except OSError:
+        return ["approval evidence is unavailable; inspect it and confirm again."]
+    if current != artifact_bytes:
+        return ["approval evidence changed; inspect the artifact and confirm again."]
+    return []
+
+
+def _approval_scope_lock(project_dir: Path) -> FileLock:
+    from loopforge.engine import project_config_path
+
+    return FileLock(project_config_path(project_dir.resolve()))
+
+
 def approve_initial_task(
     project_dir: Path,
     *,
     source: str = "local",
+    expected_scope: ActionScope | None = None,
+) -> StageResult:
+    if expected_scope is not None:
+        with _approval_scope_lock(project_dir):
+            return _approve_initial_task(project_dir, source=source, expected_scope=expected_scope)
+    return _approve_initial_task(project_dir, source=source)
+
+
+def _approve_initial_task(
+    project_dir: Path,
+    *,
+    source: str = "local",
+    expected_scope: ActionScope | None = None,
 ) -> StageResult:
     """Record the explicit approval required before research can begin."""
     from loopforge.engine import current_status, persist_run_json, utc_now
@@ -428,12 +488,23 @@ def approve_initial_task(
 
     run = normalize_run_workflow_state(status.run)
     gate = run.get("human_gates", {}).get("initial_task_approval", {})
-    blockers: list[str] = []
+    task_path = status.run_dir / "task.md"
+    task_bytes: bytes | None = None
+    if expected_scope is not None:
+        try:
+            task_bytes = task_path.read_bytes()
+        except OSError:
+            pass
+    blockers: list[str] = _approval_scope_blockers(
+        status, expected_scope, task_bytes
+    )
     if not isinstance(gate, dict) or gate.get("status") != "pending":
         blockers.append("initial task approval is not pending.")
     task_validation = run.get("task_validation", {})
     if isinstance(task_validation, dict) and task_validation.get("status") not in {None, "valid"}:
         blockers.append("task approval requires a valid task definition.")
+    if expected_scope is not None and task_bytes is not None and not blockers:
+        blockers.extend(_approval_evidence_unchanged(task_path, task_bytes))
     if blockers:
         return StageResult(
             project_dir=status.project_dir,
@@ -443,7 +514,7 @@ def approve_initial_task(
             ok=False,
             message="LoopForge task approval is blocked.",
             blockers=blockers,
-            artifact_path=status.run_dir / "task.md",
+            artifact_path=task_path,
         )
 
     updated = apply_initial_task_approval(run, approved=True, source=source)
@@ -457,7 +528,7 @@ def approve_initial_task(
         ok=True,
         message="LoopForge task approved; research is ready.",
         blockers=[],
-        artifact_path=status.run_dir / "task.md",
+        artifact_path=task_path,
     )
 
 
@@ -638,6 +709,19 @@ def approve_plan(
     project_dir: Path,
     *,
     source: str = "local",
+    expected_scope: ActionScope | None = None,
+) -> StageResult:
+    if expected_scope is not None:
+        with _approval_scope_lock(project_dir):
+            return _approve_plan(project_dir, source=source, expected_scope=expected_scope)
+    return _approve_plan(project_dir, source=source)
+
+
+def _approve_plan(
+    project_dir: Path,
+    *,
+    source: str = "local",
+    expected_scope: ActionScope | None = None,
 ) -> StageResult:
     from loopforge.engine import (
         current_status,
@@ -676,15 +760,21 @@ def approve_plan(
     if statuses.get("plan") != "awaiting_approval":
         blockers.append("plan approval requires a plan awaiting approval.")
     plan_path = status.run_dir / "plan.md"
+    plan_bytes: bytes | None = None
     if not plan_path.exists():
         blockers.append("plan approval requires plan.md in the run directory.")
-    elif not blockers:
+    else:
         try:
-            plan_text = plan_path.read_text(encoding="utf-8")
+            plan_bytes = plan_path.read_bytes()
+            plan_text = plan_bytes.decode("utf-8")
         except (OSError, UnicodeDecodeError) as error:
             blockers.append(f"plan approval could not read plan.md: {error}")
         else:
-            blockers.extend(validate_readonly_stage_artifact("plan", plan_text))
+            blockers.extend(_approval_scope_blockers(status, expected_scope, plan_bytes))
+            if not blockers:
+                blockers.extend(validate_readonly_stage_artifact("plan", plan_text))
+    if expected_scope is not None and plan_bytes is not None and not blockers:
+        blockers.extend(_approval_evidence_unchanged(plan_path, plan_bytes))
     if blockers:
         return StageResult(
             project_dir=status.project_dir,
@@ -716,6 +806,19 @@ def approve_review(
     project_dir: Path,
     *,
     source: str = "local",
+    expected_scope: ActionScope | None = None,
+) -> StageResult:
+    if expected_scope is not None:
+        with _approval_scope_lock(project_dir):
+            return _approve_review(project_dir, source=source, expected_scope=expected_scope)
+    return _approve_review(project_dir, source=source)
+
+
+def _approve_review(
+    project_dir: Path,
+    *,
+    source: str = "local",
+    expected_scope: ActionScope | None = None,
 ) -> StageResult:
     from loopforge.engine import (
         current_status,
@@ -795,15 +898,19 @@ def approve_review(
     if not verification_path.exists():
         blockers.append("review approval requires verification.md in the run directory.")
     review_path = status.run_dir / "review.md"
+    review_bytes: bytes | None = None
     if not review_path.exists():
         blockers.append("review approval requires review.md in the run directory.")
     else:
         try:
-            review_text = review_path.read_text(encoding="utf-8")
+            review_bytes = review_path.read_bytes()
+            review_text = review_bytes.decode("utf-8")
         except (OSError, UnicodeDecodeError) as error:
             blockers.append(f"review approval could not read review.md: {error}")
         else:
-            blockers.extend(validate_readonly_stage_artifact("review", review_text))
+            blockers.extend(_approval_scope_blockers(status, expected_scope, review_bytes))
+            if not blockers:
+                blockers.extend(validate_readonly_stage_artifact("review", review_text))
             if candidate_revision > 0:
                 review_metadata = parse_frontmatter(review_text)
                 if review_metadata.get("candidate_revision") != str(
@@ -816,6 +923,8 @@ def approve_review(
                     blockers.append(
                         "review approval requires review evidence for the current verification patch."
                     )
+    if expected_scope is not None and review_bytes is not None and not blockers:
+        blockers.extend(_approval_evidence_unchanged(review_path, review_bytes))
     if blockers:
         return StageResult(
             project_dir=status.project_dir,

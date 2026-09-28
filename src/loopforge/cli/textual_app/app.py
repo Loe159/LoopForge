@@ -70,8 +70,10 @@ from loopforge.cli.textual_app.workers import load_project_snapshot, _identity_s
 from loopforge.cli.ui import TerminalRenderer
 from loopforge.engine import (
     AGENT_COMMANDS,
+    ActionScope,
     DEFAULT_AGENT_EXECUTION_MODE,
     SUPPORTED_ADAPTERS,
+    current_status,
     set_default_adapter,
 )
 
@@ -954,29 +956,89 @@ class LoopForgeApp(App[None]):
         if not action.requires_confirmation:
             self._execute_action(action)
             return
-        self._load_confirmation(action)
+        identity = self.store.begin_load()
+        shown_run = self._snapshot.run.shell.run if self._snapshot.run.shell is not None else None
+        shown_run_id = str(shown_run.id) if shown_run is not None else None
+        cursor_run_id = self._target_run_id()
+        if (
+            shown_run_id is None
+            or (cursor_run_id is not None and cursor_run_id != shown_run_id)
+            or (identity.run_id is not None and identity.run_id != shown_run_id)
+        ):
+            self._notice = "The selected run changed. Refresh and confirm again."
+            self._render_snapshot(self._snapshot)
+            return
+        try:
+            status = current_status(identity.project)
+        except (OSError, ValueError) as error:
+            self._notice = f"Could not load confirmation context: {error}"
+            self._render_snapshot(self._snapshot)
+            return
+        if (
+            not status.initialized
+            or status.config is None
+            or status.run is None
+            or shown_run_id != status.run.get("run_id")
+        ):
+            self._notice = "The selected run changed. Refresh and confirm again."
+            self._render_snapshot(self._snapshot)
+            return
+        requested_scope = ActionScope(
+            project_id=str(status.config.get("project_id") or ""),
+            project_path=status.project_dir,
+            run_id=str(status.run.get("run_id") or "") or None,
+            revision=status.run.get("run_revision", 0),
+            config_revision=status.config.get("config_revision", 0),
+        )
+        self._load_confirmation(action, identity, requested_scope)
 
     @work(thread=True, exclusive=True, group="confirmation", exit_on_error=False)
-    def _load_confirmation(self, action: ActionDescriptor) -> None:
+    def _load_confirmation(self, action: ActionDescriptor, identity, requested_scope: ActionScope) -> None:
         try:
-            identity = self.store.begin_load()
-            stages = {"approve-plan": "plan", "approve-review": "review"}
+            stages = {"approve-task": "task", "approve-plan": "plan", "approve-review": "review"}
             stage = stages.get(action.id)
-            status = self.store.status
-            if stage and status is not None:
+            status = current_status(identity.project)
+            if not status.initialized or status.config is None or status.run is None:
+                self.call_from_thread(self._set_notice, "The current run changed. Refresh and confirm again.")
+                return
+            if (
+                status.project_dir != requested_scope.project_path
+                or status.config.get("project_id") != requested_scope.project_id
+                or status.config.get("current_run_id") != requested_scope.run_id
+                or status.config.get("config_revision", 0) != requested_scope.config_revision
+                or status.run.get("run_id") != requested_scope.run_id
+                or status.run.get("run_revision", 0) != requested_scope.revision
+            ):
+                self.call_from_thread(self._set_notice, "The selected run changed. Refresh and confirm again.")
+                return
+            scope = requested_scope
+            if stage:
                 summary = approval_summary(status.run_dir, status.run, stage)
-                title, lines = summary.title, summary.lines
+                title, lines = summary.title, (f"Run: {scope.run_id}", *summary.lines)
+                scope = ActionScope(
+                    project_id=scope.project_id,
+                    project_path=scope.project_path,
+                    run_id=scope.run_id,
+                    revision=scope.revision,
+                    snapshot=summary.artifact_sha256,
+                    config_revision=scope.config_revision,
+                )
             else:
                 title = f"{action.label}?"
-                lines = (action.description, "Permissions follow the selected pack and stage.", "This remains a local LoopForge action.")
+                lines = (f"Run: {scope.run_id}", action.description, "Permissions follow the selected pack and stage.", "This remains a local LoopForge action.")
             if _identity_stale(self.store, identity):
                 return
-            self.call_from_thread(self._show_confirmation, action, title, lines)
+            self.call_from_thread(self._show_confirmation, action, title, lines, scope, identity)
         except Exception as error:
             self.post_message(LoadFailed(str(error)))
 
-    def _show_confirmation(self, action: ActionDescriptor, title: str, lines: tuple[str, ...]) -> None:
-        self.push_screen(ConfirmationScreen(title, lines), lambda approved: self._execute_action(action) if approved else None)
+    def _show_confirmation(self, action: ActionDescriptor, title: str, lines: tuple[str, ...], scope: ActionScope, identity) -> None:
+        if not self.store.accepts(identity):
+            return
+        self.push_screen(
+            ConfirmationScreen(title, lines),
+            lambda approved: self._execute_action(action, expected_scope=scope) if approved else None,
+        )
 
     def show_trust_confirmation(
         self,
@@ -1001,12 +1063,13 @@ class LoopForgeApp(App[None]):
             lambda approved: on_approved() if approved else None,
         )
 
-    def _execute_action(self, action: ActionDescriptor) -> None:
+    def _execute_action(self, action: ActionDescriptor, *, expected_scope: ActionScope | None = None) -> None:
         self._run_shell_operation(
             action.label,
             lambda emit, cancelled: self._capture_shell_result(
                 lambda: self.shell.execute_guided_action(
                     action,
+                    expected_scope=expected_scope,
                     implementation_mode=DEFAULT_AGENT_EXECUTION_MODE,
                     operation_callback=emit,
                     cancel_event=cancelled,

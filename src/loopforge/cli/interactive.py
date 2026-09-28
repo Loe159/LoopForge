@@ -22,6 +22,7 @@ from typing import TextIO
 _WINDOWS = os.name == "nt"
 
 from loopforge.engine import (
+    ActionScope,
     DEFAULT_ADAPTER,
     DEFAULT_AGENT_EXECUTION_MODE,
     DEFAULT_PROFILE,
@@ -439,11 +440,27 @@ class InteractiveShell:
         self,
         action: ActionDescriptor,
         *,
+        expected_scope: ActionScope | None = None,
         implementation_mode: str = DEFAULT_AGENT_EXECUTION_MODE,
         operation_callback=None,
         cancel_event: Event | None = None,
     ) -> DispatchResult:
         """Execute one engine-derived action through its shell adapter."""
+
+        if expected_scope is not None:
+            status = current_status(self.project_dir)
+            config = status.config or {}
+            run = status.run or {}
+            if (
+                status.project_dir != expected_scope.project_path.resolve()
+                or config.get("project_id") != expected_scope.project_id
+                or (expected_scope.config_revision is not None and config.get("config_revision", 0) != expected_scope.config_revision)
+                or config.get("current_run_id") != expected_scope.run_id
+                or run.get("run_id") != expected_scope.run_id
+                or run.get("run_revision", 0) != expected_scope.revision
+            ):
+                self.write("Action context changed; inspect the current run and confirm again.", error=True)
+                return DispatchResult(1)
 
         key = action.executor_key
         if key == "initialize":
@@ -461,11 +478,11 @@ class InteractiveShell:
                 cancel_event=cancel_event,
             )
         if key == "approve-task":
-            return self.execute_initial_task_approval()
+            return self.execute_initial_task_approval(expected_scope=expected_scope)
         if key == "approve-plan":
-            return self.execute_approval("plan")
+            return self.execute_approval("plan", expected_scope=expected_scope)
         if key == "approve-review":
-            return self.execute_approval("review")
+            return self.execute_approval("review", expected_scope=expected_scope)
         if key == "prepare-draft":
             return self.execute_draft_preparation()
         if key == "continue":
@@ -613,8 +630,8 @@ class InteractiveShell:
             )
         return DispatchResult(0 if result.ok else 1)
 
-    def execute_initial_task_approval(self) -> DispatchResult:
-        result = approve_initial_task(self.project_dir, source="interactive")
+    def execute_initial_task_approval(self, *, expected_scope: ActionScope | None = None) -> DispatchResult:
+        result = approve_initial_task(self.project_dir, source="interactive", expected_scope=expected_scope)
         if result.ok:
             render_success(
                 self.renderer,
@@ -661,11 +678,11 @@ class InteractiveShell:
             return DispatchResult(2)
         return self.complete_current_task_definition(success_check)
 
-    def execute_approval(self, stage: str) -> DispatchResult:
+    def execute_approval(self, stage: str, *, expected_scope: ActionScope | None = None) -> DispatchResult:
         result = (
-            approve_plan(self.project_dir, source="interactive")
+            approve_plan(self.project_dir, source="interactive", expected_scope=expected_scope)
             if stage == "plan"
-            else approve_review(self.project_dir, source="interactive")
+            else approve_review(self.project_dir, source="interactive", expected_scope=expected_scope)
         )
         if result.ok:
             render_success(

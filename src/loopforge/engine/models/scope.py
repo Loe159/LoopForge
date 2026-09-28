@@ -16,6 +16,7 @@ class ActionScope:
     run_id: str | None
     revision: int | None = None
     snapshot: str | None = None
+    config_revision: int | None = None
 
     def validate(self) -> None:
         from loopforge.engine.path_resolvers import validate_identifier as _validate
@@ -54,6 +55,15 @@ class ActionScope:
                 revision=(self.revision or 0) + 1,
                 snapshot="run_changed",
             )
+        if self.config_revision is not None and reloaded.config_revision != self.config_revision:
+            return ActionScope(
+                project_id=reloaded.project_id,
+                project_path=reloaded.project_path,
+                run_id=reloaded.run_id,
+                revision=(self.revision or 0) + 1,
+                snapshot="config_changed",
+                config_revision=reloaded.config_revision,
+            )
         return None
 
     def to_dict(self) -> dict[str, Any]:
@@ -63,11 +73,12 @@ class ActionScope:
             "run_id": self.run_id,
             "revision": self.revision,
             "snapshot": self.snapshot,
+            "config_revision": self.config_revision,
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> ActionScope:
-        known = {"project_id", "project_path", "run_id", "revision", "snapshot"}
+        known = {"project_id", "project_path", "run_id", "revision", "snapshot", "config_revision"}
         unknown = set(data) - known
         if unknown:
             raise ValueError(f"unknown keys in {cls.__name__}: {sorted(unknown)}")
@@ -77,4 +88,5 @@ class ActionScope:
             run_id=data.get("run_id"),
             revision=data.get("revision"),
             snapshot=data.get("snapshot"),
+            config_revision=data.get("config_revision"),
         )

@@ -699,6 +699,7 @@ def _load_config_scope(project_dir: Path) -> ActionScope | None:
         project_id=str(config.get("project_id") or ""),
         project_path=project_dir.resolve(),
         run_id=str(config.get("current_run_id") or "") or None,
+        config_revision=config.get("config_revision", 0),
     )
 
 
