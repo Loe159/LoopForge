@@ -1,59 +1,37 @@
 # Repository layout
 
-LoopForge has one product implementation and one documentation tree.
+LoopForge keeps the product, tests, and maintained documentation in a small set of explicit directories.
 
 | Path | Purpose |
 | --- | --- |
 | `src/loopforge/` | Packaged Python product: CLI, Textual TUI, engine, adapters, checks, contracts, packs, templates |
-| `tests/` | Executable unit, integration, and Textual Pilot tests and their fixtures |
-| `docs/` | Maintained documentation, dated plans, decisions, benchmarks, and audit reports |
-| `tools/` | Developer utilities such as the TUI benchmark |
+| `tests/` | Executable unit, integration, regression, E2E, and Textual Pilot coverage plus fixtures |
+| `docs/` | Maintained architecture, support, contributor, active roadmap, and decision documentation |
+| `tools/` | Developer utilities and benchmarks |
 | `.agent/checks/`, `.agent/adapters/` | Thin compatibility entry points delegating to the packaged product |
-| `.github/` | GitHub issue templates |
-| `.impeccable/` | Versioned Impeccable tooling configuration and derived design metadata; `DESIGN.md` remains the design source of truth |
-| `.git/` | Git history and repository metadata; never delete as cleanup |
+| `.github/` | GitHub metadata and issue templates |
+| `.impeccable/` | Versioned Impeccable configuration and derived design metadata |
 
-`README.md`, `CONTRIBUTING.md`, `AGENTS.md`, `DESIGN.md`, and `PRODUCT.md`
-are the root entry points for use, contribution, agent rules, design, and
-product direction. `pyproject.toml` declares the Python package and dependencies.
+Root entry points:
 
-## Local directories are not product sources
+- `README.md`: install, use, and understand LoopForge.
+- `CONTRIBUTING.md`: contributor workflow.
+- `AGENTS.md`: repository rules for coding agents.
+- `DESIGN.md`: interface and design source of truth.
+- `PRODUCT.md`: product direction.
+- `pyproject.toml`: Python package and dependency definition.
 
-- `.loopforge/` stores this checkout's project identity, selected adapter,
-  current run pointer, memory, and optional overrides. Deleting it is a project
-  reset, not a harmless source cleanup. It is ignored in this repository;
-  fixtures under `tests/` are unaffected by the root-only ignore rule.
-- `.venv/` is the local Python environment, ignored by Git.
-- `.idea/` contains local IDE settings and may include shelved uncommitted
-  changes. It is ignored and no longer versioned; existing files and shelved
-  changes are preserved on disk.
-- `__pycache__/` and `*.egg-info/` are generated Python files, not sources.
+## Local state
 
-Run data and workspaces belong outside the repository, under `LOOPFORGE_HOME`
-or the platform data directory. Test runs use temporary directories.
+These directories are not product sources and must not be committed:
 
-## Removed structure
+- `.loopforge/`: project-local identity, configuration, memory, and current run pointer.
+- `.venv/`: local Python environment.
+- `.idea/`: local IDE configuration.
+- `__pycache__/`, `*.egg-info/`: generated Python artifacts.
 
-- `doc/`: exact duplicate of `docs/agent/08-flows.md`; keep only `docs/`.
-- `qa/agentic-e2e/`: historical specifications for an unimplemented campaign
-  runner, not executable QA coverage. Current tests live in `tests/`; the
-  remaining E2E coverage gap is still tracked by issue #44.
-- `legacy/`, `policies/`, `schemas/`, `.agents/`, `.codex/`, and `$`: empty
-  directories. Product policies and schemas are in `src/loopforge/contracts/`.
-- `.agent` bootstrap scripts and duplicate data: no runtime callers in the
-  product; retain only the compatibility launchers exercised by tests.
-- `agent.md`: obsolete prototype contract, not an entry point; use `AGENTS.md`
-  and the packaged workflow contracts.
-- `node_modules/`: unused vendored SQL.js files, with no Node project or runtime
-  dependency. Python dependencies are declared in `pyproject.toml`.
-- `artifacts/`: historical local campaign output, moved outside the checkout.
+Run data and workspaces live outside the checkout under `LOOPFORGE_HOME` or the platform data directory. Tests use temporary directories.
 
-Historical plans and audit reports describe the layout at their publication
-date; they are not instructions to recreate retired paths.
+## Cleanup rule
 
-The September 21 structural cleanup first archived the actual working-tree
-contents, including local modifications, outside the repository. Recovery
-details and final validation are recorded in the cleanup audit report.
-
-At the user's request, `.impeccable/` was restored from that backup and remains
-versioned. Its metadata was not regenerated as part of the cleanup.
+Do not keep placeholder tests, duplicate compatibility implementations, generated artifacts, completed implementation plans, or historical audit snapshots in the active documentation tree. Keep tests only when they assert product behavior or repository invariants. Keep roadmap and decision documents only while they describe active work or a still-relevant architectural constraint.
