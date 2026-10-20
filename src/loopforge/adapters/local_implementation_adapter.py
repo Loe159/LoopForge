@@ -907,6 +907,9 @@ def run_adapter(
         present_codex_json = is_codex_json_stream(prepared_command)
         present_codex_text = is_codex_command(prepared_command) and not present_codex_json
 
+        from loopforge.adapters.event_store import EventRecorder
+        event_recorder = EventRecorder(expected_session.parent, structured=bool(stream_format))
+
         def read_available(source) -> bytes:  # type: ignore[no-untyped-def]
             if hasattr(source, "read1"):
                 return source.read1(4096)
@@ -924,12 +927,16 @@ def run_adapter(
                     if not chunk:
                         break
                     retained = capture.append(buffer, chunk)
+                    if retained and buffer is stdout_buffer:
+                        event_recorder.feed(retained)
                     if retained and stream_output and policy["stream_child_output"]:
                         presenter.write(retained)
                     if capture.exceeded.is_set():
                         break
             finally:
                 presenter.close()
+                if buffer is stdout_buffer:
+                    event_recorder.close()
                 source.close()
 
         stdout_thread = threading.Thread(

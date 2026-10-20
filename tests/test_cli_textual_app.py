@@ -973,14 +973,12 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
                     self.assertFalse(app.query_one("#main-content").display)
 
                     heading = str(app.query_one("#run-attempt-heading").render())
-                    prompt = str(app.query_one("#run-system-prompt").render())
                     output = app.query_one("#run-agent-output").transcript.plain
-                    contract = str(app.query_one("#run-implementation-contract").render())
                     self.assertIn("Validate task", heading)
-                    self.assertIn("System prompt will appear", prompt)
                     self.assertIn("Agent messages", output)
-                    self.assertEqual(contract, "")
+                    # Prompt and output-contract inspection moved to Context/Evidences.
                     self.assertFalse(app.query_one("#run-implementation-panel").display)
+                    self.assertTrue(app.query_one("#run-command-bar").display)
 
                     app._snapshot = replace(
                         app.snapshot,
@@ -993,37 +991,40 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
                         ),
                     )
                     app._render_run_activity(app.snapshot)
-                    self.assertTrue(app.query_one("#run-implementation-panel").display)
-                    self.assertIn(
-                        '"status": "completed"',
-                        str(app.query_one("#run-implementation-contract").render()),
-                    )
+                    self.assertFalse(app.query_one("#run-implementation-panel").display)
+                    self.assertTrue(app.query_one("#run-command-bar").display)
 
                     metrics = str(app.query_one("#run-context-metrics").render())
                     self.assertIn("Status", metrics)
                     self.assertIn("Progress", metrics)
                     self.assertIn("Uptime", metrics)
-                    self.assertIn("Tokens", metrics)
+                    # Unknown token counts are omitted rather than fabricated.
+                    self.assertIn("Status", metrics)
 
-                    steps = str(app.query_one("#run-context-steps").render())
+                    from textual.widgets import OptionList
+                    step_options = app.query_one("#run-context-steps", OptionList)
+                    steps = " ".join(str(option.prompt) for option in step_options.options)
                     self.assertIn("Validate task", steps)
                     self.assertIn("Research repository", steps)
                     self.assertIn("Plan implementation", steps)
 
                     action_dock = app.query_one("#run-required-action")
                     self.assertTrue(action_dock.display)
-                    self.assertIn("REQUIRED ACTION", str(app.query_one("#run-action-title").render()))
+                    self.assertIn("Approval", str(app.query_one("#run-action-title").render()))
                     self.assertIn(action.label, str(app.query_one("#run-action-controls").render()))
-                    self.assertFalse(app.query_one("#run-command-bar").display)
+                    self.assertTrue(app.query_one("#run-command-bar").display)
 
                     await pilot.resize_terminal(60, 24)
                     await pilot.pause()
                     self.assertFalse(app.query_one("#run-context").display)
                     compact_tabs = app.query_one("#run-compact-tabs")
                     self.assertTrue(compact_tabs.display)
-                    self.assertIn("Live", str(compact_tabs.render()))
-                    self.assertIn("Changes unavailable", str(compact_tabs.render()))
-                    self.assertIn("Evidences unavailable", str(compact_tabs.render()))
+                    self.assertIn("Supervision", str(compact_tabs.render()))
+                    await pilot.press("f6")
+                    await pilot.pause()
+                    from loopforge.cli.textual_app.screens import RunSupervisionScreen
+                    self.assertIsInstance(app.screen, RunSupervisionScreen)
+                    await pilot.press("escape")
 
     async def test_run_screen_shows_project_adapter_and_run_identity(self) -> None:
         """The fixed run context keeps project, adapter, and run identity visible."""

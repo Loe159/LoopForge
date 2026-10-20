@@ -8,7 +8,7 @@ state without allowing workers to mutate widgets.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Iterable
@@ -26,6 +26,7 @@ from loopforge.cli.models import (
 from loopforge.cli.operations import OperationController, OperationEvent
 from loopforge.cli.presentation import ShellSnapshot, shell_snapshot_from_status
 from loopforge.cli.run_artifacts import load_run_agent_snapshot
+from loopforge.cli.run_reading import RunReading, load_reading, save_reading, RUN_VIEWS
 from loopforge.engine import (
     MetricsService,
     StatusResult,
@@ -102,6 +103,12 @@ class StateStore:
         self._run_blockers: tuple[str, ...] = ()
         self._run_metrics: MappingProxyType[str, Any] = MappingProxyType({})
         self._run_agent = RunAgentSnapshot()
+        self._reading = RunReading()
+        self._reading_root: Path | None = None
+        self._sessions: tuple[Any, ...] = ()
+        self._context: Any = None
+        self._changes: Any = None
+        self._evidences: Any = None
         self._branch = "no Git branch"
         self._evidence = EvidenceSnapshot("empty")
         self._operation = OperationSnapshot()
@@ -149,6 +156,10 @@ class StateStore:
         self._run_blockers = ()
         self._run_metrics = MappingProxyType({})
         self._run_agent = RunAgentSnapshot()
+        self._reading = RunReading()
+        self._reading_root = None
+        self._sessions = ()
+        self._context = self._changes = self._evidences = None
         self._branch = "no Git branch"
         self._evidence = EvidenceSnapshot("empty")
         self.invalidate("project-selection")
@@ -159,6 +170,10 @@ class StateStore:
         self._selected_run_id = run_id or None
         self._generation += 1
         self._run_agent = RunAgentSnapshot()
+        self._reading = RunReading()
+        self._reading_root = None
+        self._sessions = ()
+        self._context = self._changes = self._evidences = None
         self.invalidate("run-selection")
         self.flush()
         return self.begin_load()
@@ -232,7 +247,10 @@ class StateStore:
         shell = shell_snapshot_from_status(status)
         loaded_branch = self._branch_loader(identity.project)
         run_metrics = _metrics_for_status(status, self._metrics_loader)
-        run_agent = self._run_agent_loader(status, self._operation.events)
+        if status.run_dir != self._reading_root:
+            self._reading = load_reading(status.run_dir)
+            self._reading_root = status.run_dir
+        run_agent = self._load_selected_agent(status, self._operation.events)
         rows = [_frozen_row(row) for row in getattr(projects_result, "projects", ())]
         if not any(_row_path(row) == identity.project for row in rows):
             rows.insert(
@@ -255,6 +273,7 @@ class StateStore:
         self._status = status
         self._run_metrics = run_metrics
         self._run_agent = run_agent
+        self._load_run_views(status)
         self._runs = tuple(_frozen_row(row) for row in getattr(runs_result, "runs", ()))
         self._run_blockers = tuple(str(value) for value in getattr(runs_result, "blockers", ()))
         self._project_rows = tuple(rows)
@@ -324,12 +343,65 @@ class StateStore:
                 or any("Waiting for harness events;" in event.message for event in history)
             )
         ):
-            run_agent = self._run_agent_loader(self._status, history)
+            run_agent = self._load_selected_agent(self._status, history)
             self._run_agent = run_agent
             if run_agent.system_prompt:
                 self._run_agent_operation_session = session_key
         self.invalidate("operation-event")
         return self._snapshot
+
+    def _load_selected_agent(self, status: StatusResult, events: Any) -> RunAgentSnapshot:
+        if self._run_agent_loader is not load_run_agent_snapshot:
+            return self._run_agent_loader(status, events)
+        from loopforge.cli.run_artifacts import list_run_sessions
+
+        self._sessions = tuple(list_run_sessions(status))
+        valid_ids = {str(item.get("session_id", "")) for item in self._sessions}
+        if self._reading.session_id and self._reading.session_id not in valid_ids:
+            self._reading = replace(self._reading, session_id="")
+        return load_run_agent_snapshot(
+            status, events, stage_id=self._reading.stage_id or None,
+            session_id=self._reading.session_id or None,
+        )
+
+    def _load_run_views(self, status: StatusResult) -> None:
+        """Filesystem reads occur during loading, never in render callbacks."""
+        from loopforge.cli.run_context import load_run_context
+        from loopforge.cli.run_changes import load_run_changes
+        from loopforge.cli.run_evidences import load_run_evidences
+
+        self._context = self._changes = self._evidences = None
+        if status.run_dir is None:
+            return
+        session = getattr(self._run_agent, "session_id", "")
+        if self._reading.view == "Context" and session:
+            self._context = load_run_context(status.run_dir, session)
+        elif self._reading.view == "Changes":
+            self._changes = load_run_changes(
+                status, self._run_agent, cumulative=self._reading.cumulative,
+            )
+        elif self._reading.view == "Evidences":
+            self._evidences = load_run_evidences(
+                status, self._run_agent, stage_id=self._reading.stage_id or None,
+            )
+
+    def select_reading(self, **updates: Any) -> UiSnapshot:
+        """Update navigation only; this never calls a workflow operation."""
+        if updates.get("view", self._reading.view) not in RUN_VIEWS:
+            return self._snapshot
+        if "stage_id" in updates and updates["stage_id"] != self._reading.stage_id:
+            updates.setdefault("session_id", "")
+        self._reading = replace(self._reading, **updates)
+        if self._status is not None:
+            self._run_agent = self._load_selected_agent(self._status, self._operation.events)
+            self._load_run_views(self._status)
+            save_reading(self._status.run_dir, self._reading)
+        self.invalidate("run-reading")
+        return self.flush()
+
+    def save_reading_position(self, *, scroll_y: float, following: bool) -> None:
+        self._reading = replace(self._reading, scroll_y=scroll_y, following=following)
+        save_reading(self._reading_root, self._reading)
 
     def flush(self, *, shell: ShellSnapshot | None = None) -> UiSnapshot:
         shell = shell or (
@@ -403,6 +475,12 @@ class StateStore:
                 attempts=attempts,
                 total_tokens=_metrics_total_tokens(self._run_metrics),
                 agent=self._run_agent,
+                reading=self._reading,
+                sessions=self._sessions,
+                context=self._context,
+                changes=self._changes,
+                evidences=self._evidences,
+                metrics=_visible_metrics(self._run_metrics),
             ),
             evidence=self._evidence,
             settings=SettingsSnapshot(),
@@ -441,6 +519,20 @@ def _metrics_total_tokens(record: MappingProxyType[str, Any]) -> int | None:
     if not isinstance(tokens, dict):
         return None
     return first_nonnegative_int(tokens.get("total_tokens"))
+
+
+def _visible_metrics(record: MappingProxyType[str, Any]) -> tuple[tuple[str, str], ...]:
+    values: list[tuple[str, str]] = []
+    model = record.get("model", {})
+    if isinstance(model, dict) and model.get("id"):
+        values.append(("Model", str(model["id"])))
+    timing = record.get("timing", {})
+    if isinstance(timing, dict) and isinstance(timing.get("duration_seconds"), (int, float)):
+        values.append(("Duration", f"{timing['duration_seconds']:g}s"))
+    cost = record.get("cost", {})
+    if isinstance(cost, dict) and isinstance(cost.get("amount_microunits"), int):
+        values.append(("Cost", f"{cost['amount_microunits'] / 1_000_000:g} {cost.get('currency') or ''}".strip()))
+    return tuple(values)
 
 
 def _operation_snapshot(

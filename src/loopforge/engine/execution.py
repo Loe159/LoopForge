@@ -21,6 +21,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from loopforge.engine.context_capture import capture_prompt_context
+from loopforge.engine.workspace_capture import capture_workspace_state, write_execution_changes
 from loopforge.engine.terminal import (
     TerminalLauncher,
     launch_terminal_session,
@@ -673,6 +675,7 @@ def execute_attempt(
     session = expected_session_for(run, adapter, workspace_dir)
     expected_session_path = attempt_dir / "expected-session.json"
     write_json_atomic(expected_session_path, session)
+    before_changes = capture_workspace_state(workspace_dir)
     before_snapshot = workspace_snapshot(workspace_dir)
     before_git = git_status_entries(workspace_dir)
     before_git_paths = (
@@ -717,6 +720,13 @@ def execute_attempt(
             "Read and follow the complete LoopForge implementation prompt in "
             f"{prompt_reference}. Treat that file as the source of truth for this "
             "attempt."
+        )
+        capture_prompt_context(
+            run_dir=run_dir, execution_dir=attempt_dir, run=run,
+            stage_id="implementation", session_id=attempt_id,
+            attempt_id=attempt_id, harness=adapter,
+            prompt=interactive_prompt_argument, instructions=prompt,
+            execution_mode="terminal", timeout_seconds=timeout_seconds,
         )
         command = interactive_implementation_command(
             adapter=adapter,
@@ -776,6 +786,12 @@ def execute_attempt(
             stderr = terminal.error.encode("utf-8", errors="replace")
             result = None
     if selected_execution_mode == "headless" and not cancelled_before_execution:
+        capture_prompt_context(
+            run_dir=run_dir, execution_dir=attempt_dir, run=run,
+            stage_id="implementation", session_id=attempt_id,
+            attempt_id=attempt_id, harness=adapter, prompt=prompt,
+            execution_mode="headless", timeout_seconds=timeout_seconds,
+        )
         protocol_command = adapter_protocol_command(
             adapter=adapter,
             command=command,
@@ -803,6 +819,11 @@ def execute_attempt(
             result_origin = "adapter"
 
     finished = utc_now()
+    write_execution_changes(
+        run_dir=run_dir, execution_dir=attempt_dir, run=run,
+        stage_id="implementation", session_id=attempt_id, attempt_id=attempt_id,
+        before=before_changes, after=capture_workspace_state(workspace_dir),
+    )
     after_snapshot = workspace_snapshot(workspace_dir)
     after_git = git_status_entries(workspace_dir)
     after_git_paths = (

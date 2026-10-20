@@ -355,11 +355,9 @@ def run_attempt_heading(snapshot: UiSnapshot) -> Text:
     if shell is None or shell.run is None:
         text.append("--- Loading run ---", style="#958EA0")
         return text
-    stage = next(
-        (value for value in shell.stages if value.id == shell.run.current_stage),
-        None,
-    )
-    stage_label = str(getattr(stage, "title", "") or shell.run.current_stage or "Run")
+    selected_id = snapshot.run.reading.stage_id or snapshot.run.agent.stage_id or shell.run.current_stage
+    stage = next((value for value in shell.stages if value.id == selected_id), None)
+    stage_label = str(getattr(stage, "title", "") or selected_id or "Run")
     number = snapshot.run.agent.attempt_number
     if number is None and snapshot.run.attempts:
         candidate = snapshot.run.attempts[-1].get("number")

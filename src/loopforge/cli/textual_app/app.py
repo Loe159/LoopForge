@@ -18,7 +18,7 @@ from textual.command import DiscoveryHit, Hit, Hits, Provider
 from textual.containers import Container
 from textual.events import Resize
 from textual.timer import Timer
-from textual.widgets import Collapsible, Footer, Header, Input, Static
+from textual.widgets import Button, Collapsible, Footer, Header, Input, OptionList, Select, Static
 
 from loopforge import __version__
 from loopforge.cli.actions import ActionDescriptor
@@ -30,6 +30,7 @@ from loopforge.cli.models import UiSnapshot
 from loopforge.cli.operations import OperationController
 from loopforge.cli.presentation import FAMILY_PRESENTATION
 from loopforge.cli.state_store import StateStore
+from loopforge.cli.run_projection import project_events
 from loopforge.cli.textual_app.messages import LoadFailed, SnapshotPublished
 from loopforge.cli.textual_app.run_presenter import (
     ascii_only as _ascii_only,
@@ -58,12 +59,16 @@ from loopforge.cli.textual_app.widgets import (
     RunHeader,
     RunRequiredAction,
     RunToolEntry,
+    RunDocumentView,
+    RunDetailEntry,
     ScreenList,
 )
 from loopforge.cli.textual_app.screens import (
     AdapterSelectionScreen,
     ConfirmationScreen,
     RecoverableErrorScreen,
+    RunDetailScreen,
+    RunSupervisionScreen,
     TextEntryScreen,
 )
 from loopforge.cli.textual_app.workers import load_project_snapshot, _identity_stale
@@ -165,6 +170,10 @@ class LoopForgeApp(App[None]):
     COMMANDS = {LoopForgeActionProvider}
     BINDINGS = [
         Binding("ctrl+k", "command_palette", "Actions", show=True),
+        Binding("f4", "run_detail", "Detail", show=False),
+        Binding("f6", "run_supervision", "Supervision", show=False),
+        Binding("end", "run_follow", "Follow live", show=False),
+        Binding("ctrl+enter", "run_required_action", "Required action", show=False),
         Binding("ctrl+p", "show_home", "Projects", show=True),
         Binding("enter", "home_open_selected", show=False, priority=True),
         Binding("up,k", "home_move_up", show=False, priority=True),
@@ -227,6 +236,10 @@ class LoopForgeApp(App[None]):
         )
         self._refreshing_after_operation = False
         self._run_follow_tail = True
+        self._run_scope = None
+        self._seen_events: dict[object, int] = {}
+        self._session_options_signature = None
+        self._syncing_session_select = False
         self._screen = "home"
         self._home_focus = "projects"
         self._home_new_run_project: Path | None = None
@@ -255,10 +268,11 @@ class LoopForgeApp(App[None]):
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         """Enable the dashboard's priority bindings only on its own surface."""
 
-        if action in {"root_open_selected", "open_selected"} and isinstance(
-            getattr(self.focused, "parent", None), RunToolEntry
+        if action in {"root_open_selected", "open_selected"} and (
+            isinstance(self.focused, (Select, OptionList)) or
+            isinstance(getattr(self.focused, "parent", None), (RunToolEntry, RunDetailEntry))
         ):
-            return False  # Enter belongs to the focused tool's native disclosure.
+            return False  # Native selection and disclosures own Enter.
         if action.startswith("home_"):
             return self._screen == "home" and not isinstance(self.focused, Input)
         if action.startswith("root_"):
@@ -278,6 +292,8 @@ class LoopForgeApp(App[None]):
                 return False
             if isinstance(self.focused, Input):
                 return action in {"root_go_back", "root_cancel_or_exit"}
+            if self._screen == "run" and isinstance(self.focused, (Select, OptionList)):
+                return action not in {"root_open_selected", "root_move_up", "root_move_down"}
             return True
         return super().check_action(action, parameters)
 
@@ -368,6 +384,7 @@ class LoopForgeApp(App[None]):
         self._select_project_context(project)
         self._screen = "run"
         self._run_follow_tail = True
+        self._run_scope = None
         self._reset_list_cursor()
         self._render_snapshot(self._snapshot)
         self._open_run_worker(run_id)
@@ -513,15 +530,11 @@ class LoopForgeApp(App[None]):
             return
         if self._screen == "run":
             activity = self.query_one("#run-activity-feed", RunActivityFeed)
-            activity.scroll_relative(
-                y=delta,
-                animate=False,
-                force=True,
-                immediate=True,
-            )
-            self._run_follow_tail = (
-                delta > 0 and activity.scroll_y >= activity.max_scroll_y
-            )
+            target = (activity if self._snapshot.run.reading.view == "Live"
+                      else self.query_one("#run-document-view", RunDocumentView))
+            target.scroll_relative(y=delta, animate=False, force=True, immediate=True)
+            if self._snapshot.run.reading.view == "Live":
+                self._suspend_run_follow()
             return
         self._screen_list().move_cursor(delta)
 
@@ -1575,7 +1588,11 @@ class LoopForgeApp(App[None]):
             branch=branch,
             pack=pack,
             adapter=adapter,
+            selected_stage=snapshot.run.reading.stage_id or snapshot.run.agent.stage_id or shell.run.current_stage,
+            view=snapshot.run.reading.view, metrics=snapshot.run.metrics,
+            problems=shell.blockers[:5],
         )
+        self._render_run_reading_controls(snapshot)
         compact_context.update(
             separator.join((label, progress, project_name, branch, adapter))
         )
@@ -1587,45 +1604,263 @@ class LoopForgeApp(App[None]):
             else None
         )
         action_dock.update_action(required_action, blocked=shell.family == "blocked")
-        command_bar.display = required_action is None
+        command_bar.display = True  # The action banner never hides command entry.
         command_input = self.query_one("#run-command-input", HomeCommandInput)
         if required_action is not None and command_input.has_focus:
             command_input.set_command_active(False)
 
-    def _render_run_activity(self, snapshot: UiSnapshot) -> None:
-        """Refresh only the widgets that change with streamed harness events."""
+    def _render_run_reading_controls(self, snapshot: UiSnapshot) -> None:
+        reading = snapshot.run.reading
+        view = reading.view
+        agent = snapshot.run.agent
+        shell = snapshot.run.shell
+        stage = reading.stage_id or agent.stage_id or (shell.run.current_stage if shell and shell.run else "")
+        sessions = tuple(x for x in snapshot.run.sessions if x.get("stage_id") == stage)
+        selected_session = reading.session_id or agent.session_id
+        latest = str(sessions[-1].get("session_id") or "") if sessions else ""
+        is_historical = bool(stage != (shell.run.current_stage if shell and shell.run else stage)
+                             or (selected_session and latest and selected_session != latest))
+        self.query_one("#run-selection-stage", Static).update(
+            f"{stage.title()} · " + ("selected history" if is_historical else "latest retained"))
+        options = tuple((str(x["label"]), str(x["session_id"])) for x in sessions)
+        picker = self.query_one("#run-session-select", Select)
+        signature = stage, options
+        self._syncing_session_select = True
+        try:
+            if signature != self._session_options_signature:
+                picker.set_options(options)
+                self._session_options_signature = signature
+            selected = reading.session_id or agent.session_id
+            if options:
+                valid = {value for _, value in options}
+                chosen = selected if selected in valid else options[-1][1]
+                if picker.value != chosen:
+                    picker.value = chosen
+            elif picker.value is not Select.NULL:
+                picker.value = Select.NULL
+        finally:
+            self._syncing_session_select = False
+        for mode in ("Focused", "All", "Raw"):
+            self.query_one("#run-mode-" + mode.lower(), Button).set_class(reading.mode == mode, "selected")
+        self.query_one("#run-reading-controls").display = view == "Live"
+        self.query_one("#run-changes-controls").display = view == "Changes"
+        for name in ("attempt", "cumulative"):
+            self.query_one("#run-diff-" + name, Button).set_class(
+                (name == "cumulative") == reading.cumulative, "selected")
+        feed = self.query_one("#run-activity-feed", RunActivityFeed)
+        documents = self.query_one("#run-document-view", RunDocumentView)
+        feed.display = view == "Live"
+        documents.display = view != "Live"
+        if view == "Live":
+            return
+        sections: list[tuple[str, str, str, bool]] = []
+        if view == "Context":
+            context = snapshot.run.context
+            if context is not None:
+                for part in context.sections:
+                    sections.append((part.id, part.title,
+                                    (f"Source: {part.source} · {part.authority}\n" if part.source else "") + part.content,
+                                    part.expanded))
+                if context.raw_prompt:
+                    note = "Display is bounded / redacted when required; original source retained locally."
+                    sections.append(("raw", "Raw Prompt · " + str(context.capture_state), note + "\n" + context.raw_prompt, False))
+                if context.message:
+                    sections.insert(0, ("context-note", "Capture information", context.message, True))
+            if not sections:
+                sections.append(("empty", "Context", "No captured context for this execution.", True))
+        elif view == "Changes":
+            change = snapshot.run.changes
+            if change is not None:
+                lines = [change.message, "Source: " + change.source, "Capture: " + change.capture_state]
+                if change.base_commit:
+                    lines.append("Git base: " + str(change.base_commit))
+                if change.before_head:
+                    lines.append("Before HEAD: " + str(change.before_head))
+                if change.after_head:
+                    lines.append("After HEAD: " + str(change.after_head))
+                sections.append(("summary", change.scope.title() + " · " + str(len(change.files)) + " files",
+                                 "\n".join(lines), True))
+                for index, changed in enumerate(change.files):
+                    count = (f" +{changed.additions}/-{changed.deletions}" if
+                             changed.additions is not None and changed.deletions is not None else "")
+                    marker = " · binary" if changed.binary else ""
+                    title = changed.status.upper() + " · " + changed.path + count + marker
+                    body = changed.diff or ("Binary change; no text diff." if changed.binary else
+                                            "No retained text diff for this path.")
+                    if changed.truncated:
+                        body += "\n[Diff preview bounded; full output not retained here.]"
+                    sections.append((f"change-{index}", title, body, False))
+            if not sections:
+                sections.append(("no-changes", "Changes", "No reliable snapshot for this selection.", True))
+        else:
+            evidence = snapshot.run.evidences
+            if evidence is not None:
+                sections = [(s.key, s.title, s.body, s.expanded) for s in evidence.sections]
+            if not sections:
+                sections.append(("no-evidence", "Evidences", "No retained evidence for this selection.", True))
+        documents.update_sections((snapshot.selected_run_id, stage, agent.session_id, view,
+                                   reading.cumulative), tuple(sections))
 
+    def _render_run_activity(self, snapshot: UiSnapshot) -> None:
         activity = self.query_one("#run-activity-feed", RunActivityFeed)
-        owns_operation = self._operation_run_identity == _snapshot_run_identity(snapshot)
+        reading = snapshot.run.reading
+        agent = snapshot.run.agent
+        scope = (_snapshot_run_identity(snapshot), agent.stage_id, agent.session_id, reading.mode)
+        if scope != self._run_scope:
+            self._run_scope = scope
+            self._run_follow_tail = reading.following
+            if not reading.following:
+                self.call_after_refresh(lambda: activity.scroll_to(y=reading.scroll_y, animate=False))
+        owns_operation = (self._operation_run_identity == _snapshot_run_identity(snapshot)
+                          and not reading.stage_id and not reading.session_id)
+        live = owns_operation and snapshot.operation.state == "loading" and not snapshot.operation.finished
+        raw_mode = reading.mode == "Raw"
+        entries = None
+        body = _run_activity_text(snapshot, include_operation_events=owns_operation)
+        if raw_mode:
+            raw = agent.raw_output
+            title = f"Raw source: {agent.raw_source or 'unavailable'} · bounded capture"
+            from loopforge.cli.textual_app.run_presenter import TranscriptEntry
+            entries = (TranscriptEntry("raw", "info", title,
+                                      raw or "No raw source captured for this execution."),)
+            body = Text(title + "\n" + (raw or "No raw source captured."))
+        elif agent.structured_events:
+            entries = project_events(agent.structured_events, mode=reading.mode,
+                                     session_closed=agent.session_closed)
+            body = Text("\n".join(e.title + "\n" + e.body for e in entries))
         activity.update_content(
-            heading=_run_attempt_heading(snapshot),
-            system_prompt=snapshot.run.agent.system_prompt,
-            agent_output=_run_activity_text(
-                snapshot,
-                include_operation_events=owns_operation,
-            ),
-            implementation_contract=snapshot.run.agent.implementation_contract,
-            adapter=snapshot.run.agent.adapter
-            or str(getattr(self.shell, "selected_adapter", "default")),
-            active=owns_operation and not snapshot.operation.finished
-            and snapshot.operation.state == "loading",
-            scope=(_snapshot_run_identity(snapshot), snapshot.run.agent.attempt_number,
-                   snapshot.run.agent.system_prompt, snapshot.run.agent.adapter),
-        )
-        if self._run_follow_tail and owns_operation and snapshot.operation.events:
-            # New disclosure widgets are mounted asynchronously; follow after
-            # layout so the previous scroll extent cannot strand the reader.
+            heading=_run_attempt_heading(snapshot), system_prompt="",
+            agent_output=body, implementation_contract=agent.implementation_contract,
+            adapter=agent.adapter or str(getattr(self.shell, "selected_adapter", "default")),
+            active=live and not agent.session_closed, scope=scope, entries=entries)
+        result = self.query_one("#run-execution-result")
+        receipt = self.query_one("#run-result-text", Static)
+        finished = agent.session_closed or (agent.attempt_number is not None and
+                    any(a.get("number") == agent.attempt_number and
+                        a.get("status") in {"completed", "blocked", "failed", "cancelled"}
+                        for a in snapshot.run.attempts))
+        result.display = finished and bool(agent.session_id)
+        if result.display:
+            attempt = next((a for a in snapshot.run.attempts if
+                            a.get("number") == agent.attempt_number), {})
+            message = "Execution result · " + (str(attempt.get("status") or "Agent session finished"))
+            if attempt.get("contract_validation_error"):
+                message += "\nContract rejected: " + str(attempt["contract_validation_error"])[:200]
+            if attempt.get("result_origin"):
+                message += "\nResult source: " + str(attempt["result_origin"])
+            receipt.update(Text(message))
+        event_count = agent.event_count
+        if reading.following:
+            self._seen_events[scope] = event_count
+        unseen = max(0, event_count - self._seen_events.get(scope, event_count))
+        follow = self.query_one("#run-follow", Button)
+        follow.label = ("Following live" if reading.following else
+                        f"↓ {unseen} new events · Follow live" if unseen else "↓ Follow live")
+        if reading.following and self._run_follow_tail and agent.session_id and reading.view == "Live":
             self.call_after_refresh(self._follow_run_activity_tail)
         self.query_one("#run-command-bar", RunCommandBar).update_hint(
             self._operation_status(snapshot)
-            if owns_operation and snapshot.operation.state != "empty"
-            else ""
-        )
+            if owns_operation and snapshot.operation.state != "empty" else "")
 
     @on(Collapsible.Expanded)
     def _on_tool_expanded(self, event: Collapsible.Expanded) -> None:
         if isinstance(event.collapsible, RunToolEntry):
-            self._run_follow_tail = False  # Let the reader inspect without jumping.
+            self._suspend_run_follow()
+
+    def _suspend_run_follow(self) -> None:
+        if self._screen != "run":
+            return
+        self._run_follow_tail = False
+        feed = self.query_one("#run-activity-feed", RunActivityFeed)
+        self.store.save_reading_position(scroll_y=feed.scroll_y, following=False)
+        self.store.invalidate("run-reading-position")
+        self.store.flush()
+
+    def action_run_follow(self) -> None:
+        if self._screen != "run":
+            return
+        self._run_follow_tail = True
+        self.store.select_reading(view="Live", stage_id="", session_id="",
+                                  following=True, scroll_y=0)
+        self._follow_run_activity_tail()
+
+    def action_run_detail(self) -> None:
+        if self._screen != "run":
+            return
+        focus = self.focused
+        element = focus
+        while element is not None and not isinstance(element, (RunToolEntry, RunDetailEntry)):
+            element = element.parent
+        if element is None:
+            return
+        self._suspend_run_follow()
+        if isinstance(element, RunToolEntry):
+            self.push_screen(RunDetailScreen(element.entry.title, element.entry.body))
+        else:
+            self.push_screen(RunDetailScreen(str(element.title), element.body))
+
+    def action_run_supervision(self) -> None:
+        if self._screen == "run":
+            self.push_screen(RunSupervisionScreen(self._snapshot), self._on_supervision_selected)
+
+    def _on_supervision_selected(self, choice: tuple[str, str] | None) -> None:
+        if choice:
+            self._change_run_reading(**{choice[0]: choice[1]})
+
+    def action_run_required_action(self) -> None:
+        shell = self._snapshot.run.shell
+        if self._screen == "run" and shell and shell.run and shell.run.next_action:
+            self.request_action(shell.run.next_action)
+
+    def _change_run_reading(self, **changes: object) -> None:
+        if self._screen != "run":
+            return
+        feed = self.query_one("#run-activity-feed", RunActivityFeed)
+        if "stage_id" in changes:
+            changes["session_id"] = ""
+        changes.setdefault("following", False)
+        changes.setdefault("scroll_y", 0.0)
+        self._run_follow_tail = False
+        self.store.select_reading(**changes)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        name = event.button.id or ""
+        if self._screen != "run":
+            return
+        if name.startswith("run-view-"):
+            self._change_run_reading(view=name.removeprefix("run-view-").title())
+        elif name.startswith("run-mode-"):
+            self._change_run_reading(mode=name.removeprefix("run-mode-").title())
+        elif name == "run-follow":
+            self.action_run_follow()
+        elif name == "run-compact-tabs":
+            self.action_run_supervision()
+        elif name == "run-result-changes":
+            self._change_run_reading(view="Changes")
+        elif name == "run-result-evidences":
+            self._change_run_reading(view="Evidences")
+        elif name == "run-diff-attempt":
+            self._change_run_reading(cumulative=False)
+        elif name == "run-diff-cumulative":
+            self._change_run_reading(cumulative=True)
+        elif name == "run-problems":
+            self._change_run_reading(view="Evidences")
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if (self._screen == "run" and event.select.id == "run-session-select"
+                and not self._syncing_session_select and event.value is not Select.NULL):
+            selected = str(event.value)
+            if selected != self._snapshot.run.agent.session_id:
+                self._change_run_reading(session_id=selected)
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if (self._screen == "run" and event.option_list.id == "run-context-steps"
+                and event.option.id):
+            self._change_run_reading(stage_id=event.option.id)
+
+    def on_run_activity_feed_reading_moved(self, event: RunActivityFeed.ReadingMoved) -> None:
+        if self._screen == "run":
+            self._suspend_run_follow()
 
     def _follow_run_activity_tail(self) -> None:
         if self._run_follow_tail:

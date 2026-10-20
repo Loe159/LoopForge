@@ -122,6 +122,7 @@ def execute_readonly_adapter_command(
     timeout_seconds: int,
     operation_callback: OperationCallback | None = None,
     cancel_event: threading.Event | None = None,
+    observation_dir: Path | None = None,
 ) -> tuple[dict[str, Any], bytes, bytes]:
     """Run a read-only adapter with bounded, observable output.
 
@@ -176,6 +177,16 @@ def execute_readonly_adapter_command(
                 emit_adapter_output(operation_callback, "adapter", stream, chunk)
 
         output_chunk_callback = publish_chunk
+    from loopforge.adapters.event_store import EventRecorder
+    recorder = EventRecorder(observation_dir, structured=bool(stream_format)) if observation_dir is not None else None
+    display_callback = output_chunk_callback
+    if recorder is not None:
+        def capture_chunk(stream: str, chunk: bytes) -> None:
+            if stream == "stdout":
+                recorder.feed(chunk)
+            if display_callback is not None:
+                display_callback(stream, chunk)
+        output_chunk_callback = capture_chunk
     try:
         child = run_streaming_process(
             prepared_command,
@@ -189,6 +200,8 @@ def execute_readonly_adapter_command(
             codex_windows_runtime=Path(resolved[0]).stem.casefold() == "codex",
         )
     finally:
+        if recorder is not None:
+            recorder.close()
         if presenter is not None:
             presenter.close()
     stdout = child["stdout"] if isinstance(child.get("stdout"), bytes) else b""

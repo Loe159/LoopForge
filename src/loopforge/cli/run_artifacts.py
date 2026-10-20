@@ -12,6 +12,7 @@ from loopforge.cli.models import RunAgentSnapshot
 from loopforge.cli.operations import OperationEvent
 from loopforge.engine import StatusResult
 from loopforge.engine.path_resolvers import resolve_artifact
+from loopforge.adapters.event_store import normalize_event, read_events, read_index, safe_path
 
 
 _ATTEMPT_NUMBER = re.compile(r"attempt-(?P<number>\d+)$")
@@ -29,69 +30,140 @@ _CONTRACT_FIELDS = (
 )
 
 
+def list_run_sessions(status: StatusResult) -> tuple[dict[str, Any], ...]:
+    """Discover retained execution directories, without mutating run state."""
+    if status.run_dir is None or not isinstance(status.run, dict):
+        return ()
+    root = status.run_dir.resolve()
+    sessions: dict[str, dict[str, Any]] = {}
+    def add(path: Path, stage: str, attempt: dict | None = None) -> None:
+        try:
+            relative = str(path.relative_to(root))
+        except ValueError:
+            return
+        confined = safe_path(root, relative)
+        if confined is None or not confined.is_dir():
+            return
+        number = _attempt_number_from_dir(confined) if stage == "implementation" else None
+        if relative in sessions and attempt is None:
+            return  # Keep metadata from the authoritative run attempt record.
+        if not any(safe_path(confined, name) is not None and (confined / name).is_file()
+                   for name in ("adapter-prompt.md", "prompt.md", "adapter.stdout", "agent-transcript.log", "agent-events-index.json", "execution.json", "attempt.json")) and attempt is None:
+            return
+        adapter = str(attempt.get("adapter") or "") if attempt else _stage_adapter(confined)
+        sessions[relative] = {"stage_id": stage, "session_id": relative, "session_dir": relative,
+                              "attempt_number": number, "adapter": adapter,
+                              "label": f"Attempt {number:02d}" if number is not None else "Session",
+                              "mtime": _session_mtime(confined)}
+    attempts = status.run.get("attempts", [])
+    for attempt in attempts if isinstance(attempts, list) else []:
+        if isinstance(attempt, dict):
+            path = _record_attempt_dir(root, attempt)
+            if path is not None:
+                add(path, "implementation", attempt)
+    attempts_root = safe_path(root, "attempts")
+    if attempts_root is not None and attempts_root.is_dir():
+        for path in attempts_root.iterdir():
+            if _attempt_number_from_dir(path) is not None:
+                add(path, "implementation")
+    stages_root = safe_path(root, "artifacts/stages")
+    if stages_root is not None and stages_root.is_dir():
+        for stage_dir in stages_root.iterdir():
+            if _stage_from_dir(stage_dir) is None or safe_path(root, str(stage_dir.relative_to(root))) is None:
+                continue
+            add(stage_dir, stage_dir.name)
+            archives = safe_path(stage_dir, "sessions")
+            if archives is not None and archives.is_dir():
+                for archived in archives.iterdir():
+                    add(archived, stage_dir.name)
+    ordered = sorted(sessions.values(), key=lambda value: (value["mtime"], value["session_id"]))
+    counters: dict[str, int] = {}
+    for session in ordered:
+        if session["attempt_number"] is None:
+            stage = session["stage_id"]
+            counters[stage] = counters.get(stage, 0) + 1
+            session["label"] = f"Session {counters[stage]:02d}"
+    return tuple(ordered)
+
+
 def load_run_agent_snapshot(
     status: StatusResult,
     events: Iterable[OperationEvent] = (),
+    *,
+    stage_id: str | None = None,
+    session_id: str | None = None,
+    before_order: int | None = None,
 ) -> RunAgentSnapshot:
-    """Read the latest observable agent session inside ``status.run_dir``."""
-
+    """Read one retained session; explicit historical selection never rebinds."""
     if status.run_dir is None or not isinstance(status.run, dict):
         return RunAgentSnapshot()
     run_dir = status.run_dir.resolve()
-    attempt = _latest_attempt(status.run)
-    event_dir = _latest_event_session_dir(run_dir, events)
-    record_attempt_dir = _record_attempt_dir(run_dir, attempt)
-    record_stage_dir = _latest_stage_dir(run_dir)
-    record_dir = _newer_session_dir(record_attempt_dir, record_stage_dir)
-    session_dir = event_dir or record_dir
+    events = tuple(events)
+    sessions = list_run_sessions(status)
+    selected = next((value for value in sessions if value["session_id"] == session_id
+                     and (not stage_id or value["stage_id"] == stage_id)), None)
+    if session_id and selected is None:
+        return RunAgentSnapshot(stage_id=stage_id or "", session_id=session_id)
+    if selected is None and stage_id:
+        selected = next((value for value in reversed(sessions) if value["stage_id"] == stage_id), None)
+        if selected is None:
+            return RunAgentSnapshot(stage_id=stage_id)
+    if selected is None:
+        event_dir = _latest_event_session_dir(run_dir, events)
+        selected = next((value for value in sessions if run_dir / value["session_id"] == event_dir), None)
+        selected = selected or (sessions[-1] if sessions else None)
+    if selected is None:
+        return RunAgentSnapshot()
+    session_dir = safe_path(run_dir, selected["session_id"])
     if session_dir is None:
         return RunAgentSnapshot()
-
-    if _stage_from_dir(session_dir) is not None:
-        return _stage_snapshot(run_dir, session_dir, events)
-
-    number = _attempt_number_from_dir(session_dir)
-    record_number = _positive_int(attempt.get("number")) if attempt else None
-    use_record = record_attempt_dir == session_dir
-    adapter = str(attempt.get("adapter") or "") if attempt and use_record else ""
-    if not adapter:
+    number = selected["attempt_number"]
+    stage = selected["stage_id"]
+    attempts = status.run.get("attempts", [])
+    attempt = next((item for item in attempts if isinstance(item, dict) and
+                    _positive_int(item.get("number")) == number), None) if number is not None and isinstance(attempts, list) else None
+    adapter = selected["adapter"]
+    # Foreground events identify an adapter only for their actual session.
+    if not adapter and _latest_event_session_dir(run_dir, events) == session_dir:
         adapter = _adapter_from_events(events)
-
-    prompt_path = _artifact_path(
-        run_dir,
-        attempt.get("prompt_path") if attempt and use_record else None,
-        session_dir / "adapter-prompt.md",
-    )
-    stdout_path = _artifact_path(
-        run_dir,
-        attempt.get("stdout_path") if attempt and use_record else None,
-        session_dir / "adapter.stdout",
-    )
-    result_path = _artifact_path(
-        run_dir,
-        attempt.get("result_path") if attempt and use_record else None,
-        session_dir / "result.json",
-    )
-
-    system_prompt = _clean_text(_read_text(prompt_path))
+    prompt_path = _artifact_path(run_dir, attempt.get("prompt_path") if attempt else None,
+                                 session_dir / ("adapter-prompt.md" if number is not None else "prompt.md"))
+    stdout_path = _artifact_path(run_dir, attempt.get("stdout_path") if attempt else None, session_dir / "adapter.stdout")
     transcript_path = _artifact_path(run_dir, None, session_dir / "agent-transcript.log")
     has_transcript = transcript_path is not None and transcript_path.is_file()
-    agent_output = _agent_output(
-        _read_transcript_tail(transcript_path) if has_transcript else _read_bounded(stdout_path, 20_000)
-    )
-    contract = _implementation_contract(
-        result_path,
-        attempt if use_record else None,
-        adapter=adapter,
-        attempt_number=number or record_number,
-    )
+    raw_path = transcript_path if has_transcript else stdout_path
+    raw = _read_transcript_tail(raw_path, 64_000)
+    raw_output = _observable_text(raw, limit=64_000)
+    index = read_index(session_dir)
+    structured = read_events(session_dir, before=before_order)
+    if not index and not has_transcript:
+        projected: list[dict[str, Any]] = []
+        for line in raw.splitlines():
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(event, dict):
+                for record in normalize_event(event):
+                    projected.append({**record, "event_id": f"legacy-{len(projected)}", "order": len(projected)})
+        structured = tuple(projected[-500:])
     return RunAgentSnapshot(
-        attempt_number=number or record_number,
+        attempt_number=number,
         adapter=adapter,
-        system_prompt=system_prompt,
-        agent_output=agent_output,
-        implementation_contract=contract,
+        system_prompt=_clean_text(_read_bounded(prompt_path, 131_072)),
+        agent_output=_agent_output(raw),
+        implementation_contract=_implementation_contract(
+            _artifact_path(run_dir, attempt.get("result_path") if attempt else None, session_dir / "result.json"),
+            attempt, adapter=adapter, attempt_number=number),
         has_live_transcript=has_transcript,
+        stage_id=stage, session_id=selected["session_id"], session_dir=selected["session_id"],
+        structured_events=structured, raw_output=raw_output,
+        raw_source=str(raw_path.relative_to(run_dir)) if raw_path else "",
+        capture_state="bounded" if raw or index else "",
+        event_count=int(index.get("next_order", len(structured))),
+        first_event_order=int(structured[0].get("order", 0)) if structured else 0,
+        has_earlier_events=bool(structured and structured[0].get("order", 0) > index.get("first_order", 0)),
+        session_closed=bool(index.get("closed", False)),
     )
 
 
@@ -263,23 +335,15 @@ def _positive_int(value: Any) -> int | None:
     return number if number > 0 else None
 
 
-def _artifact_path(
-    run_dir: Path,
-    recorded: Any,
-    fallback: Path,
-) -> Path | None:
+def _artifact_path(run_dir: Path, recorded: Any, fallback: Path) -> Path | None:
     raw = str(recorded or "").strip()
-    if raw:
+    path = Path(raw) if raw else fallback
+    if path.is_absolute():
         try:
-            return resolve_artifact(run_dir, raw)
-        except (OSError, ValueError):
+            path = path.relative_to(run_dir)
+        except ValueError:
             return None
-    try:
-        fallback = fallback.resolve()
-        fallback.relative_to(run_dir)
-    except (OSError, ValueError):
-        return None
-    return fallback
+    return safe_path(run_dir, str(path))
 
 
 def _read_bounded(path: Path | None, limit: int) -> str:
@@ -334,7 +398,11 @@ def _clean_text(value: str, limit: int | None = None) -> str:
 def _agent_output(value: str) -> str:
     lines: list[str] = []
     stream_state: dict[str, Any] = {}
-    for raw_line in _clean_text(value, 18_000).splitlines():
+    source = _clean_text(value)
+    if len(source) > 18_000:
+        source = source[-18_000:].partition("\n")[2]
+        source = "Earlier output omitted; showing recent activity.\n" + source
+    for raw_line in source.splitlines():
         line = raw_line.rstrip()
         if not line:
             continue
@@ -351,7 +419,11 @@ def _agent_output(value: str) -> str:
         if safe_line:
             indent = len(line) - len(line.lstrip())
             lines.append(" " * min(indent, 16) + safe_line)
-    return _clean_text("\n".join(lines), 16_000)
+    rendered = _clean_text("\n".join(lines))
+    if len(rendered) > 16_000:
+        rendered = ("Earlier output omitted; showing recent activity.\n"
+                    + rendered[-15_900:].partition("\n")[2])
+    return rendered
 
 
 def _observable_text(value: object, *, limit: int) -> str:

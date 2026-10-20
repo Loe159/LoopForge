@@ -16,7 +16,8 @@ from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.widgets import OptionList
-from textual.widgets import Collapsible, Input, Static
+from textual.widgets import Button, Collapsible, Input, Static, Select
+from textual.message import Message
 from textual.widgets.option_list import Option
 
 from loopforge.cli.textual_app.run_presenter import (
@@ -282,6 +283,9 @@ class RunToolEntry(Collapsible):
 
     def refresh_title(self) -> None:
         entry = self.entry
+        if entry.kind in {"reasoning", "group", "delegation"}:
+            self.title = Text(entry.title + (f"  {entry.summary}" if entry.summary else ""))
+            return
         if entry.status == "running":
             frames = "|/-\\" if ascii_only() else "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
             marker = frames[self.phase % len(frames)]
@@ -320,7 +324,8 @@ class RunAgentOutput(Vertical):
                 item.phase += 1
                 item.refresh_title()
 
-    def update(self, value: Text, *, active: bool = True, scope: object = None) -> None:
+    def update(self, value: Text, *, active: bool = True, scope: object = None,
+               entries: tuple[TranscriptEntry, ...] | None = None) -> None:
         if scope != self._scope:
             for item in self._items.values():
                 item.remove()
@@ -328,7 +333,7 @@ class RunAgentOutput(Vertical):
             self._entries = ()
             self._scope = scope
         self.transcript = value
-        entries = transcript_entries(value.plain)
+        entries = entries if entries is not None else transcript_entries(value.plain)
         if not active:
             entries = tuple(replace(entry, status="unknown") if entry.status == "running" else entry
                             for entry in entries)
@@ -342,7 +347,7 @@ class RunAgentOutput(Vertical):
         for entry in entries:
             item = self._items.get(entry.key)
             if item is None:
-                if entry.kind == "tool":
+                if entry.kind in {"tool", "reasoning", "group", "delegation"}:
                     item = RunToolEntry(entry)
                 else:
                     text = Text()
@@ -384,6 +389,15 @@ class RunAgentOutput(Vertical):
                 self.mount(item)
             elif isinstance(item, RunToolEntry):
                 item.update_entry(entry)
+            elif isinstance(item, Static):
+                body = agent_body_renderable(entry.body)
+                label = "Agent" if entry.kind == "message" else entry.title
+                if isinstance(body, Text):
+                    content = Text(label + "\n", style="bold #E7E0ED")
+                    content.append_text(body)
+                    item.update(content)
+                else:
+                    item.update(Group(Text(label), body))
         if any(entry.status == "running" for entry in entries):
             self._spinner.resume()
         else:
@@ -432,6 +446,12 @@ class RunActivityFeed(VerticalScroll):
 
     can_focus = False
 
+    class ReadingMoved(Message):
+        pass
+
+    def on_mouse_scroll_up(self) -> None:
+        self.post_message(self.ReadingMoved())
+
     def __init__(self) -> None:
         super().__init__(id="run-activity-feed")
         self._system_prompt: str | None = None
@@ -440,11 +460,6 @@ class RunActivityFeed(VerticalScroll):
 
     def compose(self) -> ComposeResult:
         yield Static("", id="run-attempt-heading")
-        yield RunTranscriptPanel(
-            "System Prompt",
-            panel_id="run-system-prompt-panel",
-            body_id="run-system-prompt",
-        )
         yield RunTranscriptPanel(
             "Agent Output",
             panel_id="run-agent-output-panel",
@@ -455,6 +470,11 @@ class RunActivityFeed(VerticalScroll):
             panel_id="run-implementation-panel",
             body_id="run-implementation-contract",
         )
+        with Vertical(id="run-execution-result"):
+            yield Static("", id="run-result-text", markup=False)
+            with Horizontal(classes="run-result-links"):
+                yield Button("View changes", id="run-result-changes", classes="run-link")
+                yield Button("View evidences", id="run-result-evidences", classes="run-link")
 
     def update_content(
         self,
@@ -466,17 +486,13 @@ class RunActivityFeed(VerticalScroll):
         adapter: str,
         active: bool = True,
         scope: object = None,
+        entries: tuple[TranscriptEntry, ...] | None = None,
     ) -> None:
         ellipsis = "..." if ascii_only() else "…"
         self.query_one("#run-attempt-heading", Static).update(heading)
-        prompt = (
-            system_prompt
-            or f"System prompt will appear when the attempt starts{ellipsis}"
+        self.query_one("#run-agent-output", RunAgentOutput).update(
+            agent_output, active=active, scope=scope, entries=entries,
         )
-        if prompt != self._system_prompt:
-            self.query_one("#run-system-prompt", Static).update(prompt)
-            self._system_prompt = prompt
-        self.query_one("#run-agent-output", RunAgentOutput).update(agent_output, active=active, scope=scope)
         contract_panel = self.query_one(
             "#run-implementation-panel", RunTranscriptPanel
         )
@@ -484,7 +500,7 @@ class RunActivityFeed(VerticalScroll):
         if contract != self._implementation_contract:
             self.query_one("#run-implementation-contract", Static).update(contract)
             self._implementation_contract = contract
-        contract_panel.display = bool(contract)
+        contract_panel.display = False  # Contract evidence belongs to Evidences.
         adapter_label = (adapter or "agent").replace("-", " ").title()
         adapter_title = f"Agent Output {'-' if ascii_only() else '•'} {adapter_label}"
         if adapter_title != self._adapter_title:
@@ -492,6 +508,47 @@ class RunActivityFeed(VerticalScroll):
                 "#run-agent-output-panel", RunTranscriptPanel
             ).update_title(adapter_title)
             self._adapter_title = adapter_title
+
+
+class RunDetailEntry(Collapsible):
+    """Inspectable context, diff or evidence; content is always literal."""
+
+    def __init__(self, key: str, title: str, body: str, *, expanded: bool = False) -> None:
+        self.key = key
+        self.body = body
+        self.detail = Static(Text(body), markup=False)
+        super().__init__(self.detail, title=Text(title), collapsed=not expanded,
+                         collapsed_symbol=run_glyph("▸", ">"), expanded_symbol=run_glyph("▾", "v"),
+                         classes="run-document-entry")
+
+
+class RunDocumentView(VerticalScroll):
+    """Lazily loaded sections whose stable identities preserve disclosures."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._scope: object = None
+        self._items: dict[str, RunDetailEntry] = {}
+
+    def update_sections(self, scope: object, sections: tuple[tuple[str, str, str, bool], ...]) -> None:
+        if scope != self._scope:
+            self.remove_children()
+            self._items.clear()
+            self._scope = scope
+        keys = {s[0] for s in sections}
+        for key in tuple(self._items):
+            if key not in keys:
+                self._items.pop(key).remove()
+        for key, title, body, expanded in sections:
+            item = self._items.get(key)
+            if item is None:
+                item = RunDetailEntry(key, title, body, expanded=expanded)
+                self._items[key] = item
+                self.mount(item)
+            elif item.body != body or item.title != Text(title):
+                item.body = body
+                item.title = Text(title)
+                item.detail.update(Text(body))
 
 
 class RunCommandBar(Container):
@@ -527,22 +584,24 @@ class RunRequiredAction(Container):
         yield Static("", id="run-action-description")
         yield Static("", id="run-action-controls")
 
-    def update_action(self, action: Any | None, *, blocked: bool = False) -> None:
-        self.display = action is not None
-        if action is None:
+    def update_action(self, action: Any | None, *, blocked: bool = False,
+                      reason: str = "") -> None:
+        self.display = action is not None or blocked
+        if not self.display:
             return
         title = (
             f"BLOCKED {run_glyph('—', '-')} ACTION REQUIRED"
             if blocked
-            else "REQUIRED ACTION"
+            else "Approval required"
         )
         self.query_one("#run-action-title", Static).update(title)
         self.query_one("#run-action-description", Static).update(
-            str(getattr(action, "description", "Review the current run before continuing."))
+            Text(str(getattr(action, "description", reason or "Inspect the retained evidence.")))
         )
         controls = Text()
-        controls.append(" Enter ", style="bold #0A0A0A on #D0BCFF")
-        controls.append(f"  {getattr(action, 'label', 'Continue')}")
+        if action is not None:
+            controls.append(" Ctrl+Enter ", style="bold #0A0A0A on #D0BCFF")
+            controls.append(f"  {action.label}")
         controls.append("    Ctrl+K ", style="#D0BCFF")
         controls.append("Other actions", style="#CBC3D7")
         self.query_one("#run-action-controls", Static).update(controls)
@@ -557,89 +616,66 @@ class RunContextPanel(Container):
 
 
 class RunContextSidebar(Vertical):
-    """Fixed run facts sourced from the immutable presentation snapshot."""
+    """Supervision scrolls independently; four-view navigation stays pinned."""
 
     def compose(self) -> ComposeResult:
         yield Static("RUN CONTEXT", id="run-context-title")
-        with Vertical(id="run-context-details"):
+        with VerticalScroll(id="run-context-details"):
+            with RunContextPanel("Current activity", panel_id="run-context-configuration-panel"):
+                yield Static("", id="run-context-configuration", markup=False)
+                yield Button("", id="run-problems", classes="run-link")
+            with RunContextPanel("Workflow", panel_id="run-context-steps-panel"):
+                yield OptionList(id="run-context-steps")
             with RunContextPanel("Metrics", panel_id="run-context-metrics-panel"):
-                yield Static("", id="run-context-metrics")
-            with RunContextPanel("Steps", panel_id="run-context-steps-panel"):
-                yield Static("", id="run-context-steps")
-            with RunContextPanel("Configuration", panel_id="run-context-configuration-panel"):
-                yield Static("", id="run-context-configuration")
+                yield Static("", id="run-context-metrics", markup=False)
         with Vertical(id="run-view-tabs"):
-            yield Static(f"{run_glyph('◉', '*')} Live", id="run-view-activity")
-            yield Static(f"{run_glyph('▣', '#')} Changes", classes="run-view-disabled")
-            yield Static(f"{run_glyph('▤', '=')} Evidences", classes="run-view-disabled")
+            for view in ("Live", "Context", "Changes", "Evidences"):
+                yield Button(view, id="run-view-" + view.lower(), classes="run-link")
 
-    def update_content(
-        self,
-        *,
-        status: str,
-        status_color: str,
-        progress: str,
-        uptime: str,
-        tokens: str,
-        steps: tuple[Any, ...],
-        current_stage: str,
-        project: str,
-        branch: str,
-        pack: str,
-        adapter: str,
-    ) -> None:
-        metrics = Text()
-        for index, (label, value, color) in enumerate(
-            (
-                ("Status", status, status_color),
-                ("Progress", progress, "#E7E0ED"),
-                ("Uptime", uptime, "#E7E0ED"),
-                (
-                    "Tokens",
-                    tokens,
-                    semantic_color("attention") if tokens not in {"—", "-"} else "#958EA0",
-                ),
-            )
-        ):
-            if index:
-                metrics.append("\n")
-            metrics.append(f"{label + ':':<10}", style="#958EA0")
-            metrics.append(value, style=color)
-        self.query_one("#run-context-metrics", Static).update(metrics)
-
-        stage_text = Text()
-        for index, stage in enumerate(steps):
-            if index:
-                stage_text.append("\n")
-            family = str(getattr(stage, "family", "waiting"))
-            marker = terminal_marker(getattr(stage, "marker", "○"))
-            is_current = str(getattr(stage, "id", "")) == current_stage
-            color = family_color(family)
-            title = str(getattr(stage, "title", "Unknown step"))
-            line = f"{marker} {title}"
-            if is_current:
-                stage_text.append(line.ljust(34), style="bold #D0BCFF on #34264A")
-            else:
-                style = "strike #958EA0" if family == "complete" else color
-                stage_text.append(line, style=style)
-        if not steps:
-            stage_text.append("No workflow steps.", style="#958EA0")
-        self.query_one("#run-context-steps", Static).update(stage_text)
-
-        configuration = Text()
-        for index, (label, value) in enumerate(
-            (
-                ("Project", project),
-                ("Git", branch),
-                ("Pack", pack),
-                ("Adapter", adapter),
-            )
-        ):
-            if index:
-                configuration.append("\n\n")
-            configuration.append(label, style="bold #CBC3D7")
-            configuration.append(f"\n{value}", style="#958EA0")
-        self.query_one("#run-context-configuration", Static).update(configuration)
+    def update_content(self, *, status: str, status_color: str, progress: str,
+                       uptime: str, tokens: str, steps: tuple[Any, ...],
+                       current_stage: str, project: str, branch: str, pack: str,
+                       adapter: str, selected_stage: str = "", view: str = "Live",
+                       metrics: tuple[tuple[str, str], ...] = (), problems: tuple[str, ...] = (),
+                       todo: str = "") -> None:
+        activity = Text(status, style=status_color)
+        activity.append(f"\n{current_stage}\nAdapter: {adapter}\n{project}")
+        if todo:
+            activity.append("\n" + todo)
+        self.query_one("#run-context-configuration", Static).update(activity)
+        problem_button = self.query_one("#run-problems", Button)
+        problem_button.display = bool(problems)
+        problem_button.label = Text(f"{len(problems)} problems · Inspect" if problems else "")
+        problem_button.tooltip = "\n".join(problems)
+        workflow = self.query_one("#run-context-steps", OptionList)
+        signature = tuple((s.id, s.title, s.family, str(s.marker)) for s in steps), current_stage, selected_stage
+        if signature != getattr(self, "_workflow_signature", None):
+            self._workflow_signature = signature
+            workflow.clear_options()
+            for stage in steps:
+                marker = terminal_marker(stage.marker)
+                selected = "> " if stage.id == selected_stage else "  "
+                active = " (active)" if stage.id == current_stage else ""
+                workflow.add_option(Option(Text(f"{selected}{marker} {stage.title}{active}",
+                                               style=family_color(stage.family)), id=stage.id))
+        values = [("Status", status)]
+        if progress not in {"—", "-", ""}:
+            values.append(("Progress", progress))
+        if uptime not in {"—", "-", ""}:
+            values.append(("Uptime", uptime))
+        values.extend(metrics)
+        if tokens not in {"—", "-", ""}:
+            values.append(("Tokens", tokens))
+        text = Text()
+        for label, value in values:
+            if text:
+                text.append("\n")
+            text.append(label + ": ", style="#958EA0")
+            text.append(value)
+        self.query_one("#run-context-metrics", Static).update(text)
+        self.query_one("#run-context-metrics-panel").display = bool(values)
+        for name in ("Live", "Context", "Changes", "Evidences"):
+            self.query_one("#run-view-" + name.lower(), Button).set_class(name == view, "selected")
 
 
 class RunHotkeyBar(Horizontal):
@@ -647,7 +683,7 @@ class RunHotkeyBar(Horizontal):
 
     def compose(self) -> ComposeResult:
         movement = "Up/Down" if ascii_only() else "↑↓"
-        yield Static(f"{movement} Live   / Command   Ctrl+K Actions", id="run-hotkeys-left")
+        yield Static(f"Tab Navigate  F4 Detail  F6 Views  / Command  End Follow", id="run-hotkeys-left")
         yield Static("Esc Runs   ^q Quit", id="run-hotkeys-right")
 
 
@@ -662,21 +698,19 @@ class RunDashboard(Vertical):
         with Horizontal(id="run-shell"):
             with Vertical(id="run-main"):
                 yield Static("", id="run-compact-context")
-                compact_tabs = Text()
-                compact_tabs.append(
-                    f" {run_glyph('◉', '*')} Live ",
-                    style="bold #0A0A0A on #D0BCFF",
-                )
-                compact_tabs.append(
-                    f"  {run_glyph('▣', '#')} Changes unavailable",
-                    style="#958EA0",
-                )
-                compact_tabs.append(
-                    f"  {run_glyph('▤', '=')} Evidences unavailable",
-                    style="#958EA0",
-                )
-                yield Static(compact_tabs, id="run-compact-tabs")
+                yield Button("Supervision · F6", id="run-compact-tabs", classes="run-link")
+                with Horizontal(id="run-selection"):
+                    yield Static("", id="run-selection-stage", markup=False)
+                    yield Select([], allow_blank=True, prompt="No attempt yet", id="run-session-select")
+                with Horizontal(id="run-reading-controls"):
+                    for mode in ("Focused", "All", "Raw"):
+                        yield Button(mode, id="run-mode-" + mode.lower(), classes="run-link")
+                    yield Button("Follow live", id="run-follow", classes="run-link")
+                with Horizontal(id="run-changes-controls"):
+                    yield Button("Attempt", id="run-diff-attempt", classes="run-link")
+                    yield Button("Run cumulative", id="run-diff-cumulative", classes="run-link")
                 yield RunActivityFeed()
+                yield RunDocumentView(id="run-document-view")
                 yield RunRequiredAction()
                 yield RunCommandBar()
             yield RunContextSidebar(id="run-context")

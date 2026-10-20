@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping
+from loopforge.cli.run_reading import RunReading
 
 if TYPE_CHECKING:
     from loopforge.cli.operations import OperationEvent
@@ -47,6 +48,17 @@ class RunAgentSnapshot:
     agent_output: str = ""
     implementation_contract: str = ""
     has_live_transcript: bool = False
+    stage_id: str = ""
+    session_id: str = ""
+    session_dir: str = ""
+    structured_events: tuple[Mapping[str, Any], ...] = ()
+    raw_output: str = ""
+    raw_source: str = ""
+    capture_state: str = ""
+    event_count: int = 0
+    first_event_order: int = 0
+    has_earlier_events: bool = False
+    session_closed: bool = False
 
 
 @dataclass(frozen=True)
@@ -57,6 +69,12 @@ class RunSnapshot:
     attempts: tuple[Mapping[str, Any], ...] = ()
     total_tokens: int | None = None
     agent: RunAgentSnapshot = RunAgentSnapshot()
+    reading: RunReading = RunReading()
+    sessions: tuple[Mapping[str, Any], ...] = ()
+    context: Any = None
+    changes: Any = None
+    evidences: Any = None
+    metrics: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)

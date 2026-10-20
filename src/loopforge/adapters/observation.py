@@ -22,6 +22,7 @@ from loopforge.adapters.local_implementation_adapter import (
     adapter_event_lines, observable_stream_block, observable_stream_text,
 )
 from loopforge.adapters.commands import _without_options
+from loopforge.adapters.event_store import EventStore
 
 
 TRANSCRIPT_NAME = "agent-transcript.log"
@@ -120,6 +121,7 @@ class TerminalObservation:
         self.session: str | None = None
         self.last_message = ""
         self.truncated = False
+        self.event_store = EventStore(self.directory)
 
     def prepare(self) -> None:
         if not self.active:
@@ -214,6 +216,7 @@ class TerminalObservation:
             self.poll()
             if before == (self.offset, self.native_offset):
                 break
+        self.event_store.close()
         if not self.received:
             self.publish(["No structured events received. See the interactive terminal;",
                           "check harness hook/plugin support or use headless mode."])
@@ -242,6 +245,7 @@ class TerminalObservation:
     def consume(self, event: dict) -> None:
         self.received = True
         if self.adapter in {"kilo", "opencode"}:
+            self.event_store.consume(event, provenance="plugin")
             self.publish(adapter_event_lines(event, self.state))
             return
         session = event.get("session_id")
@@ -259,6 +263,7 @@ class TerminalObservation:
             if path.is_relative_to(root.resolve()) and path.suffix == ".jsonl":
                 self.native_path = path
         self.read_native_messages()
+        self.event_store.consume(event, provenance="hook")
         kind = event.get("hook_event_name")
         tool = observable_stream_text(event.get("tool_name") or "tool")
         if kind == "PreToolUse":
@@ -298,6 +303,7 @@ class TerminalObservation:
                         continue
                     label = {"agent_reasoning": "Reasoning", "agent_message": "Agent message"}.get(payload.get("type"))
                     if label:
+                        self.event_store.consume(event, provenance="native-transcript")
                         value = payload.get("text") or payload.get("message")
                         self.publish(observable_stream_block(label, value))
                         if label == "Agent message":
@@ -308,7 +314,9 @@ class TerminalObservation:
                     if isinstance(content, list):
                         visible = [block for block in content if isinstance(block, dict)
                                    and block.get("type") in {"text", "thinking"}]
-                        self.publish(adapter_event_lines({"type": "assistant", "message": {"content": visible}}, self.state))
+                        public_event = {"type": "assistant", "message": {"content": visible}}
+                        self.event_store.consume(public_event, provenance="native-transcript")
+                        self.publish(adapter_event_lines(public_event, self.state))
                         self.last_message = "\n".join(str(block.get("text") or "") for block in visible if block.get("type") == "text")
             if len(self.native_pending) > MAX_BYTES:
                 self.native_pending = b""

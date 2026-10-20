@@ -13,6 +13,7 @@ result types are safe top-level imports from sibling submodules.
 from __future__ import annotations
 
 import threading
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,8 @@ from loopforge.engine.workflow import StageResult
 from loopforge.engine.path_resolvers import resolve_artifact, resolve_confined
 from loopforge.engine.patch_integrity import patch_integrity_blockers
 from loopforge.engine.execution import OperationCallback
+from loopforge.engine.context_capture import archive_stage_context, capture_prompt_context
+from loopforge.engine.workspace_capture import capture_workspace_state, write_execution_changes
 
 
 MAX_STAGE_ARTIFACT_BYTES = 1_000_000
@@ -539,6 +542,7 @@ def execute_readonly_stage(
 
     stage_dir = status.run_dir / "artifacts" / "stages" / stage
     stage_dir.mkdir(parents=True, exist_ok=True)
+    context_session_id = archive_stage_context(stage_dir, status.run_dir)
     last_message_path = stage_dir / "last-message.md"
     last_message_path.unlink(missing_ok=True)
     emit_operation_event(
@@ -563,6 +567,7 @@ def execute_readonly_stage(
     (stage_dir / "prompt.md").write_text(prompt, encoding="utf-8")
     runtime_prompt_path.unlink(missing_ok=True)
     candidate_path.unlink(missing_ok=True)
+    before_changes = capture_workspace_state(workspace_dir)
     before_snapshot = workspace_snapshot(workspace_dir)
     before_git = git_status_entries(workspace_dir)
     if cancel_event is not None and cancel_event.is_set():
@@ -616,6 +621,12 @@ def execute_readonly_stage(
                 "Do not only print the artifact in the terminal. Do not modify, stage, "
                 "or commit any other worktree file. The candidate file is the only "
                 "worktree write LoopForge permits for this stage."
+            )
+            capture_prompt_context(
+                run_dir=status.run_dir, execution_dir=stage_dir, run=run,
+                stage_id=stage, session_id=context_session_id, attempt_id=None,
+                harness=adapter, prompt=interactive_prompt, instructions=prompt,
+                execution_mode="terminal", timeout_seconds=timeout_seconds,
             )
             command = interactive_stage_command(
                 adapter=adapter,
@@ -706,6 +717,12 @@ def execute_readonly_stage(
                     last_message_path if capture_codex_stream else None
                 ),
             )
+            capture_prompt_context(
+                run_dir=status.run_dir, execution_dir=stage_dir, run=run,
+                stage_id=stage, session_id=context_session_id, attempt_id=None,
+                harness=adapter, prompt=prompt, execution_mode="headless",
+                timeout_seconds=timeout_seconds,
+            )
             if adapter == "local-adapter-fixture":
                 child, stdout, stderr = execute_fixture_command(
                     command=command,
@@ -722,6 +739,7 @@ def execute_readonly_stage(
                     timeout_seconds=timeout_seconds,
                     operation_callback=operation_callback,
                     cancel_event=cancel_event,
+                    observation_dir=stage_dir,
                 )
                 if capture_codex_stream:
                     try:
@@ -771,6 +789,8 @@ def execute_readonly_stage(
     write_json_atomic(
         stage_dir / "execution.json",
         {
+            "candidate_revision": run.get("candidate_revision"),
+            "session_id": context_session_id,
             "adapter": adapter,
             "execution_mode": selected_execution_mode,
             "stream_format": (
@@ -806,6 +826,11 @@ def execute_readonly_stage(
                 else command
             ),
         },
+    )
+    write_execution_changes(
+        run_dir=status.run_dir, execution_dir=stage_dir, run=run,
+        stage_id=stage, session_id=context_session_id, attempt_id=None,
+        before=before_changes, after=capture_workspace_state(workspace_dir),
     )
     after_snapshot = workspace_snapshot(workspace_dir)
     after_git = git_status_entries(workspace_dir)
@@ -876,6 +901,16 @@ def execute_readonly_stage(
         artifact_validation_blockers.append(f"{stage}.md stdout was empty.")
     if artifact_text:
         artifact_validation_blockers.extend(validate_readonly_stage_artifact(stage, artifact_text))
+    validation = {
+        "schema_version": 1, "source": "loopforge-validator",
+        "run_id": run.get("run_id"), "stage_id": stage,
+        "session_id": context_session_id,
+        "candidate_revision": run.get("candidate_revision"),
+        "status": "failed" if artifact_validation_blockers else "passed",
+        "errors": artifact_validation_blockers,
+        "artifact_sha256": hashlib.sha256(artifact_stdout).hexdigest(),
+    }
+    write_json_atomic(stage_dir / "contract-validation.json", validation)
     if artifact_validation_blockers:
         rejected_artifact_path = retain_rejected_readonly_artifact(
             stage_dir=stage_dir,
@@ -929,6 +964,9 @@ def execute_readonly_stage(
             )
             artifact_stdout = artifact_text.encode("utf-8")
     artifact_path.write_bytes(artifact_stdout)
+    write_bytes(stage_dir / f"{stage}.md", artifact_stdout)
+    validation["artifact_sha256"] = hashlib.sha256(artifact_stdout).hexdigest()
+    write_json_atomic(stage_dir / "contract-validation.json", validation)
     updated = normalize_run_workflow_state(run)
     stage_status, current_stage = READONLY_STAGE_SUCCESS[stage]
     updated["stage_statuses"][stage] = stage_status

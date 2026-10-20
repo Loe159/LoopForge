@@ -4,10 +4,80 @@ from __future__ import annotations
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Container
+from textual.containers import Container, VerticalScroll
+from rich.text import Text
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, OptionList, Static
 from textual.widgets.option_list import Option
+
+
+class RunDetailScreen(ModalScreen[None]):
+    """A retained, bounded output; Escape restores the caller's focus."""
+
+    BINDINGS = [Binding("escape", "close", "Back")]
+
+    def __init__(self, title: str, body: str) -> None:
+        super().__init__()
+        self.detail_title = title
+        self.body = body
+
+    def compose(self) -> ComposeResult:
+        with Container(id="run-detail-screen"):
+            yield Static(Text(self.detail_title), id="run-detail-title")
+            with VerticalScroll(id="run-detail-scroll"):
+                yield Static(Text(self.body), markup=False)
+            yield Button("Esc · Back", id="run-detail-close", classes="run-link")
+
+    def action_close(self) -> None:
+        self.dismiss()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss()
+
+
+class RunSupervisionScreen(ModalScreen[tuple[str, str] | None]):
+    """Compact counterpart of the sidebar, including pinned bottom views."""
+
+    BINDINGS = [Binding("escape", "close", "Back")]
+
+    def __init__(self, snapshot: object) -> None:
+        super().__init__()
+        self.snapshot = snapshot
+
+    def compose(self) -> ComposeResult:
+        from loopforge.cli.textual_app.widgets import RunContextSidebar
+
+        yield RunContextSidebar(id="compact-run-context")
+
+    def on_mount(self) -> None:
+        from loopforge.cli.textual_app.widgets import RunContextSidebar
+
+        snapshot = self.snapshot
+        shell = snapshot.run.shell
+        if shell is None or shell.run is None:
+            return
+        self.query_one(RunContextSidebar).update_content(
+            status=shell.run.status, status_color="#E7E0ED", progress="", uptime="", tokens="",
+            steps=shell.stages, current_stage=shell.run.current_stage,
+            selected_stage=snapshot.run.reading.stage_id or snapshot.run.agent.stage_id,
+            project=shell.project.name, branch=snapshot.project.branch,
+            pack=shell.project.pack or "", adapter=snapshot.run.agent.adapter,
+            view=snapshot.run.reading.view, metrics=snapshot.run.metrics,
+        )
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        identity = event.button.id or ""
+        if identity.startswith("run-view-"):
+            event.stop()
+            self.dismiss(("view", identity.removeprefix("run-view-").title()))
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if event.option.id:
+            event.stop()
+            self.dismiss(("stage_id", event.option.id))
 
 
 class RecoverableErrorScreen(ModalScreen[None]):

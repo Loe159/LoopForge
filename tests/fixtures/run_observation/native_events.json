@@ -1,0 +1,11 @@
+{
+  "contract": "LoopForge supported public projections, synthetic protocol fixtures; not claims about installed harness versions",
+  "codex": [{"type":"item.started","item":{"id":"c1","type":"command_execution","command":"python -m unittest","status":"in_progress"}}, {"type":"item.completed","item":{"id":"c1","type":"command_execution","command":"python -m unittest","status":"completed","exit_code":0,"aggregated_output":"OK"}}],
+  "claude": [{"type":"assistant","message":{"content":[{"type":"text","text":"Inspecting."},{"type":"tool_use","id":"read1","name":"Read","input":{"file_path":"README.md"}}]}},{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"read1","content":"Read contents"}]}}],
+  "kilo": [{"type":"tool_use","part":{"id":"p1","callID":"k1","type":"tool","tool":"read","state":{"status":"running","input":{"filePath":"a.py"}}}}],
+  "opencode": [{"type":"reasoning","part":{"id":"p1","type":"reasoning","text":"Public reasoning only"}},{"type":"tool_use","part":{"id":"p2","callID":"o1","type":"tool","tool":"grep","state":{"status":"completed","output":"match"}}}],
+  "aider": ["Tool call (completed) is just text here.", "All checks passed (agent claim)."],
+  "mini-swe-agent": ["Step 1: shell", "Tests passed (agent claim)."],
+  "hooks": [{"hook_event_name":"PreToolUse","session_id":"s1","tool_use_id":"h1","tool_name":"Read","tool_input":{"file_path":"README.md"}},{"hook_event_name":"PostToolUseFailure","session_id":"s1","tool_use_id":"h1","tool_name":"Read","error":"Access denied"}],
+  "partial": [{"type":"item.started","item":{"id":"missing-result","type":"command_execution","command":"pytest","status":"in_progress"}}]
+}
