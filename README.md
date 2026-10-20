@@ -11,6 +11,8 @@ process execution, local adapters, and metrics. The product direction is more
 general and ergonomic: one engine, multiple project packs, explicit autonomy
 profiles.
 
+The [Run/Live TUI UX specification](docs/plans/2026-10-20-001-run-live-context-ux-plan.md) documents the approved redesign, harness observation sources, wireframes, data model, implementation plan, and test criteria. **Design approved; not implemented.**
+
 ## MVP Shape
 
 ```text
