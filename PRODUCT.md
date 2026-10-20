@@ -4,7 +4,7 @@
 
 ## Platform
 
-web
+terminal (Textual TUI and local CLI)
 
 ## Users
 
@@ -32,20 +32,19 @@ The primary surface is a full-screen terminal application. Operators move betwee
 - New Run is available only when an individual project is selected and is hidden for All projects.
 - The New Project shortcut is not part of the current surface.
 - Existing engine APIs, project registries, run state, action descriptors, and slash-command dispatch remain authoritative.
-- Only the main landing screen is in scope for the current redesign.
+- The detailed existing landing-screen design remains valid. A [separate run UX plan](docs/plans/2026-10-20-001-run-live-context-ux-plan.md) now scopes Live, Context, Changes and Evidences (planned, not implemented).
 
 ## Brand Commitments
 
-The product name is LoopForge. The four user-supplied SVG files are the visual source of truth for the main screen, including palette, typography, spacing, component treatments, content hierarchy, and interaction states.
+The product name is LoopForge. The repository-tracked [DESIGN.md](DESIGN.md) is the primary design-system reference for the terminal landing screen. The proposed run extension preserves its visual language.
 
-## Evidence on Hand
+## Design references
 
-- `C:/Users/loedu/Downloads/LoopForge TUI - Design System & Screens.svg` defines foundations.
-- `C:/Users/loedu/Downloads/Components.svg` defines component examples.
-- `C:/Users/loedu/Downloads/Screen all projects.svg` depicts the selected-project state despite its inverted filename.
-- `C:/Users/loedu/Downloads/Screen project active.svg` depicts the All-projects state despite its inverted filename.
+- [DESIGN.md](DESIGN.md): existing terminal foundation.
+- [Native agent observation](docs/decisions/agent-run-observation.md): implemented capabilities and limitations.
+- [Run four-view plan](docs/plans/2026-10-20-001-run-live-context-ux-plan.md): proposed, not implemented.
 
-No external claims, customer evidence, or network-backed content may be invented for this surface.
+The previous evidence section listed local Windows download paths not tracked in the repository. Such paths are not portable documentation.
 
 ## Product Principles
 
