@@ -214,3 +214,7 @@ The shipped terminal surface uses square, cell-aligned geometry with no corner r
 - **Don't** use whole-panel warning, error, or success fills; status color stays local to its marker or phrase.
 - **Don't** add rounded cards, shadows, gradients, decorative imagery, or proportional typography to the terminal workspace.
 - **Don't** introduce a second navigation or command path that diverges from the shared LoopForge behavior.
+
+## Run-screen extension (proposed, not implemented)
+
+This design system describes the landing screen. The [four-view run UX plan](docs/plans/2026-10-20-001-run-live-context-ux-plan.md) specifies an additional **Live / Context / Changes / Evidences** interface with focused agent activity, a per-attempt prompt snapshot, verified diffs and authoritative evidence. It is a target, not a description of shipped controls. Preserve terminal cells, square borders, muted surfaces, restrained status colors, keyboard navigation and persistent commands. Full system prompts belong in Context, not expanded in Live by default.
