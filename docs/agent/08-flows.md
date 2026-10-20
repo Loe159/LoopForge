@@ -108,10 +108,11 @@ Le `ProjectRegistry` (`engine/projects.py`) maintient un registre JSON (`LOOPFOR
 - **Déclenchement :** `loopforge init`, `loopforge open`, `loopforge projects`, TUI home screen
 - **Evidence :** `tools/LoopForge/src/loopforge/engine/projects.py:21-50` — `PROJECTS_DIRECTORY`, `REGISTRY_FILE`, `ProjectRegistration`
 
-## Flux potentiels ou obsolètes
+## Fraîcheur de l'inventaire
 
-*Aucun flux potentiel ou obsolète identifié. Le module est autonome et ses flux sont tous vérifiés.*
+Cet inventaire est un relevé historique de flux. Certains préfixes `tools/LoopForge/` et numéros de lignes ne correspondent plus nécessairement au checkout courant ; revalider avant de coder. Les décisions de la TUI run sont traitées par un document dédié.
 
 ## Travaux planifiés
 
-*Aucun travail planifié documenté.*
+- [Run TUI : Live, Context, Changes, Evidences](../plans/2026-10-20-001-run-live-context-ux-plan.md) (proposé, non implémenté).
+- [Observation des agents](../decisions/agent-run-observation.md) (comportement actuellement implémenté).
