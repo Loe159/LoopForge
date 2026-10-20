@@ -28,6 +28,7 @@ from loopforge.cli.textual_app.run_presenter import (
     terminal_marker,
     TranscriptEntry,
     agent_body_renderable,
+    agent_message_renderable,
     tool_display,
     tool_output_renderable,
     transcript_entries,
@@ -380,19 +381,17 @@ class RunAgentOutput(Vertical):
                 else:
                     text = Text()
                     if entry.kind == "message":
-                        text.append("Agent\n", style="bold #E7E0ED")
-                        body = agent_body_renderable(entry.body)
-                        if isinstance(body, Text):
-                            text.append_text(body)
-                        else:
-                            item = Static(
-                                Group(Text("Agent", style="bold #E7E0ED"), body),
-                                markup=False,
-                                classes=f"run-entry-{entry.kind}",
-                            )
-                            self._items[entry.key] = item
-                            self.mount(item)
-                            continue
+                        item = Static(
+                            Group(
+                                Text("Agent", style="bold #D0BCFF"),
+                                agent_message_renderable(entry.body),
+                            ),
+                            markup=False,
+                            classes="run-entry-message",
+                        )
+                        self._items[entry.key] = item
+                        self.mount(item)
+                        continue
                     elif entry.kind == "reasoning":
                         text.append("Reasoning\n", style="italic #958EA0")
                         body = agent_body_renderable(entry.body)
@@ -418,14 +417,19 @@ class RunAgentOutput(Vertical):
             elif isinstance(item, RunToolEntry):
                 item.update_entry(entry)
             elif isinstance(item, Static):
-                body = agent_body_renderable(entry.body)
-                label = "Agent" if entry.kind == "message" else entry.title
-                if isinstance(body, Text):
-                    content = Text(label + "\n", style="bold #E7E0ED")
-                    content.append_text(body)
-                    item.update(content)
+                if entry.kind == "message":
+                    item.update(Group(
+                        Text("Agent", style="bold #D0BCFF"),
+                        agent_message_renderable(entry.body),
+                    ))
                 else:
-                    item.update(Group(Text(label), body))
+                    body = agent_body_renderable(entry.body)
+                    if isinstance(body, Text):
+                        content = Text(entry.title + "\n", style="bold #E7E0ED")
+                        content.append_text(body)
+                        item.update(content)
+                    else:
+                        item.update(Group(Text(entry.title), body))
         if any(entry.status == "running" for entry in entries):
             self._spinner.resume()
         else:

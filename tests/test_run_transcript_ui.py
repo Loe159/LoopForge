@@ -2,6 +2,7 @@
 
 import unittest
 from tempfile import TemporaryDirectory
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -10,6 +11,7 @@ from rich.text import Text
 from rich.console import Group
 from rich.console import Console
 from rich.syntax import Syntax
+from rich.markdown import Markdown
 from textual.app import App, ComposeResult
 from textual.widgets import Static
 
@@ -17,6 +19,7 @@ from loopforge.adapters.local_implementation_adapter import adapter_event_lines
 from loopforge.adapters.observation import TerminalObservation
 from loopforge.cli.textual_app.run_presenter import (
     agent_body_renderable,
+    agent_message_renderable,
     run_activity_text,
     transcript_entries,
     tool_display,
@@ -76,6 +79,75 @@ class TranscriptReductionTests(unittest.TestCase):
         rendered = agent_body_renderable(entry.body)
         syntax = next(part for part in rendered.renderables if isinstance(part, Syntax))
         self.assertEqual(syntax.code, "def example():\n\n    return 1")
+
+    def test_agent_markdown_formats_headings_lists_and_inline_styles(self):
+        value = ("# Analysis\n\nThe **important** `pyproject.toml` is *ready*.\n\n"
+                 "- pytest\n- ruff\n\n> Review the configuration.")
+        markdown = agent_message_renderable(value)
+        self.assertIsInstance(markdown, Markdown)
+        self.assertFalse(markdown.hyperlinks)
+        self.assertEqual(markdown.markup, value)
+        tokens = list(markdown._flatten_tokens(markdown.parsed))
+        self.assertTrue(any(token.type == "heading_open" for token in tokens))
+        self.assertTrue(any(token.type == "bullet_list_open" for token in tokens))
+        self.assertTrue(any(token.type == "blockquote_open" for token in tokens))
+        self.assertTrue(any(token.type == "strong_open" for token in tokens))
+        self.assertTrue(any(token.type == "em_open" for token in tokens))
+        self.assertTrue(any(token.type == "code_inline" for token in tokens))
+        console = Console(force_terminal=False, width=70, color_system="truecolor")
+        with console.capture() as result:
+            console.print(markdown)
+        plain = result.get()
+        self.assertIn("Analysis", plain)
+        self.assertIn("important", plain)
+        self.assertIn("pyproject.toml", plain)
+        self.assertIn("pytest", plain)
+        self.assertIn("Review the configuration.", plain)
+
+    def test_agent_markdown_fences_partial_stream_and_safe_links(self):
+        value = (
+            'Test [website](javascript:alert(1)) and [docs](https://example.com).\n'
+            '[red]literal[/red]\n\n'
+            '~~~python\nprint("[red]literal[/red]")'
+        )
+        markdown = agent_message_renderable(value)
+        self.assertFalse(markdown.hyperlinks)
+        self.assertEqual(markdown.parsed[-1].type, "fence")
+        self.assertEqual(markdown.parsed[-1].info, "python")
+        console = Console(force_terminal=False, width=70, color_system="truecolor")
+        segments = list(console.render(markdown))
+        self.assertFalse(any(segment.style and segment.style.link for segment in segments))
+        output = "".join(segment.text for segment in segments)
+        self.assertIn("[red]literal[/red]", output)
+        self.assertIn('print("[red]literal[/red]")', output)
+        self.assertIn("docs", output)
+        self.assertNotIn("\x1b", output)
+
+    def test_agent_markdown_does_not_inject_links_in_html_or_literal_markup(self):
+        content = (
+            '<script>window.location="evil"</script>\n'
+            '**normal** [red]literal[/red] [safe](https://example.org)\n\n'
+            '```json\n{"key": "[link=https://evil.test]no[/link]"}\n```'
+        )
+        markdown = agent_message_renderable(content)
+        self.assertEqual(markdown.markup, content)
+        console = Console(width=60, force_terminal=False, color_system="truecolor")
+        segments = list(console.render(markdown))
+        self.assertFalse(any(segment.style and segment.style.link for segment in segments))
+        visible = "".join(segment.text for segment in segments)
+        self.assertIn("[red]literal[/red]", visible)
+        self.assertIn('"[link=https://evil.test]no[/link]"', visible)
+
+    def test_ascii_list_and_quote_markers(self):
+        with patch.dict("os.environ", {"LOOPFORGE_ASCII": "1"}):
+            markdown = agent_message_renderable("- first\n- second\n\n> quote")
+            console = Console(width=50, force_terminal=False)
+            segments = list(console.render(markdown))
+            visible = "".join(segment.text for segment in segments)
+            self.assertIn("* first", visible)
+            self.assertIn("* second", visible)
+            self.assertIn("| quote", visible)
+            self.assertTrue(visible.isascii())
 
     def test_tool_commands_and_json_are_colored_without_changing_text(self):
         value = '$ echo "[red]literal[/red]"\nArguments: {\n  "count": 2,\n  "enabled": true\n}\nOutput: unchanged'
@@ -239,15 +311,16 @@ class TranscriptWidgetTests(unittest.IsolatedAsyncioTestCase):
             output.update(Text(partial))
             await pilot.pause()
             message = app.query_one(".run-entry-message", Static)
-            syntax = message.content.renderables[1]
-            self.assertIsInstance(syntax, Syntax)
-            self.assertEqual(syntax.lexer.name, "Rust")
+            markdown = message.content.renderables[1]
+            self.assertIsInstance(markdown, Markdown)
+            self.assertEqual(markdown.parsed[-1].type, "fence")
+            self.assertEqual(markdown.parsed[-1].info, "rust")
             output.update(Text(partial + '\n      println!("hello");\n  }\n  ~~~\n'
                                + codex_call("a", "completed", 'echo "[red]literal[/red]"')))
             await pilot.pause()
             self.assertEqual(len(app.query(".run-entry-message")), 1)
             message = app.query_one(".run-entry-message", Static)
-            self.assertIn('println!("hello")', message.content.renderables[1].code)
+            self.assertIn('println!("hello")', message.content.renderables[1].markup)
             tool = app.query_one(RunToolEntry)
             tool.collapsed = False
             await pilot.pause()
@@ -256,6 +329,33 @@ class TranscriptWidgetTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("[red]literal[/red]", tool.title.plain)
             self.assertNotIn("[red]literal[/red]", str(tool.detail.render()))
             self.assertLessEqual(message.size.width, 60)
+
+    async def test_agent_markdown_updates_in_place_at_terminal_breakpoints(self):
+        for width in (60, 80, 120, 160):
+            with self.subTest(columns=width):
+                app = TranscriptApp()
+                async with app.run_test(size=(width, 30)) as pilot:
+                    output = app.query_one(RunAgentOutput)
+                    partial = TranscriptEntry("message:agent-1", "message", "Agent",
+                                              "## Résul", "running")
+                    tool = TranscriptEntry("tool:a", "tool", "Shell",
+                                           "$ echo ready\nOutput: ready", "completed")
+                    output.update(Text(""), entries=(partial, tool), scope="one")
+                    await pilot.pause()
+                    message = app.query_one(".run-entry-message", Static)
+                    self.assertTrue(message.styles.border.left[0] == "solid")
+                    self.assertIn("## Résul", message.content.renderables[1].markup)
+                    self.assertEqual(output._items[partial.key], message)
+                    finished = replace(partial, body=(
+                        "## Résultats\n\n- **OK**\n- `ruff`\n\n"
+                        "```python\nprint('[red]literal[/red]')\n```"
+                    ))
+                    output.update(Text(""), entries=(finished, tool), scope="one")
+                    await pilot.pause()
+                    self.assertIs(message, app.query_one(".run-entry-message", Static))
+                    self.assertEqual(len(app.query(RunToolEntry)), 1)
+                    self.assertIn("## Résultats", message.content.renderables[1].markup)
+                    self.assertLessEqual(message.size.width, width)
 
     async def test_hybrid_tool_render_and_narrow_status(self):
         entry = TranscriptEntry(
@@ -309,7 +409,7 @@ class TranscriptWidgetTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("[red]literal[/red]", tool.title.plain)
             self.assertEqual(len(app.query(RunToolEntry)), 1)
             message = app.query_one(".run-entry-message", Static)
-            self.assertIn("I am checking", str(message.render()))
+            self.assertIn("I am checking", message.content.renderables[1].plain)
             await pilot.press("enter")
             self.assertTrue(tool.collapsed)
             await pilot.click("CollapsibleTitle")

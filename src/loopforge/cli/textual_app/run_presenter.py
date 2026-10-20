@@ -8,6 +8,9 @@ from dataclasses import dataclass, replace
 from hashlib import sha256
 from datetime import datetime, timezone
 from rich.console import Group
+from rich.markdown import Markdown, Heading, CodeBlock, BlockQuote, ListItem
+from rich.segment import Segment
+from rich.style import Style
 from rich.syntax import Syntax, PygmentsSyntaxTheme
 from pygments.style import Style as PygmentsStyle
 from pygments.token import Comment, Keyword, Name, Number, Operator, Punctuation, String
@@ -243,6 +246,99 @@ def tool_output_renderable(value: str) -> Text | Syntax | Group:
         return Syntax(value, "json", theme=_TOOL_SYNTAX_THEME, background_color="#1D1A23",
                       word_wrap=True, line_numbers=False, padding=(0, 1))
     return agent_body_renderable(value, tool_output=True)
+
+
+class AgentHeading(Heading):
+    """Compact, left-aligned headings in the existing terminal type scale."""
+
+    def __rich_console__(self, console, options):
+        heading = self.text.copy()
+        heading.justify = "left"
+        heading.stylize("bold #E7E0ED")
+        yield heading
+
+
+class AgentCodeBlock(CodeBlock):
+    """Language-aware code with a recessed background, never Rich markup."""
+
+    def __rich_console__(self, console, options):
+        language = "bash" if self.lexer_name in {"sh", "shell"} else self.lexer_name
+        code = str(self.text).rstrip("\n")
+        syntax = Syntax(
+            code, language, theme=_TOOL_SYNTAX_THEME,
+            background_color="#1D1A23", line_numbers=False,
+            word_wrap=True, padding=(0, 1),
+        )
+        if syntax.lexer is None:
+            syntax = Syntax(
+                code, "text", theme=_TOOL_SYNTAX_THEME,
+                background_color="#1D1A23", word_wrap=True, padding=(0, 1),
+            )
+        if language != "text":
+            yield Text(language, style="#958EA0")
+        yield syntax
+
+
+class AgentBlockQuote(BlockQuote):
+    """A quiet quote rail, distinct from the Agent Message's outer rail."""
+
+    def __rich_console__(self, console, options):
+        lines = console.render_lines(
+            self.elements, options.update(width=max(1, options.max_width - 2)),
+            style=console.get_style("#CBC3D7"),
+        )
+        for line in lines:
+            yield Segment("| " if ascii_only() else "│ ", Style(color="#494454"))
+            yield from line
+            yield Segment.line()
+
+
+class AgentListItem(ListItem):
+    """Quiet bullets; ASCII terminals never receive generated Unicode markers."""
+
+    def render_bullet(self, console, options):
+        lines = console.render_lines(
+            self.elements, options.update(width=max(1, options.max_width - 3)),
+            style=console.get_style("#E7E0ED"),
+        )
+        marker = " * " if ascii_only() else " • "
+        for index, line in enumerate(lines):
+            yield Segment(marker if index == 0 else "   ", Style(color="#958EA0"))
+            yield from line
+            yield Segment.line()
+
+
+class AgentMarkdown(Markdown):
+    """Rich Markdown for untrusted agent prose, without clickable links."""
+
+    elements = {
+        **Markdown.elements,
+        "heading_open": AgentHeading,
+        "fence": AgentCodeBlock,
+        "code_block": AgentCodeBlock,
+        "blockquote_open": AgentBlockQuote,
+        "list_item_open": AgentListItem,
+    }
+
+
+def agent_message_renderable(value: str) -> Text | AgentMarkdown:
+    """Format agent prose safely, avoiding layout churn for plain streaming text.
+
+    Rich's Markdown layout is only needed for formatted content; plain messages
+    stay as Text and retain their exact line breaks. Raw retains the original
+    value regardless. Links in formatted messages are never clickable.
+    """
+    markdown = AgentMarkdown(value, style="#E7E0ED", hyperlinks=False)
+    if all(
+        token.type in {"paragraph_open", "inline", "paragraph_close"} and
+        (token.type != "inline" or all(
+            child.type in {"text", "softbreak", "hardbreak"}
+            for child in (token.children or ())
+        ))
+        for token in markdown.parsed
+    ):
+        return Text(value, style="#E7E0ED")
+    return markdown
 
 
 def transcript_entries(value: str) -> tuple[TranscriptEntry, ...]:
