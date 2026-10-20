@@ -51,6 +51,32 @@ class CockpitPilotTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(app.query_one("#run-activity-feed").display)
             self.assertFalse(app.query_one("#run-document-view").display)
 
+    async def test_live_feed_variant_a_has_no_outer_frame(self):
+        from loopforge.cli.textual_app import LoopForgeApp
+        from loopforge.cli.textual_app.widgets import RunToolEntry
+
+        for width in (60, 80, 120, 160):
+            with self.subTest(columns=width):
+                app = LoopForgeApp(
+                    SimpleNamespace(project_dir=Path.cwd(), theme="dark"),
+                    load_on_mount=False,
+                )
+                async with app.run_test(size=(width, 30)) as pilot:
+                    app._screen = "run"
+                    app._render_snapshot(synthetic_run(app))
+                    await pilot.pause()
+                    panel = app.query_one("#run-agent-output-panel")
+                    self.assertFalse(panel.styles.border)
+                    self.assertEqual(panel.styles.padding.left, 0)
+                    self.assertEqual(panel.styles.padding.right, 0)
+                    agent = app.query_one(".run-entry-message")
+                    tool = app.query_one(RunToolEntry)
+                    self.assertEqual(agent.styles.border.left[0], "solid")
+                    self.assertEqual(
+                        tool.query_one(".run-tool-content").styles.border.left[0], "solid"
+                    )
+                    self.assertTrue(app.query_one("#run-activity-feed").display)
+
     async def test_compact_supervision_overlay_and_escape(self):
         from loopforge.cli.textual_app import LoopForgeApp
         from loopforge.cli.textual_app.screens import RunSupervisionScreen

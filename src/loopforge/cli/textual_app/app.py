@@ -532,9 +532,20 @@ class LoopForgeApp(App[None]):
             activity = self.query_one("#run-activity-feed", RunActivityFeed)
             target = (activity if self._snapshot.run.reading.view == "Live"
                       else self.query_one("#run-document-view", RunDocumentView))
-            target.scroll_relative(y=delta, animate=False, force=True, immediate=True)
-            if self._snapshot.run.reading.view == "Live":
+            live_reading = self._snapshot.run.reading.view == "Live"
+            if live_reading and delta < 0:
+                # Cancel a pending follow callback *before* manual scrolling.
                 self._suspend_run_follow()
+            target.scroll_relative(y=delta, animate=False, force=True, immediate=True)
+            if live_reading and delta > 0:
+                if activity.scroll_y >= activity.max_scroll_y:
+                    # Returning to the tail restores live follow after inspection.
+                    self._run_follow_tail = True
+                    self.store.save_reading_position(scroll_y=0, following=True)
+                    self.store.invalidate("run-reading-position")
+                    self.store.flush()
+                else:
+                    self._suspend_run_follow()
             return
         self._screen_list().move_cursor(delta)
 
@@ -1756,7 +1767,8 @@ class LoopForgeApp(App[None]):
         follow = self.query_one("#run-follow", Button)
         follow.label = ("Following live" if reading.following else
                         f"↓ {unseen} new events · Follow live" if unseen else "↓ Follow live")
-        if reading.following and self._run_follow_tail and agent.session_id and reading.view == "Live":
+        if (reading.following and self._run_follow_tail and reading.view == "Live"
+                and (agent.session_id or owns_operation)):
             self.call_after_refresh(self._follow_run_activity_tail)
         self.query_one("#run-command-bar", RunCommandBar).update_hint(
             self._operation_status(snapshot)

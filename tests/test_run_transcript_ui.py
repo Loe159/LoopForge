@@ -19,6 +19,9 @@ from loopforge.cli.textual_app.run_presenter import (
     agent_body_renderable,
     run_activity_text,
     transcript_entries,
+    tool_display,
+    tool_output_renderable,
+    TranscriptEntry,
 )
 from loopforge.cli.textual_app.widgets import RunAgentOutput, RunToolEntry
 
@@ -91,6 +94,36 @@ class TranscriptReductionTests(unittest.TestCase):
             console.print(rendered)
         self.assertIn("[red]literal[/red]", captured.get())
         self.assertNotIn("\x1b", captured.get())
+
+    def test_tool_display_extracts_codex_command_and_output_without_journal_envelope(self):
+        entry = TranscriptEntry("tool:a", "tool", "Shell", (
+            'Tool call (completed, exit 0) · Shell\n'
+            '  Call ID: "a"\n'
+            '  $ cat pack.json\n'
+            '  Output\n'
+            '    {\n'
+            '      "name": "python",\n'
+            '      "version": 2\n'
+            '    }'), "completed")
+        view = tool_display(entry)
+        self.assertEqual(view.summary, "cat pack.json")
+        self.assertEqual(view.output_label, "stdout")
+        self.assertEqual(view.output, '{\n  "name": "python",\n  "version": 2\n}')
+        rendered = tool_output_renderable(view.output)
+        self.assertIsInstance(rendered, Syntax)
+        self.assertEqual(rendered.lexer.name, "JSON")
+        self.assertNotIn("Call ID", rendered.code)
+
+    def test_tool_display_uses_explicit_mcp_args_and_preserves_unknown_text(self):
+        entry = TranscriptEntry("tool:mcp", "tool", "repo.read", (
+            'MCP tool call (completed) · repo.read\n'
+            '  Arguments: {"path": "README.md"}\n'
+            '  Result: {"ok": true}'), "completed")
+        self.assertEqual(tool_display(entry).summary, "README.md")
+        self.assertEqual(tool_display(entry).output, '{"ok": true}')
+        unknown = TranscriptEntry("tool:x", "tool", "Shell",
+                                  "Non-standard data\n[red]literal[/red]", "unknown")
+        self.assertIn("[red]literal[/red]", tool_display(unknown).output)
 
     def test_native_identity_updates_parallel_calls_without_merging_them(self):
         entries = transcript_entries("\n".join([
@@ -218,9 +251,38 @@ class TranscriptWidgetTests(unittest.IsolatedAsyncioTestCase):
             tool = app.query_one(RunToolEntry)
             tool.collapsed = False
             await pilot.pause()
-            self.assertIn("[red]literal[/red]", tool.detail.content.plain)
-            self.assertTrue(tool.detail.content.spans)
+            # The hybrid places the command in the compact heading only,
+            # rather than repeating it inside the expanded output.
+            self.assertIn("[red]literal[/red]", tool.title.plain)
+            self.assertNotIn("[red]literal[/red]", str(tool.detail.render()))
             self.assertLessEqual(message.size.width, 60)
+
+    async def test_hybrid_tool_render_and_narrow_status(self):
+        entry = TranscriptEntry(
+            "tool:json", "tool", "Shell",
+            'Tool call (completed, exit 0) · Shell\n'
+            '  $ cat a-really-long-and-very-descriptive-path/pack.json\n'
+            '  Output\n'
+            '    {"name": "python", "version": 2}',
+            "completed",
+        )
+        app = TranscriptApp()
+        async with app.run_test(size=(60, 24)) as pilot:
+            output = app.query_one(RunAgentOutput)
+            output.update(Text(""), scope="run-a", entries=(entry,))
+            await pilot.pause()
+            tool = app.query_one(RunToolEntry)
+            self.assertEqual(tool.size.height, 1)
+            self.assertTrue(tool.collapsed)
+            self.assertIn("Done", tool.title.plain)
+            self.assertIn("Shell", tool.title.plain)
+            self.assertNotIn("Call ID", tool.title.plain)
+            tool.collapsed = False
+            await pilot.pause()
+            self.assertIsInstance(tool.detail.content, Syntax)
+            self.assertFalse(bool(tool.query(".run-tool-output-label")))
+            self.assertLessEqual(tool.size.width, 60)
+            self.assertLessEqual(tool.body_container.size.height, 15)
 
     async def test_tool_updates_preserve_expansion_focus_and_literal_details(self):
         app = TranscriptApp()

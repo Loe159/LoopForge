@@ -1208,7 +1208,9 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(feed.scroll_y, feed.max_scroll_y)
 
                     # App-level Enter bindings must yield to the focused tool.
-                    tool = app.query_one("RunToolEntry")
+                    from loopforge.cli.textual_app.widgets import RunToolEntry
+                    tool = next(item for item in app.query(RunToolEntry)
+                                if item.entry.kind == "tool")
                     tool.query_one("CollapsibleTitle").focus()
                     await pilot.press("enter")
                     await pilot.pause()
@@ -1221,7 +1223,11 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
                     app._poll_operation()
                     await wait_for_condition(pilot, lambda: tool.entry.status == "completed",
                                              "the expanded tool to finish in place")
-                    self.assertIs(tool, app.query_one("RunToolEntry"))
+                    self.assertIs(
+                        tool, next(item for item in app.query(RunToolEntry)
+                                   if item.entry.kind == "tool"
+                                   and item.entry.summary == "python -m unittest"),
+                    )
                     self.assertFalse(tool.collapsed)
 
                     app._snapshot = replace(

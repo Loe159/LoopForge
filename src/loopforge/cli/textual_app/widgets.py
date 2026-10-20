@@ -28,6 +28,8 @@ from loopforge.cli.textual_app.run_presenter import (
     terminal_marker,
     TranscriptEntry,
     agent_body_renderable,
+    tool_display,
+    tool_output_renderable,
     transcript_entries,
 )
 
@@ -262,23 +264,40 @@ class RunHeader(Horizontal):
 
 
 class RunToolEntry(Collapsible):
-    """A native call updated in place; expansion is owned by the reader."""
+    """Hybrid tool row: compact title, scrollable syntax-aware output on demand.
+
+    The source body and call key remain untouched for full detail and identity.
+    """
 
     def __init__(self, entry: TranscriptEntry) -> None:
         self.entry = entry
-        self.detail = Static(entry.body, markup=False)
+        self.detail = Static("", markup=False, classes="run-tool-detail")
+        self.body_container = Vertical(self.detail, classes="run-tool-content")
         self.phase = 0
-        super().__init__(self.detail, title="", collapsed=True,
+        super().__init__(self.body_container, title="", collapsed=True,
                          collapsed_symbol=run_glyph("▸", ">"),
                          expanded_symbol=run_glyph("▾", "v"), classes="run-tool-entry")
         self.update_entry(entry)
 
     def update_entry(self, entry: TranscriptEntry) -> None:
         self.entry = entry
-        self.detail.update(
-            agent_body_renderable(entry.body or "No additional details.", tool_output=True)
-        )
+        view = tool_display(entry) if entry.kind == "tool" else None
+        self._summary = view.summary if view else entry.summary
+        self._output = view.output if view else entry.body
+        if self._output:
+            body = tool_output_renderable(self._output) if entry.kind == "tool" else agent_body_renderable(
+                self._output, tool_output=True)
+        else:
+            body = Text("No result received" if entry.status == "unknown"
+                        else "Waiting for output" if entry.status == "running"
+                        else "No output", style="#958EA0")
+        self.detail.update(body)
         self.set_class(entry.status == "failed", "tool-failed")
+        self.set_class(entry.status == "running", "tool-running")
+        self.set_class(entry.status == "unknown", "tool-unknown")
+        self.refresh_title()
+
+    def on_resize(self) -> None:
         self.refresh_title()
 
     def refresh_title(self) -> None:
@@ -290,18 +309,27 @@ class RunToolEntry(Collapsible):
             frames = "|/-\\" if ascii_only() else "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
             marker = frames[self.phase % len(frames)]
         else:
-            marker = {"completed": run_glyph("✓", "+"), "failed": run_glyph("×", "x")}.get(entry.status, "?")
-        title = Text(marker, style=semantic_color("danger") if entry.status == "failed" else
-                     semantic_color("success") if entry.status == "completed" else "#958EA0")
-        title.append(f" {entry.title}", style="#958EA0")
-        if entry.summary:
-            summary = " ".join(entry.summary.split())
-            title.append(f"  {summary[:100]}", style="#958EA0")
-        if entry.status == "failed":
-            title.append("  Failed", style=semantic_color("danger"))
-        elif entry.status == "unknown":
-            title.append("  No result received", style="#958EA0")
-        # Rich Text remains literal: tool names/commands are never markup.
+            marker = {"completed": run_glyph("✓", "+"),
+                      "failed": run_glyph("×", "x")}.get(entry.status, "?")
+        states = {"completed": "Done", "failed": "Failed", "running": "Running",
+                  "unknown": "No result received"}
+        state = states.get(entry.status, "Unknown")
+        color = (semantic_color("danger") if entry.status == "failed"
+                 else semantic_color("success") if entry.status == "completed"
+                 else "#D0BCFF" if entry.status == "running" else "#FFB869")
+        title = Text(marker, style=color)
+        title.append(f" {entry.title}", style="bold #E7E0ED")
+        # The status stays visible at narrow widths instead of being truncated
+        # behind a very long command.
+        command = " ".join(self._summary.split())
+        reserved = len(title.plain) + len(state) + 5
+        width = self.size.width or 90
+        budget = max(0, width - reserved - 3)
+        if command and budget >= 6:
+            if len(command) > budget:
+                command = command[:budget - 1].rstrip() + run_glyph("…", ".")
+            title.append("  " + command, style="#CBC3D7")
+        title.append("  " + state, style=color)
         self.title = title
 
 

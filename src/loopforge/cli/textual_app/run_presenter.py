@@ -8,7 +8,9 @@ from dataclasses import dataclass, replace
 from hashlib import sha256
 from datetime import datetime, timezone
 from rich.console import Group
-from rich.syntax import Syntax
+from rich.syntax import Syntax, PygmentsSyntaxTheme
+from pygments.style import Style as PygmentsStyle
+from pygments.token import Comment, Keyword, Name, Number, Operator, Punctuation, String
 from rich.text import Text
 
 from loopforge.adapters.local_implementation_adapter import observable_stream_text
@@ -139,6 +141,108 @@ class TranscriptEntry:
     body: str
     status: str = ""
     summary: str = ""
+
+
+@dataclass(frozen=True)
+class ToolDisplay:
+    """Display-only extraction from known harness journal labels, never a new event."""
+    summary: str = ""
+    output: str = ""
+    output_label: str = ""
+
+
+def tool_display(entry: TranscriptEntry) -> ToolDisplay:
+    """Remove journal envelopes from Live while retaining the original in entry.body.
+
+    Only exact producer labels delimit output. Unknown or partial content stays
+    visible rather than being silently discarded.
+    """
+    body = entry.body
+    command = entry.summary
+    if not command:
+        match = re.search(r"(?m)^\s*\$ (.+)$", body)
+        if match:
+            command = match.group(1)
+    if not command:
+        for match in re.finditer(r"(?m)^\s*(?:Input|Arguments):\s*", body):
+            try:
+                payload, _ = json.JSONDecoder().raw_decode(body[match.end():])
+            except ValueError:
+                continue
+            if isinstance(payload, dict):
+                command = str(next((payload[key] for key in (
+                    "command", "filePath", "file_path", "path", "pattern", "query"
+                ) if isinstance(payload.get(key), str)), ""))
+                if command:
+                    break
+
+    # Journal output from Codex is an indented 'Output' block. Other
+    # supported adapters use explicitly named Result/Output/Error fields.
+    matches = list(re.finditer(
+        r"(?m)^ {0,2}(Output|Result|Error)(?::[ \t]*|[ \t]*\n)", body
+    ))
+    if matches:
+        marker = matches[-1]
+        label = marker.group(1)
+        output = body[marker.end():].rstrip()
+        if not output and label != "Error":
+            output = ""
+        else:
+            # Codex uses four spaces for retained output; remove that one
+            # producer indentation, preserving nested JSON indentation.
+            lines = output.splitlines()
+            if lines and all(not line.strip() or line.startswith("    ") for line in lines):
+                output = "\n".join(line[4:] if line.startswith("    ") else line for line in lines)
+        if output:
+            return ToolDisplay(command, output, {"Output": "stdout", "Result": "result", "Error": "stderr"}[label])
+
+    # Preserve unknown tool arguments/details. Hide only known redundant
+    # wrapper lines and do not repeat a command that already sits in the title.
+    content = []
+    for line in body.splitlines():
+        stripped = line.strip()
+        if re.match(r"^(?:MCP )?Tool (?:call|result)(?:\s*\(|\s*·|$)", stripped):
+            continue
+        if stripped.startswith("Call ID:"):
+            continue
+        if command and stripped == "$ " + command:
+            continue
+        if re.fullmatch(r"Exit code: -?\d+", stripped):
+            continue
+        content.append(line)
+    return ToolDisplay(command, "\n".join(content).strip(), "")
+
+
+class LoopForgeSyntaxStyle(PygmentsStyle):
+    """Tool output highlighting aligned with DESIGN.md semantic accents."""
+    background_color = "#1D1A23"
+    default_style = "#E7E0ED"
+    styles = {
+        Comment: "#958EA0",
+        Keyword: "#D0BCFF",
+        Name: "#E7E0ED",
+        Name.Tag: "#D0BCFF",
+        Name.Attribute: "#D0BCFF",
+        String: "#A8E6B0",
+        Number: "#FFB869",
+        Operator: "#CBC3D7",
+        Punctuation: "#958EA0",
+    }
+
+
+_TOOL_SYNTAX_THEME = PygmentsSyntaxTheme(LoopForgeSyntaxStyle)
+
+
+def tool_output_renderable(value: str) -> Text | Syntax | Group:
+    """Syntax-highlight confirmed JSON, not arbitrary terminal output."""
+    try:
+        decoded = json.loads(value)
+    except (ValueError, TypeError):
+        return agent_body_renderable(value, tool_output=True)
+    if isinstance(decoded, (dict, list)):
+        return Syntax(value, "json", theme=_TOOL_SYNTAX_THEME, background_color="#1D1A23",
+                      word_wrap=True, line_numbers=False, padding=(0, 1))
+    return agent_body_renderable(value, tool_output=True)
 
 
 def transcript_entries(value: str) -> tuple[TranscriptEntry, ...]:

@@ -327,8 +327,13 @@
     min-height: 7;
 }
 
+/* Live narrative has no outer frame: messages and expanded tools own
+   their single, quieter attachment rails (variant A). */
 #run-agent-output-panel {
-    min-height: 6;
+    min-height: 0;
+    border: none;
+    padding: 0;
+    background: transparent;
 }
 
 .run-tool-entry {
@@ -354,8 +359,30 @@
 }
 
 .run-tool-entry > Contents {
-    padding: 0 0 1 3;
-    color: #958EA0;
+    padding: 0 0 1 2;
+    color: #CBC3D7;
+    height: auto;
+}
+.run-tool-content {
+    height: auto;
+    max-height: 15;
+    margin: 0 0 1 1;
+    padding: 0 0 0 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    border-left: solid #494454;
+    scrollbar-size: 1 1;
+    scrollbar-background: #15121B;
+    scrollbar-color: #494454;
+    scrollbar-color-hover: #8B5CF6;
+}
+.run-tool-detail {
+    width: 1fr;
+    height: auto;
+    min-height: 1;
+    padding: 1 1;
+    background: #1D1A23;
+    color: #E7E0ED;
 }
 
 .run-entry-message {
