@@ -62,13 +62,9 @@ class JsonStoreTests(unittest.TestCase):
 
 
 class InstallationTests(unittest.TestCase):
-    def test_update_uses_pip_upgrade_without_git_pull(self) -> None:
+    def test_update_installs_master_without_a_source_checkout(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
-            (root / "pyproject.toml").write_text(
-                "[project]\nname = 'loopforge'\n", encoding="utf-8"
-            )
-            (root / "src" / "loopforge").mkdir(parents=True)
             scripts = root / "scripts"
             scripts.mkdir()
             command = scripts / ("loopforge.exe" if os.name == "nt" else "loopforge")
@@ -93,13 +89,70 @@ class InstallationTests(unittest.TestCase):
                 [
                     [sys.executable, "-m", "pip", "--version"],
                     ["git", "--version"],
-                    [sys.executable, "-m", "pip", "install", "--upgrade", "-e", "."],
+                    [
+                        sys.executable, "-m", "pip", "install", "--upgrade",
+                        "--force-reinstall", "git+https://github.com/Loe159/LoopForge.git@master",
+                    ],
                     [
                         sys.executable,
                         "-c",
                         "import loopforge, rich, textual",
                     ],
                 ],
+            )
+
+    def test_update_failure_is_reported_without_subprocess_secrets(self) -> None:
+        for failure in (subprocess.CompletedProcess([], 1, "secret", "secret"), OSError("secret")):
+            with (
+                self.subTest(failure=type(failure).__name__),
+                tempfile.TemporaryDirectory() as temp_dir,
+            ):
+                with mock.patch(
+                    "loopforge.engine.subprocess.run",
+                    side_effect=[
+                        subprocess.CompletedProcess([], 0, "pip", ""),
+                        subprocess.CompletedProcess([], 0, "git", ""),
+                        failure,
+                    ],
+                ) as run:
+                    result = install_loopforge(update=True, source_root=Path(temp_dir))
+                self.assertFalse(result.ok)
+                self.assertFalse(result.updated)
+                self.assertEqual(result.diagnostics["pip_upgrade"], "failed")
+                self.assertNotIn("secret", str(result))
+                self.assertEqual(run.call_count, 3)
+
+    def test_missing_git_blocks_update_before_installing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch(
+            "loopforge.engine.subprocess.run",
+            side_effect=[subprocess.CompletedProcess([], 0), FileNotFoundError()],
+        ) as run:
+            result = install_loopforge(update=True, source_root=Path(temp_dir))
+        self.assertFalse(result.ok)
+        self.assertFalse(result.updated)
+        self.assertEqual(result.diagnostics["git"], "unavailable")
+        self.assertEqual(run.call_count, 2)
+
+    def test_local_install_preserves_editable_behavior(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "pyproject.toml").touch()
+            (root / "src" / "loopforge").mkdir(parents=True)
+            command = root / ("loopforge.exe" if os.name == "nt" else "loopforge")
+            command.touch()
+            with (
+                mock.patch(
+                    "loopforge.engine.subprocess.run",
+                    return_value=subprocess.CompletedProcess([], 0),
+                ) as run,
+                mock.patch("loopforge.engine.sysconfig.get_path", return_value=str(root)),
+            ):
+                result = install_loopforge(source_root=root)
+            self.assertTrue(result.ok, result.blockers)
+            self.assertFalse(result.updated)
+            self.assertEqual(
+                run.call_args_list[2].args[0],
+                [sys.executable, "-m", "pip", "install", "-e", "."],
             )
 
 

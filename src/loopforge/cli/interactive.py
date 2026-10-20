@@ -141,7 +141,7 @@ SUPPORTED_COMMANDS = {
     "untrust": "Revoke trust for a previously trusted local pack.",
     "usage": "Show local usage status without inventing unavailable values.",
     "update": (
-        "Pull LoopForge updates, verify prerequisites, and reinstall the command."
+        "Install the latest commit of master from GitHub and verify the command."
     ),
     "verify": "Generate a patch and run deterministic pack checks.",
     "why": "Explain why LoopForge recommends the next action.",

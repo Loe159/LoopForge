@@ -13,6 +13,59 @@ profiles.
 
 The [Run/Live TUI UX specification](docs/plans/2026-10-20-001-run-live-context-ux-plan.md) documents the approved redesign, harness observation sources, wireframes, data model, implementation plan, and test criteria. **Design approved; not implemented.**
 
+## Installation
+
+Requires Python 3.11+, Git, and internet access to GitHub and the Python
+package index. On Linux/macOS, run from this repository:
+
+```sh
+sh install.sh
+```
+
+Or download and run the installer without cloning the repository:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Loe159/LoopForge/master/install.sh -o /tmp/loopforge-install.sh
+sh /tmp/loopforge-install.sh
+```
+
+The installer places LoopForge in `~/.local/share/loopforge/venv` and exposes
+the command in `~/.local/bin`. If needed, it prints the line to add that
+directory to your shell's `PATH`. No administrator access is required.
+On distributions that package `venv` separately, install the Python venv
+package first. `LOOPFORGE_PYTHON`, `LOOPFORGE_INSTALL_DIR`, and
+`LOOPFORGE_BIN_DIR` override the interpreter, environment, and command directory.
+An existing pip-generated LoopForge launcher, including a broken installation,
+is backed up and replaced after the new installation succeeds. Unrecognized
+commands are preserved. To install this checkout (including local fixes) rather
+than GitHub master, run `LOOPFORGE_INSTALL_SOURCE="$PWD" sh install.sh`.
+
+On Windows (or with an existing pipx installation on Linux/macOS):
+
+```text
+py -m pip install --user pipx
+py -m pipx ensurepath
+py -m pipx install "git+https://github.com/Loe159/LoopForge.git@master"
+```
+
+Use `python3` instead of `py` on Linux/macOS. Reopen your terminal after
+`ensurepath` if the command is not yet available.
+
+To update from any project directory:
+
+```text
+loopforge update
+```
+
+`loopforge update` and `/update` install the latest commit of GitHub `master`
+into the Python environment running LoopForge, even when the package version
+has not changed. They work with installed packages and editable installations,
+without requiring a local checkout or changing local branches/files. Updating
+an editable installation replaces it with a regular installation from `master`.
+Restart running LoopForge sessions after updating. For local development,
+keep using `python -m pip install -e .`; `loopforge install` reinstalls local
+sources and requires a source checkout.
+
 ## MVP Shape
 
 ```text

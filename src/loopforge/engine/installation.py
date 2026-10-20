@@ -12,6 +12,9 @@ from pathlib import Path
 from typing import Any
 
 
+UPSTREAM_INSTALL_TARGET = "git+https://github.com/Loe159/LoopForge.git@master"
+
+
 @dataclass(frozen=True)
 class InstallationResult:
     source_root: Path
@@ -29,14 +32,12 @@ def repository_root() -> Path:
 def install_loopforge(
     *, update: bool = False, source_root: Path | None = None
 ) -> InstallationResult:
-    """Install or upgrade LoopForge from its source tree via pip.
+    """Install local sources, or replace the running installation from master.
 
-    ``update`` uses ``pip install --upgrade -e .`` to refresh an existing
-    editable install.  There is no ``git pull`` step — the function relies on
-    pip to obtain the latest version and does not assume a Git work-tree or
-    remote.  Every external command is argument-based and its output is kept
-    out of the result so an installer never echoes credentials from a
-    configured package index or Git remote.
+    Updates use the current interpreter, including pipx/venv installations,
+    and never mutate a developer checkout. Force reinstall because successive
+    commits may share a package version. Subprocess output stays private so
+    configured index credentials cannot leak through diagnostics.
     """
 
     root = (source_root or repository_root()).resolve()
@@ -52,9 +53,9 @@ def install_loopforge(
     blockers: list[str] = []
     if sys.version_info < (3, 11):
         blockers.append("LoopForge requires Python 3.11 or later.")
-    if diagnostics["source"] != "available":
+    if not update and diagnostics["source"] != "available":
         blockers.append(f"LoopForge source metadata was not found at {root}.")
-    if diagnostics["package"] != "available":
+    if not update and diagnostics["package"] != "available":
         blockers.append(
             f"LoopForge package sources were not found at {root / 'src' / 'loopforge'}."
         )
@@ -102,56 +103,39 @@ def install_loopforge(
             False,
         )
 
+    command = [sys.executable, "-m", "pip", "install"]
     if update:
-        # Use pip to upgrade an already-installed LoopForge distribution.
-        # This works regardless of whether the original install was from PyPI
-        # or from a local editable checkout.  It does *not* assume a Git
-        # work-tree or perform a ``git pull``.
-        try:
-            pip_upgrade = subprocess.run(
-                [sys.executable, "-m", "pip", "install", "--upgrade", "-e", "."],
-                cwd=root,
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-        except OSError:
-            pip_upgrade = None
-        diagnostics["pip_upgrade"] = (
-            "updated" if pip_upgrade is not None and pip_upgrade.returncode == 0 else "failed"
-        )
-        if diagnostics["pip_upgrade"] == "failed":
-            return InstallationResult(
-                root,
-                False,
-                "LoopForge update failed.",
-                diagnostics,
-                ["`python -m pip install --upgrade -e .` failed."],
-                False,
-            )
+        command.extend(["--upgrade", "--force-reinstall", UPSTREAM_INSTALL_TARGET])
+        diagnostics["update_source"] = UPSTREAM_INSTALL_TARGET
     else:
-        try:
-            pip_upgrade = subprocess.run(
-                [sys.executable, "-m", "pip", "install", "-e", "."],
-                cwd=root,
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-        except OSError:
-            pip_upgrade = None
-        diagnostics["pip_upgrade"] = (
-            "installed" if pip_upgrade is not None and pip_upgrade.returncode == 0 else "failed"
+        command.extend(["-e", "."])
+    try:
+        pip_upgrade = subprocess.run(
+            command,
+            cwd=root,
+            check=False,
+            capture_output=True,
+            text=True,
         )
-        if diagnostics["pip_upgrade"] == "failed":
-            return InstallationResult(
-                root,
-                False,
-                "LoopForge installation failed.",
-                diagnostics,
-                ["`python -m pip install -e .` failed."],
-                False,
-            )
+    except OSError:
+        pip_upgrade = None
+    diagnostics["pip_upgrade"] = (
+        ("updated" if update else "installed")
+        if pip_upgrade is not None and pip_upgrade.returncode == 0 else "failed"
+    )
+    if diagnostics["pip_upgrade"] == "failed":
+        return InstallationResult(
+            root,
+            False,
+            "LoopForge update failed." if update else "LoopForge installation failed.",
+            diagnostics,
+            [
+                "Could not install LoopForge from GitHub master; check network access "
+                "and write permissions for the current Python environment."
+                if update else "`python -m pip install -e .` failed."
+            ],
+            False,
+        )
 
     try:
         imports = subprocess.run(
@@ -190,10 +174,15 @@ def install_loopforge(
             blockers,
             update,
         )
+    if update:
+        diagnostics["next_step"] = "Restart running LoopForge sessions to use the update."
     return InstallationResult(
         root,
         True,
-        "LoopForge is installed and ready to use.",
+        (
+            "LoopForge was updated from GitHub master; restart running LoopForge sessions."
+            if update else "LoopForge is installed and ready to use."
+        ),
         diagnostics,
         [],
         update,

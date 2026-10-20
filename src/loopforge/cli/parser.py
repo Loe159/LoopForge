@@ -97,7 +97,7 @@ class CliParserBuilder:
 
         update_parser = subcommands.add_parser(
             "update",
-            help="Pull LoopForge updates, then verify and reinstall the command.",
+            help="Install the latest commit of master from GitHub, then verify the command.",
             epilog="Example:\n  loopforge update",
             formatter_class=argparse.RawDescriptionHelpFormatter,
         )
