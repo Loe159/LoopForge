@@ -99,6 +99,23 @@ class CockpitPilotTests(unittest.IsolatedAsyncioTestCase):
                     await pilot.click(".run-file-changes-link")
                     await pilot.pause()
                     self.assertEqual(app._snapshot.run.reading.view, "Changes")
+                    self.assertIsNotNone(app._snapshot.run.shell)
+                    documents = app.query_one("#run-document-view")
+                    self.assertTrue(documents.display)
+                    self.assertFalse(app.query_one("#run-activity-feed").display)
+                    self.assertEqual(set(documents._items), {
+                        "summary", "change-0", "change-1", "change-2",
+                    })
+                    # The in-memory fixture must survive a round trip.
+                    if width >= 120:
+                        await pilot.click("#run-view-live")
+                    else:
+                        # Narrow layouts place view navigation in the F6 overlay.
+                        app._change_run_reading(view="Live")
+                    await pilot.pause()
+                    self.assertEqual(app._snapshot.run.reading.view, "Live")
+                    self.assertEqual(len(app.query(RunFileChangeEntry)), 1)
+                    self.assertNotIn("Loading agent output", app._snapshot.run.agent.agent_output)
 
     async def test_compact_supervision_overlay_and_escape(self):
         from loopforge.cli.textual_app import LoopForgeApp

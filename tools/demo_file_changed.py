@@ -26,6 +26,19 @@ class FileChangedDemo(LoopForgeApp):
     def _suspend_run_follow(self):
         self._run_follow_tail = False
 
+    def _change_run_reading(self, **changes):
+        # This preview is entirely in memory. Using StateStore.select_reading()
+        # would reload an unrelated, empty workspace and lose the demo run.
+        if self._screen != "run":
+            return
+        changes.setdefault("following", False)
+        changes.setdefault("scroll_y", 0.0)
+        self._run_follow_tail = False
+        reading = replace(self._snapshot.run.reading, **changes)
+        self._render_snapshot(replace(
+            self._snapshot, run=replace(self._snapshot.run, reading=reading),
+        ))
+
     def on_mount(self):
         super().on_mount()
         self._screen = "run"
