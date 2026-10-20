@@ -1,5 +1,7 @@
 # LoopForge Implementation Plan
 
+> Historical foundation plan: phase statements below describe work at the time they were written, not a complete current roadmap. The planned (not implemented) run UX is specified in [Live / Context / Changes / Evidences](plans/2026-10-20-001-run-live-context-ux-plan.md).
+
 This plan turns the imported ABL workflow core into a general-purpose agentic
 workflow product.
 
