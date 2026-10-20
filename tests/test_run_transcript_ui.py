@@ -104,6 +104,24 @@ class TranscriptReductionTests(unittest.TestCase):
         self.assertIn("pytest", plain)
         self.assertIn("Review the configuration.", plain)
 
+    def test_agent_markdown_inline_filename_and_quote_remain_readable(self):
+        console = Console(width=80, color_system="truecolor", force_terminal=False)
+        initial_code_style = console.get_style("markdown.code")
+        initial_quote_style = console.get_style("markdown.block_quote")
+        content = (
+            "Le fichier `pyproject.toml` contient trois dépendances.\n\n"
+            "> La version de Ruff devrait être actualisée."
+        )
+        segments = list(console.render(agent_message_renderable(content)))
+        filename = next(part for part in segments if part.text == "pyproject.toml")
+        quote = next(part for part in segments if "La version de Ruff" in part.text)
+        self.assertEqual(filename.style.color.triplet, (208, 188, 255))
+        self.assertEqual(filename.style.bgcolor.triplet, (48, 40, 59))
+        self.assertEqual(quote.style.color.triplet, (203, 195, 215))
+        # Scoped styles cannot leak into the host console / other components.
+        self.assertEqual(console.get_style("markdown.code"), initial_code_style)
+        self.assertEqual(console.get_style("markdown.block_quote"), initial_quote_style)
+
     def test_agent_markdown_fences_partial_stream_and_safe_links(self):
         value = (
             'Test [website](javascript:alert(1)) and [docs](https://example.com).\n'

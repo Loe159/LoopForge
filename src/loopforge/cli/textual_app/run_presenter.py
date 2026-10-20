@@ -11,6 +11,7 @@ from rich.console import Group
 from rich.markdown import Markdown, Heading, CodeBlock, BlockQuote, ListItem
 from rich.segment import Segment
 from rich.style import Style
+from rich.theme import Theme
 from rich.syntax import Syntax, PygmentsSyntaxTheme
 from pygments.style import Style as PygmentsStyle
 from pygments.token import Comment, Keyword, Name, Number, Operator, Punctuation, String
@@ -308,6 +309,15 @@ class AgentListItem(ListItem):
             yield Segment.line()
 
 
+_AGENT_MARKDOWN_THEME = Theme({
+    # Rich's default markdown.code is cyan on black; on our dark palette this
+    # hides file names. Keep both foreground and background explicit.
+    "markdown.code": "bold #D0BCFF on #30283B",
+    # Rich's default quotation color is too dim on the Live surface.
+    "markdown.block_quote": "#CBC3D7",
+})
+
+
 class AgentMarkdown(Markdown):
     """Rich Markdown for untrusted agent prose, without clickable links."""
 
@@ -319,6 +329,12 @@ class AgentMarkdown(Markdown):
         "blockquote_open": AgentBlockQuote,
         "list_item_open": AgentListItem,
     }
+
+    def __rich_console__(self, console, options):
+        # Scope Markdown accents to this message; never mutate the application
+        # theme, other widgets, or the Tool Call rendering.
+        with console.use_theme(_AGENT_MARKDOWN_THEME):
+            yield from super().__rich_console__(console, options)
 
 
 def agent_message_renderable(value: str) -> Text | AgentMarkdown:
