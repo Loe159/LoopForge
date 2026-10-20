@@ -97,6 +97,15 @@ receipts, literal text, keyboard/mouse disclosure, stopped spinners, ASCII and
 60-column layout. The existing full run-view streaming/scrolling test also
 passes its assertions (executor shutdown still times out on this environment).
 
+## Proposed next step: structured run UX
+
+This document describes the **implemented** observation transport and compact
+tool disclosure. The [2026-10-20 run UX plan](../plans/2026-10-20-001-run-live-context-ux-plan.md)
+proposes moving the full prompt to a read-only per-attempt Context view, adding
+Focused/All/Raw displays, and implementing Changes/Evidences. That UX is **not
+implemented yet** and must preserve all native tool IDs, evidence boundaries,
+reasoning availability constraints and existing artifact formats.
+
 ## Validation in this workspace
 
 - 92 focused transcript, disclosure-widget, presentation, CLI-boundary and terminal integration
