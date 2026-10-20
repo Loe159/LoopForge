@@ -184,6 +184,17 @@ Documentation lives in `docs/`, executable tests in `tests/`, and developer
 utilities in `tools/`. See [repository layout](docs/repository-layout.md) for
 the role of each directory, including local hidden directories.
 
+## Run-screen UX direction (planned)
+
+The [run TUI UX plan](docs/plans/2026-10-20-001-run-live-context-ux-plan.md)
+defines four complementary views: **Live** (focused execution events),
+**Context** (per-attempt exact prompt and its source sections), **Changes**
+(verified workspace diffs), and **Evidences** (artifacts and validation records).
+This is a **proposal, not shipped behavior**. The current run screen still shows
+System Prompt / Agent Output / Implementation Contract together; Changes and
+Evidences are placeholders. Native agent observation behavior is documented in
+[agent-run-observation](docs/decisions/agent-run-observation.md).
+
 ## Product Principle
 
 LoopForge should be more autonomous than the original pilot, but not opaque.
