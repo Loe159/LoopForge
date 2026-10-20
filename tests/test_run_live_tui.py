@@ -77,6 +77,29 @@ class CockpitPilotTests(unittest.IsolatedAsyncioTestCase):
                     )
                     self.assertTrue(app.query_one("#run-activity-feed").display)
 
+    async def test_file_change_group_expands_and_opens_changes(self):
+        from tools.demo_file_changed import FileChangedDemo
+        from loopforge.cli.textual_app.widgets import RunFileChangeEntry
+        for width in (60, 80, 120, 160):
+            with self.subTest(columns=width):
+                app = FileChangedDemo()
+                async with app.run_test(size=(width, 35)) as pilot:
+                    await pilot.pause()
+                    entry = app.query_one(RunFileChangeEntry)
+                    self.assertTrue(entry.collapsed)
+                    entry.query_one("CollapsibleTitle").focus()
+                    await pilot.press("enter")
+                    await pilot.pause()
+                    self.assertFalse(entry.collapsed)
+                    self.assertEqual(len(entry.query(".run-file-change-row")), 3)
+                    self.assertEqual(
+                        [s.render().plain for s in entry.query(".run-file-change-stats")],
+                        ["+24  -8", "+86  -0", "+0  -42"],
+                    )
+                    await pilot.click(".run-file-changes-link")
+                    await pilot.pause()
+                    self.assertEqual(app._snapshot.run.reading.view, "Changes")
+
     async def test_compact_supervision_overlay_and_escape(self):
         from loopforge.cli.textual_app import LoopForgeApp
         from loopforge.cli.textual_app.screens import RunSupervisionScreen

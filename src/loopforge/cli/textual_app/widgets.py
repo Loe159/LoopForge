@@ -27,6 +27,7 @@ from loopforge.cli.textual_app.run_presenter import (
     semantic_color,
     terminal_marker,
     TranscriptEntry,
+    DeclaredFileChange,
     agent_body_renderable,
     agent_message_renderable,
     tool_display,
@@ -334,13 +335,97 @@ class RunToolEntry(Collapsible):
         self.title = title
 
 
+def _file_change_row(file: DeclaredFileChange) -> Horizontal:
+    """Action icon + full path (ellipsized visually) + captured counts."""
+    marker, color = {
+        "modified": (run_glyph("✎", "~"), "#CBC3D7"),
+        "added": (run_glyph("✚", "+"), "#A8E6B0"),
+        "deleted": (run_glyph("−", "-"), "#FFB4AB"),
+        "renamed": (run_glyph("↪", ">"), "#D0BCFF"),
+    }.get(file.action, ("?", "#958EA0"))
+    name = Text(marker + "  ", style=color)
+    name.append(file.path, style="#E7E0ED")
+    stats = Text()
+    if file.additions is not None:
+        stats.append(f"+{file.additions}", style="#A8E6B0")
+    if file.deletions is not None:
+        if stats:
+            stats.append("  ")
+        stats.append(f"-{file.deletions}", style="#FFB4AB")
+    return Horizontal(
+        Static(name, markup=False, classes="run-file-change-path"),
+        Static(stats, markup=False, classes="run-file-change-stats"),
+        classes="run-file-change-row",
+    )
+
+
+class RunFileChangeEntry(Collapsible):
+    """One declared native file-change event, grouped by its producer item.
+
+    Counts, if present, are the selected session's captured workspace totals.
+    They do not attest the event itself. 'Changes' opens the existing view.
+    """
+
+    def __init__(self, entry: TranscriptEntry, *, source_label: str = "") -> None:
+        self.entry = entry
+        self.source_label = source_label
+        initial_rows = (
+            tuple(_file_change_row(file) for file in entry.file_changes)
+            if entry.file_changes else
+            (Static(Text("File paths unavailable in this native event.", style="#958EA0"),
+                    markup=False, classes="run-file-change-empty"),)
+        )
+        self._rows = Vertical(*initial_rows, classes="run-file-change-rows")
+        self._origin = Static("", markup=False, classes="run-file-change-origin")
+        self._link = Button(
+            "Changes " + run_glyph("↗", ">"),
+            classes="run-link run-file-changes-link",
+        )
+        footer = Horizontal(self._origin, self._link, classes="run-file-change-footer")
+        self._content = Vertical(self._rows, footer, classes="run-file-change-content")
+        super().__init__(
+            self._content,
+            title="", collapsed=True,
+            collapsed_symbol=run_glyph("▸", ">"),
+            expanded_symbol=run_glyph("▾", "v"),
+            classes="run-file-change-entry",
+        )
+        self.update_entry(entry)
+
+    def update_entry(self, entry: TranscriptEntry) -> None:
+        self.entry = entry
+        files = entry.file_changes
+        word = "file" if len(files) == 1 else "files"
+        label = (f"Edited {len(files)} {word}" if files and all(
+            f.action == "modified" for f in files
+        ) else f"Files changed · {len(files)} {word}" if files else "Files changed")
+        title = Text(label, style="bold #E7E0ED")
+        if self.source_label:
+            title.append("  " + self.source_label, style="#958EA0")
+        self.title = title
+        had_counts = any(file.additions is not None or file.deletions is not None
+                         for file in files)
+        origin = "Declared by agent"
+        if had_counts:
+            origin += " · +/- from captured session diff"
+        self._origin.update(Text(origin, style="#958EA0"))
+        if self._rows.is_mounted:
+            self._rows.remove_children()
+            if files:
+                self._rows.mount(*(_file_change_row(file) for file in files))
+            else:
+                self._rows.mount(Static(Text(
+                    "File paths unavailable in this native event.", style="#958EA0"),
+                    markup=False, classes="run-file-change-empty"))
+
+
 class RunAgentOutput(Vertical):
     """One incremental narrative, preserving tool widgets and keyboard focus."""
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.transcript = Text()
-        self._items: dict[str, Static | RunToolEntry] = {}
+        self._items: dict[str, Static | RunToolEntry | RunFileChangeEntry] = {}
         self._entries: tuple[TranscriptEntry, ...] = ()
         self._scope: object = None
 
@@ -354,7 +439,8 @@ class RunAgentOutput(Vertical):
                 item.refresh_title()
 
     def update(self, value: Text, *, active: bool = True, scope: object = None,
-               entries: tuple[TranscriptEntry, ...] | None = None) -> None:
+               entries: tuple[TranscriptEntry, ...] | None = None,
+               adapter_label: str = "") -> None:
         if scope != self._scope:
             for item in self._items.values():
                 item.remove()
@@ -376,7 +462,9 @@ class RunAgentOutput(Vertical):
         for entry in entries:
             item = self._items.get(entry.key)
             if item is None:
-                if entry.kind in {"tool", "reasoning", "group", "delegation"}:
+                if entry.kind == "file_change":
+                    item = RunFileChangeEntry(entry, source_label=adapter_label)
+                elif entry.kind in {"tool", "reasoning", "group", "delegation"}:
                     item = RunToolEntry(entry)
                 else:
                     text = Text()
@@ -416,6 +504,9 @@ class RunAgentOutput(Vertical):
                 self.mount(item)
             elif isinstance(item, RunToolEntry):
                 item.update_entry(entry)
+            elif isinstance(item, RunFileChangeEntry):
+                if item.entry != entry:
+                    item.update_entry(entry)
             elif isinstance(item, Static):
                 if entry.kind == "message":
                     item.update(Group(
@@ -524,6 +615,7 @@ class RunActivityFeed(VerticalScroll):
         self.query_one("#run-attempt-heading", Static).update(heading)
         self.query_one("#run-agent-output", RunAgentOutput).update(
             agent_output, active=active, scope=scope, entries=entries,
+            adapter_label=(adapter or "agent").replace("-", " ").title(),
         )
         contract_panel = self.query_one(
             "#run-implementation-panel", RunTranscriptPanel

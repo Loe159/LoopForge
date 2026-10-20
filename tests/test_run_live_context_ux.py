@@ -46,6 +46,43 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual(result[0].status, "unknown")
         self.assertEqual(result[1].kind, "info")
 
+    def test_codex_file_change_extracts_only_native_paths(self):
+        from loopforge.adapters.event_store import normalize_event
+        source = {"type": "item.completed", "item": {"type": "file_change", "id": "change-1",
+                  "changes": [
+                      {"kind": "update", "path": "src/a.py", "additions": 999},
+                      {"kind": "add", "path": "tests/new.py"},
+                      {"kind": "delete", "path": "docs/old.md"},
+                      {"kind": "update", "path": "../secret"},
+                      {"kind": "update", "path": "/tmp/out"},
+                  ]}}
+        event, = normalize_event(source)
+        self.assertEqual(event["kind"], "file_change")
+        self.assertEqual(event["source"], "harness")
+        self.assertEqual(event["files"], [
+            {"path": "src/a.py", "action": "modified"},
+            {"path": "tests/new.py", "action": "added"},
+            {"path": "docs/old.md", "action": "deleted"},
+        ])
+        entries = project_events((event,))
+        self.assertEqual(len(entries[0].file_changes), 3)
+        self.assertTrue(all(f.additions is None for f in entries[0].file_changes))
+
+    def test_file_change_counts_require_complete_session_snapshot(self):
+        from loopforge.cli.run_changes import RunChangesSnapshot, RunFileChange
+        event = {"kind": "file_change", "native_id": "change-1", "order": 0,
+                 "files": [{"path": "src/a.py", "action": "modified", "additions": 999}]}
+        verified = RunChangesSnapshot(
+            capture_state="complete", source="runner-workspace-snapshots",
+            files=(RunFileChange("src/a.py", "modified", additions=3, deletions=1),))
+        actual, = project_events((event,), verified_changes=verified)
+        self.assertEqual((actual.file_changes[0].additions,
+                          actual.file_changes[0].deletions), (3, 1))
+        stale, = project_events((event,), verified_changes=replace(verified, stale=True))
+        self.assertIsNone(stale.file_changes[0].additions)
+        missing, = project_events((event,), verified_changes=replace(verified, capture_state="bounded"))
+        self.assertIsNone(missing.file_changes[0].additions)
+
     def test_native_protocol_fixture_is_safe_and_parseable(self):
         path = Path(__file__).parent / "fixtures/run_observation/native_events.json"
         fixture = json.loads(path.read_text(encoding="utf-8"))

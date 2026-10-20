@@ -136,6 +136,16 @@ def run_activity_text(snapshot: UiSnapshot, *, include_operation_events: bool) -
 
 
 @dataclass(frozen=True)
+class DeclaredFileChange:
+    """Harness-declared file path; line counts are optional workspace evidence."""
+
+    path: str
+    action: str = "unknown"
+    additions: int | None = None
+    deletions: int | None = None
+
+
+@dataclass(frozen=True)
 class TranscriptEntry:
     """One visible item; tool identity survives native start/result updates."""
 
@@ -145,6 +155,7 @@ class TranscriptEntry:
     body: str
     status: str = ""
     summary: str = ""
+    file_changes: tuple[DeclaredFileChange, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -112,6 +112,27 @@ def normalize_event(event: dict[str, Any], *, provenance: str = "native-json") -
             add(mapped, {"message": "Agent", "plan": "Plan"}.get(mapped, mapped.title()),
                 item.get("text") or item.get("items") or item.get("changes") or item.get("message"),
                 native_id=native_id, state="failed" if kind == "error" else None, payload=event)
+            if kind == "file_change" and isinstance(item.get("changes"), list):
+                # Native structured paths only: never infer file changes from prose.
+                # Keep the observed action as a declaration, not Git evidence.
+                files = []
+                for change in item["changes"][:100]:
+                    if not isinstance(change, dict):
+                        continue
+                    raw = change.get("path")
+                    if not isinstance(raw, str) or not raw or len(raw) > 1024:
+                        continue
+                    clean = _safe(raw, 1024)
+                    normalized = clean.replace("\\", "/")
+                    if (not normalized or normalized.startswith("/") or
+                            any(part in {"..", "."} for part in normalized.split("/")) or
+                            ":" in normalized.split("/")[0]):
+                        continue
+                    action = str(change.get("kind") or "").lower()
+                    action = {"update": "modified", "add": "added",
+                              "delete": "deleted", "move": "renamed"}.get(action, "unknown")
+                    files.append({"path": normalized, "action": action})
+                output[-1]["files"] = files
         elif kind in {"command_execution", "mcp_tool_call", "web_search"}:
             status = item.get("status")
             if item.get("error") or (isinstance(item.get("exit_code"), int) and item["exit_code"] != 0):

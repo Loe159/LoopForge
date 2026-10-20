@@ -19,6 +19,7 @@ from textual.containers import Container
 from textual.events import Resize
 from textual.timer import Timer
 from textual.widgets import Button, Collapsible, Footer, Header, Input, OptionList, Select, Static
+from textual.widgets._collapsible import CollapsibleTitle
 
 from loopforge import __version__
 from loopforge.cli.actions import ActionDescriptor
@@ -59,6 +60,7 @@ from loopforge.cli.textual_app.widgets import (
     RunHeader,
     RunRequiredAction,
     RunToolEntry,
+    RunFileChangeEntry,
     RunDocumentView,
     RunDetailEntry,
     ScreenList,
@@ -670,6 +672,11 @@ class LoopForgeApp(App[None]):
                     self._open_run_worker(run_id)
             return
         if self._screen == "run":
+            if isinstance(self.focused, CollapsibleTitle):
+                parent = self.focused.parent
+                if isinstance(parent, RunFileChangeEntry):
+                    parent.collapsed = not parent.collapsed
+                    return
             action = self._snapshot.run.shell.run.next_action if self._snapshot.run.shell and self._snapshot.run.shell.run else None
             if action is not None:
                 self.request_action(action)
@@ -1736,8 +1743,11 @@ class LoopForgeApp(App[None]):
                                       raw or "No raw source captured for this execution."),)
             body = Text(title + "\n" + (raw or "No raw source captured."))
         elif agent.structured_events:
-            entries = project_events(agent.structured_events, mode=reading.mode,
-                                     session_closed=agent.session_closed)
+            entries = project_events(
+                agent.structured_events, mode=reading.mode,
+                session_closed=agent.session_closed,
+                verified_changes=(snapshot.run.changes if not reading.cumulative else None),
+            )
             body = Text("\n".join(e.title + "\n" + e.body for e in entries))
         activity.update_content(
             heading=_run_attempt_heading(snapshot), system_prompt="",
@@ -1839,7 +1849,9 @@ class LoopForgeApp(App[None]):
         name = event.button.id or ""
         if self._screen != "run":
             return
-        if name.startswith("run-view-"):
+        if event.button.has_class("run-file-changes-link"):
+            self._change_run_reading(view="Changes", cumulative=False)
+        elif name.startswith("run-view-"):
             self._change_run_reading(view=name.removeprefix("run-view-").title())
         elif name.startswith("run-mode-"):
             self._change_run_reading(mode=name.removeprefix("run-mode-").title())
