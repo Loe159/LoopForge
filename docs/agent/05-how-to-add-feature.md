@@ -36,7 +36,8 @@
   keep `agents.json`, agent prompts, `permissions.json`, and `workflow.json`
   internally consistent. Use only shell-free command lists in `checks.json`.
 - Before changing landing-screen navigation or command presentation, read
-  `DESIGN.md`. Reuse `TerminalRenderer`, `shell_snapshot`,
+  `DESIGN.md`. For run-view navigation, also read the proposed
+  `docs/plans/2026-10-20-001-run-live-context-ux-plan.md`. Reuse `TerminalRenderer`, `shell_snapshot`,
   `ActionDescriptor`, `workflow_progress`, and hydrated pack workflow data.
 - For the current shell, add slash commands to the `SUPPORTED_COMMANDS`
   registry and a matching `InteractiveShell.cmd_<name>` method in
