@@ -18,6 +18,7 @@ from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.widgets import OptionList
 from textual.widgets import Button, Collapsible, Input, Static, Select
 from textual.message import Message
+from textual.events import Resize
 from textual.widgets.option_list import Option
 
 from loopforge.cli.textual_app.run_presenter import (
@@ -693,6 +694,12 @@ class RunChangesExplorer(Vertical):
         self._collapsed_directories: set[tuple[str, ...]] = set()
         self._tree_open = False  # Compact screens start with full diff visibility.
         self._preview_signature: object = None
+
+    def on_resize(self, event: Resize) -> None:
+        # 14 usable body rows (16 including the summary) can accommodate both
+        # a scrollable file tree and a meaningful syntax-highlighted diff.
+        # Measure the actual explorer height, not only the terminal's width.
+        self.set_class(event.size.height >= 16, "stacked-tree-diff")
 
     def compose(self) -> ComposeResult:
         yield Static("", id="run-changes-summary", markup=False)

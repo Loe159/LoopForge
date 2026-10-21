@@ -1111,6 +1111,30 @@ Header, Footer {
     padding-top: 1;
 }
 
+/* Ultra-narrow but tall: two independently scrollable stacked panels.
+   Short terminal: keep the single-pane Files toggle and full-height diff. */
+.changes-ultra-narrow #run-changes-explorer.stacked-tree-diff #run-changes-files {
+    height: 38%;
+    min-height: 5;
+    max-height: 11;
+    border-bottom: solid #494454;
+}
+.changes-ultra-narrow #run-changes-explorer.stacked-tree-diff #run-changes-tree-toggle {
+    display: none;
+}
+.changes-ultra-narrow #run-changes-explorer.stacked-tree-diff #run-changes-file-list {
+    display: block;
+}
+.changes-ultra-narrow #run-changes-explorer.stacked-tree-diff #run-changes-preview {
+    display: block;
+    height: 1fr;
+    min-height: 0;
+}
+.changes-ultra-narrow #run-changes-explorer.stacked-tree-diff #run-changes-file-heading {
+    max-height: 2;
+    padding: 0 1;
+}
+
 /* Narrow Changes: reclaim vertical space without sacrificing two-pane layout. */
 .width-60 #run-dashboard.changes-view #run-compact-context,
 .width-80 #run-dashboard.changes-view #run-compact-context {
