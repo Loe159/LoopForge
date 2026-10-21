@@ -61,6 +61,7 @@ from loopforge.cli.textual_app.widgets import (
     RunRequiredAction,
     RunToolEntry,
     RunFileChangeEntry,
+    RunDelegationEntry,
     RunDocumentView,
     RunChangesExplorer,
     RunDetailEntry,
@@ -273,7 +274,7 @@ class LoopForgeApp(App[None]):
 
         if action in {"root_open_selected", "open_selected"} and (
             isinstance(self.focused, (Select, OptionList)) or
-            isinstance(getattr(self.focused, "parent", None), (RunToolEntry, RunDetailEntry))
+            isinstance(getattr(self.focused, "parent", None), (RunToolEntry, RunDetailEntry, RunDelegationEntry))
         ):
             return False  # Native selection and disclosures own Enter.
         if action.startswith("home_"):
@@ -625,6 +626,22 @@ class LoopForgeApp(App[None]):
                 self._render_home(self._snapshot)
             return
         if self._screen == "run":
+            if isinstance(self.focused, CollapsibleTitle):
+                disclosure = self.focused.parent
+                if isinstance(disclosure, (RunDelegationEntry, RunToolEntry)):
+                    ancestor = disclosure.parent
+                    while ancestor is not None and not isinstance(ancestor, RunDelegationEntry):
+                        ancestor = ancestor.parent
+                    if isinstance(disclosure, RunDelegationEntry) and not disclosure.collapsed:
+                        disclosure.collapsed = True
+                        return
+                    if isinstance(ancestor, RunDelegationEntry):
+                        if not disclosure.collapsed:
+                            disclosure.collapsed = True
+                        elif not ancestor.collapsed:
+                            ancestor.collapsed = True
+                            ancestor.query_one(CollapsibleTitle).focus()
+                        return
             command_input = self.query_one("#run-command-input", HomeCommandInput)
             if command_input.has_focus:
                 command_input.set_command_active(False)
@@ -675,7 +692,7 @@ class LoopForgeApp(App[None]):
         if self._screen == "run":
             if isinstance(self.focused, CollapsibleTitle):
                 parent = self.focused.parent
-                if isinstance(parent, RunFileChangeEntry) or (
+                if isinstance(parent, (RunFileChangeEntry, RunDelegationEntry)) or (
                         isinstance(parent, Collapsible) and parent.has_class("run-file-change-row")):
                     parent.collapsed = not parent.collapsed
                     return
@@ -1596,6 +1613,8 @@ class LoopForgeApp(App[None]):
             status=header_status,
             status_color=status_color,
         )
+        from loopforge.cli.agent_plan import project_agent_plan
+        selected_plan = project_agent_plan(snapshot.run.agent.structured_events)
         sidebar.update_content(
             status=label,
             status_color=status_color,
@@ -1611,6 +1630,9 @@ class LoopForgeApp(App[None]):
             selected_stage=snapshot.run.reading.stage_id or snapshot.run.agent.stage_id or shell.run.current_stage,
             view=snapshot.run.reading.view, metrics=snapshot.run.metrics,
             problems=shell.blockers[:5],
+            agent_plan=selected_plan,
+            plan_stage=snapshot.run.agent.stage_id,
+            plan_scope=f"{snapshot.selected_run_id}:{snapshot.run.agent.stage_id}:{snapshot.run.agent.session_id}",
         )
         self._render_run_reading_controls(snapshot)
         compact_context.update(
@@ -1779,7 +1801,7 @@ class LoopForgeApp(App[None]):
 
     @on(Collapsible.Expanded)
     def _on_tool_expanded(self, event: Collapsible.Expanded) -> None:
-        if isinstance(event.collapsible, RunToolEntry):
+        if isinstance(event.collapsible, (RunToolEntry, RunDelegationEntry)):
             self._suspend_run_follow()
 
     def _suspend_run_follow(self) -> None:
@@ -1804,12 +1826,12 @@ class LoopForgeApp(App[None]):
             return
         focus = self.focused
         element = focus
-        while element is not None and not isinstance(element, (RunToolEntry, RunDetailEntry)):
+        while element is not None and not isinstance(element, (RunToolEntry, RunDetailEntry, RunDelegationEntry)):
             element = element.parent
         if element is None:
             return
         self._suspend_run_follow()
-        if isinstance(element, RunToolEntry):
+        if isinstance(element, (RunToolEntry, RunDelegationEntry)):
             self.push_screen(RunDetailScreen(element.entry.title, element.entry.body))
         else:
             self.push_screen(RunDetailScreen(str(element.title), element.body))

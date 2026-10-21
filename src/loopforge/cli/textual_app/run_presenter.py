@@ -161,6 +161,10 @@ class TranscriptEntry:
     status: str = ""
     summary: str = ""
     file_changes: tuple[DeclaredFileChange, ...] = ()
+    parent_id: str = ""
+    source_ids: tuple[str, ...] = ()
+    children: tuple[TranscriptEntry, ...] = ()
+    mission: str = ""
 
 
 @dataclass(frozen=True)

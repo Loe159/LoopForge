@@ -50,7 +50,7 @@ def normalize_event(event: dict[str, Any], *, provenance: str = "native-json") -
     output: list[dict[str, Any]] = []
     def add(kind: str, title: str, body: object = "", *, call_id: object = None,
             state: object = None, category: str = "", native_id: object = None,
-            parent_id: object = None, payload: dict | None = None) -> None:
+            parent_id: object = None, mission: object = None, payload: dict | None = None) -> None:
         status = {"in_progress": "running", "pending": "running", "error": "failed"}.get(str(state), str(state or "unknown"))
         if status not in {"running", "completed", "failed", "unknown"}:
             status = "unknown"
@@ -61,6 +61,8 @@ def normalize_event(event: dict[str, Any], *, provenance: str = "native-json") -
                           ("occurred_at", event.get("timestamp"))):
             if isinstance(item, (str, int)) and not isinstance(item, bool):
                 value[key] = _safe(str(item), 300)
+        if isinstance(mission, str) and mission.strip():
+            value["mission"] = _safe(mission, 3000)
         if payload is not None:
             value["rendered"] = "\n".join(adapter_event_lines(payload, {}))[:10000]
         output.append(value)
@@ -71,8 +73,11 @@ def normalize_event(event: dict[str, Any], *, provenance: str = "native-json") -
     if hook in {"PreToolUse", "PostToolUse", "PostToolUseFailure"}:
         name = event.get("tool_name") or "Tool"
         state = "running" if hook == "PreToolUse" else "failed" if hook == "PostToolUseFailure" else "completed"
-        add("tool", str(name), event.get("tool_input") if state == "running" else event.get("tool_response") or event.get("error"),
-            call_id=event.get("tool_use_id"), state=state, category=category(name))
+        add("delegation" if name == "Task" else "tool", str(name),
+            event.get("tool_input") if state == "running" else event.get("tool_response") or event.get("error"),
+            call_id=event.get("tool_use_id"), state=state, category=category(name),
+            mission=(event.get("tool_input") or {}).get("prompt") if name == "Task" and
+                    isinstance(event.get("tool_input"), dict) else None)
     elif hook == "Stop" and event.get("last_assistant_message"):
         add("message", "Agent", event["last_assistant_message"])
     elif isinstance(event.get("part"), dict):
@@ -80,7 +85,14 @@ def normalize_event(event: dict[str, Any], *, provenance: str = "native-json") -
         kind = part.get("type") or event.get("type")
         if kind in {"text", "reasoning"}:
             add("reasoning" if kind == "reasoning" else "message", "Reasoning" if kind == "reasoning" else "Agent",
-                part.get("text"), native_id=part.get("id"), payload=event)
+                part.get("text"), native_id=part.get("id"),
+                parent_id=part.get("parentID"), payload=event)
+        elif kind == "delegation":
+            state = part.get("state") if isinstance(part.get("state"), dict) else {}
+            add("delegation", str(part.get("title") or part.get("tool") or "Delegation"),
+                part.get("prompt") or state, call_id=part.get("callID") or part.get("id"),
+                state=state.get("status"), native_id=part.get("id"),
+                parent_id=part.get("parentID"), mission=part.get("prompt"), payload=event)
         elif kind in {"tool", "tool_use"}:
             state = part.get("state") if isinstance(part.get("state"), dict) else {}
             name = part.get("tool") or "Tool"
@@ -98,8 +110,11 @@ def normalize_event(event: dict[str, Any], *, provenance: str = "native-json") -
                 add("reasoning" if kind == "thinking" else "message", "Reasoning" if kind == "thinking" else "Agent",
                     block.get("thinking") if kind == "thinking" else block.get("text"), payload=single)
             elif event["type"] == "assistant" and kind == "tool_use":
-                add("tool", str(block.get("name") or "Tool"), block.get("input"), call_id=block.get("id"),
-                    state="running", category=category(block.get("name")), payload=single)
+                add("delegation" if block.get("name") == "Task" else "tool",
+                    str(block.get("name") or "Tool"), block.get("input"), call_id=block.get("id"),
+                    state="running", category=category(block.get("name")),
+                    mission=block.get("input", {}).get("prompt") if block.get("name") == "Task" and
+                            isinstance(block.get("input"), dict) else None, payload=single)
             elif kind == "tool_result":
                 add("tool", "Tool", block.get("content"), call_id=block.get("tool_use_id"),
                     state="failed" if block.get("is_error") else "completed", payload=single)
@@ -111,7 +126,25 @@ def normalize_event(event: dict[str, Any], *, provenance: str = "native-json") -
             mapped = {"agent_message": "message", "todo_list": "plan", "file_change": "file_change", "reasoning": "reasoning", "error": "error"}[kind]
             add(mapped, {"message": "Agent", "plan": "Plan"}.get(mapped, mapped.title()),
                 item.get("text") or item.get("items") or item.get("changes") or item.get("message"),
-                native_id=native_id, state="failed" if kind == "error" else None, payload=event)
+                native_id=native_id, state="failed" if kind == "error" else None,
+                parent_id=item.get("parent_id") or item.get("parentID"), payload=event)
+            if kind == "todo_list" and isinstance(item.get("items"), list):
+                todo_items = []
+                for todo in item["items"][:60]:
+                    if not isinstance(todo, dict) or not isinstance(todo.get("text"), str):
+                        continue
+                    label = _safe(todo["text"], 140).strip()
+                    if not label:
+                        continue
+                    raw_status = todo.get("status")
+                    if raw_status in {"completed", "in_progress", "pending", "failed"}:
+                        state = raw_status
+                    elif isinstance(todo.get("completed"), bool):
+                        state = "completed" if todo["completed"] else "pending"
+                    else:
+                        state = "unknown"
+                    todo_items.append({"text": label, "status": state})
+                output[-1]["plan_items"] = todo_items
             if kind == "file_change" and isinstance(item.get("changes"), list):
                 # Native structured paths only: never infer file changes from prose.
                 # Keep the observed action as a declaration, not Git evidence.
@@ -141,7 +174,21 @@ def normalize_event(event: dict[str, Any], *, provenance: str = "native-json") -
                 status = "completed" if event.get("type") == "item.completed" else "running" if event.get("type") == "item.started" else "unknown"
             title = "Shell" if kind == "command_execution" else str(item.get("tool") or "Search" if kind == "web_search" else item.get("tool") or "MCP")
             add("tool", title, item, call_id=item.get("call_id") or native_id, native_id=native_id,
+                parent_id=item.get("parent_id") or item.get("parentID"),
                 state=status, category="search" if kind == "web_search" else "", payload=event)
+        elif kind == "collab_tool_call":
+            # Typed Codex collaboration event; never detect delegation by text.
+            state = item.get("status")
+            if item.get("error"):
+                state = "failed"
+            elif not state:
+                state = ("completed" if event.get("type") == "item.completed" else
+                         "running" if event.get("type") == "item.started" else "unknown")
+            add("delegation", str(item.get("tool") or "Collaboration"),
+                item.get("prompt") or item.get("message") or item.get("input") or item,
+                call_id=item.get("call_id") or native_id, native_id=native_id,
+                parent_id=item.get("parent_id") or item.get("parentID"),
+                state=state, mission=item.get("prompt"), payload=event)
     elif event.get("type") == "event_msg" and isinstance(event.get("payload"), dict):
         payload = event["payload"]
         if payload.get("type") in {"agent_message", "agent_reasoning"}:

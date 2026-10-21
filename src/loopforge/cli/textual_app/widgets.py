@@ -13,6 +13,7 @@ from dataclasses import replace
 
 from rich.console import Group
 from rich.text import Text
+from textual.binding import Binding
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.widgets import OptionList
@@ -365,6 +366,143 @@ class RunReasoningEntry(RunToolEntry):
         self.title = title
 
 
+
+
+class RunDelegationEntry(Collapsible):
+    """Native delegation disclosure; child activity requires a retained parent ID."""
+
+    def __init__(self, entry: TranscriptEntry) -> None:
+        self.entry = entry
+        self.phase = 0
+        self.detail = Static("", markup=False, classes="run-delegation-detail")
+        self._child_list = Vertical(classes="run-delegation-children")
+        self._child_items: dict[str, Static | RunToolEntry | RunFileChangeEntry | RunDelegationEntry] = {}
+        self.body_container = Vertical(self.detail, self._child_list, classes="run-delegation-content")
+        super().__init__(
+            self.body_container, title="", collapsed=True,
+            collapsed_symbol=run_glyph("▸", ">"),
+            expanded_symbol=run_glyph("▾", "v"),
+            classes="run-delegation-entry",
+        )
+        self.update_entry(entry)
+
+    def on_mount(self) -> None:
+        self._sync_children()
+
+    def on_resize(self) -> None:
+        self.refresh_title()
+
+    def refresh_title(self) -> None:
+        linked = bool(self.entry.children)
+        label = ("Sub-agent" if linked else "Delegation") + " · " + self.entry.title
+        state = {
+            "running": "Running", "completed": "Completed",
+            "failed": "Failed", "unknown": "Unknown",
+        }.get(self.entry.status, "Unknown")
+        frames = "|/-" if ascii_only() else "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+        marker = {
+            "running": frames[self.phase % len(frames)],
+            "completed": run_glyph("✓", "+"),
+            "failed": run_glyph("×", "x"), "unknown": "?",
+        }.get(self.entry.status, "?")
+        width = self.size.width or 90
+        warning = "  ! Child error" if any(self._child_failed(child)
+                                            for child in self.entry.children) else ""
+        reserved = len(state) + len(warning) + 6
+        limit = max(8, width - reserved)
+        if len(label) > limit:
+            label = label[:max(1, limit - 1)].rstrip() + run_glyph("…", ".")
+        title = Text(label, style="bold #E7E0ED")
+        color = (semantic_color("danger") if self.entry.status == "failed"
+                 else semantic_color("success") if self.entry.status == "completed"
+                 else "#D0BCFF" if self.entry.status == "running" else "#958EA0")
+        title.append(f"  {marker} {state}", style=color)
+        if warning:
+            title.append(warning, style="#FFB4AB")
+        self.title = title
+
+    @staticmethod
+    def _child_failed(entry: TranscriptEntry) -> bool:
+        return (entry.status == "failed" or entry.kind == "error" or
+                any(RunDelegationEntry._child_failed(child) for child in entry.children))
+
+    def update_entry(self, entry: TranscriptEntry) -> None:
+        self.entry = entry
+        # Display the native mission only when the adapter explicitly exposes it.
+        self.detail.display = bool(entry.body or entry.mission)
+        if entry.body or entry.mission:
+            parts = []
+            if entry.mission:
+                parts.extend((Text("Mission", style="#958EA0"),
+                              agent_body_renderable(entry.mission, tool_output=True)))
+            if entry.body and entry.body != entry.mission:
+                parts.extend((Text("Delegation details", style="#958EA0"),
+                              agent_body_renderable(entry.body, tool_output=True)))
+            self.detail.update(Group(*parts))
+        self.set_class(entry.status == "failed", "delegation-failed")
+        self.refresh_title()
+        if self.is_mounted:
+            self._sync_children()
+
+    def _sync_children(self) -> None:
+        entries = self.entry.children
+        keys = {entry.key for entry in entries}
+        for key in tuple(self._child_items):
+            if key not in keys:
+                self._child_items.pop(key).remove()
+        previous = None
+        for entry in entries:
+            widget = self._child_items.get(entry.key)
+            if widget is None:
+                if entry.kind == "delegation":
+                    widget = RunDelegationEntry(entry)
+                elif entry.kind == "reasoning":
+                    widget = RunReasoningEntry(entry)
+                elif entry.kind == "file_change":
+                    widget = RunFileChangeEntry(entry)
+                elif entry.kind in {"tool", "group"}:
+                    widget = RunToolEntry(entry)
+                elif entry.kind == "message":
+                    widget = Static(Group(
+                        Text("Agent", style="bold #D0BCFF"),
+                        agent_message_renderable(entry.body),
+                    ), markup=False, classes="run-delegation-message")
+                else:
+                    line = Text(entry.title, style=(
+                        semantic_color("danger") if entry.kind == "error" else "#CBC3D7"))
+                    if entry.body:
+                        line.append("\n" + entry.body, style="#CBC3D7")
+                    widget = Static(line, markup=False, classes="run-delegation-event")
+                self._child_items[entry.key] = widget
+                self._child_list.mount(widget)
+            elif isinstance(widget, RunDelegationEntry):
+                widget.update_entry(entry)
+            elif isinstance(widget, RunReasoningEntry):
+                widget.update_entry(entry)
+            elif isinstance(widget, RunToolEntry):
+                widget.update_entry(entry)
+            elif isinstance(widget, RunFileChangeEntry):
+                if widget.entry != entry:
+                    widget.update_entry(entry)
+            elif entry.kind == "message":
+                widget.update(Group(
+                    Text("Agent", style="bold #D0BCFF"),
+                    agent_message_renderable(entry.body),
+                ))
+            else:
+                line = Text(entry.title, style=(
+                    semantic_color("danger") if entry.kind == "error" else "#CBC3D7"))
+                if entry.body:
+                    line.append("\n" + entry.body, style="#CBC3D7")
+                widget.update(line)
+            if previous is None:
+                if self._child_list.children and self._child_list.children[0] is not widget:
+                    self._child_list.move_child(widget, before=0)
+            else:
+                self._child_list.move_child(widget, after=previous)
+            previous = widget
+
+
 def _file_change_row(file: DeclaredFileChange) -> Collapsible:
     """Each native-declared path expands its captured session diff inline."""
     action = {"modified": "Edit", "added": "Add", "deleted": "Delete",
@@ -455,7 +593,7 @@ class RunAgentOutput(Vertical):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.transcript = Text()
-        self._items: dict[str, Static | RunToolEntry | RunFileChangeEntry] = {}
+        self._items: dict[str, Static | RunToolEntry | RunFileChangeEntry | RunDelegationEntry] = {}
         self._entries: tuple[TranscriptEntry, ...] = ()
         self._scope: object = None
 
@@ -463,8 +601,8 @@ class RunAgentOutput(Vertical):
         self._spinner = self.set_interval(0.12, self._tick, pause=True)
 
     def _tick(self) -> None:
-        for item in self._items.values():
-            if isinstance(item, RunToolEntry) and item.entry.status == "running":
+        for item in (*self.query(RunToolEntry), *self.query(RunDelegationEntry)):
+            if item.entry.status == "running":
                 item.phase += 1
                 item.refresh_title()
 
@@ -499,7 +637,9 @@ class RunAgentOutput(Vertical):
                     item = RunFileChangeEntry(entry, source_label=adapter_label)
                 elif entry.kind == "reasoning":
                     item = RunReasoningEntry(entry, adapter_label=adapter_label)
-                elif entry.kind in {"tool", "group", "delegation"}:
+                elif entry.kind == "delegation":
+                    item = RunDelegationEntry(entry)
+                elif entry.kind in {"tool", "group"}:
                     item = RunToolEntry(entry)
                 else:
                     text = Text()
@@ -522,6 +662,8 @@ class RunAgentOutput(Vertical):
                     item = Static(text, markup=False, classes=f"run-entry-{entry.kind}")
                 self._items[entry.key] = item
                 self.mount(item)
+            elif isinstance(item, RunDelegationEntry):
+                item.update_entry(entry)
             elif isinstance(item, RunToolEntry):
                 item.update_entry(entry)
             elif isinstance(item, RunFileChangeEntry):
@@ -541,7 +683,8 @@ class RunAgentOutput(Vertical):
                         item.update(content)
                     else:
                         item.update(Group(Text(entry.title), body))
-        if any(entry.status == "running" for entry in entries):
+        if any(entry.status == "running" or any(child.status == "running"
+                   for child in entry.children) for entry in entries):
             self._spinner.resume()
         else:
             self._spinner.pause()
@@ -1066,6 +1209,37 @@ class RunContextPanel(Container):
         self.border_title = title
 
 
+class RunWorkflowList(OptionList):
+    """Stage-only navigation with read-only nested agent TODO lines."""
+    BINDINGS = [*OptionList.BINDINGS,
+                Binding("right", "cursor_right", show=False),
+                Binding("left", "cursor_left", show=False)]
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.plan_stage = ""
+        self.expanded = True
+        self.toggle_plan: Callable[[], None] | None = None
+
+    def action_cursor_right(self) -> None:
+        if self.plan_stage and not self.expanded and self.toggle_plan:
+            self.toggle_plan()
+
+    def action_cursor_left(self) -> None:
+        if self.plan_stage and self.expanded and self.toggle_plan:
+            self.toggle_plan()
+
+    async def _on_click(self, event: Any) -> None:
+        index = event.style.meta.get("option")
+        if index is not None and 0 <= index < len(self.options):
+            option = self.options[index]
+            if option.id == self.plan_stage and self.highlighted == index and self.toggle_plan:
+                self.toggle_plan()
+                event.stop()
+                return
+        await super()._on_click(event)
+
+
 class RunContextSidebar(Vertical):
     """Supervision scrolls independently; four-view navigation stays pinned."""
 
@@ -1076,19 +1250,36 @@ class RunContextSidebar(Vertical):
                 yield Static("", id="run-context-configuration", markup=False)
                 yield Button("", id="run-problems", classes="run-link")
             with RunContextPanel("Workflow", panel_id="run-context-steps-panel"):
-                yield OptionList(id="run-context-steps")
+                yield RunWorkflowList(id="run-context-steps")
             with RunContextPanel("Metrics", panel_id="run-context-metrics-panel"):
                 yield Static("", id="run-context-metrics", markup=False)
         with Vertical(id="run-view-tabs"):
             for view in ("Live", "Context", "Changes", "Evidences"):
                 yield Button(view, id="run-view-" + view.lower(), classes="run-link")
 
+    def _toggle_plan(self) -> None:
+        self._plan_expanded = not getattr(self, "_plan_expanded", True)
+        self._workflow_signature = None
+        if getattr(self, "_last_content", None) is not None:
+            self.update_content(**self._last_content)
+
     def update_content(self, *, status: str, status_color: str, progress: str,
                        uptime: str, tokens: str, steps: tuple[Any, ...],
                        current_stage: str, project: str, branch: str, pack: str,
                        adapter: str, selected_stage: str = "", view: str = "Live",
                        metrics: tuple[tuple[str, str], ...] = (), problems: tuple[str, ...] = (),
-                       todo: str = "") -> None:
+                       todo: str = "", agent_plan: Any = None,
+                       plan_stage: str = "", plan_scope: str = "") -> None:
+        from loopforge.cli.agent_plan import AgentPlan
+        agent_plan = agent_plan if isinstance(agent_plan, AgentPlan) else AgentPlan()
+        if plan_scope != getattr(self, "_plan_scope", None):
+            self._plan_scope = plan_scope
+            self._plan_expanded = True
+        self._last_content = dict(status=status, status_color=status_color, progress=progress,
+            uptime=uptime, tokens=tokens, steps=steps, current_stage=current_stage,
+            project=project, branch=branch, pack=pack, adapter=adapter,
+            selected_stage=selected_stage, view=view, metrics=metrics, problems=problems,
+            todo=todo, agent_plan=agent_plan, plan_stage=plan_stage, plan_scope=plan_scope)
         activity = Text(status, style=status_color)
         activity.append(f"\n{current_stage}\nAdapter: {adapter}\n{project}")
         if todo:
@@ -1098,17 +1289,44 @@ class RunContextSidebar(Vertical):
         problem_button.display = bool(problems)
         problem_button.label = Text(f"{len(problems)} problems · Inspect" if problems else "")
         problem_button.tooltip = "\n".join(problems)
-        workflow = self.query_one("#run-context-steps", OptionList)
-        signature = tuple((s.id, s.title, s.family, str(s.marker)) for s in steps), current_stage, selected_stage
+        workflow = self.query_one("#run-context-steps", RunWorkflowList)
+        valid_stage = plan_stage if agent_plan.items and any(stage.id == plan_stage for stage in steps) else ""
+        workflow.plan_stage = valid_stage
+        workflow.expanded = getattr(self, "_plan_expanded", True)
+        workflow.toggle_plan = self._toggle_plan
+        signature = (tuple((stage.id, stage.title, stage.family, str(stage.marker)) for stage in steps),
+                     current_stage, selected_stage, valid_stage, agent_plan, workflow.expanded)
         if signature != getattr(self, "_workflow_signature", None):
             self._workflow_signature = signature
+            chosen = (workflow.options[workflow.highlighted].id
+                      if workflow.highlighted is not None and workflow.highlighted < len(workflow.options) else None)
             workflow.clear_options()
             for stage in steps:
                 marker = terminal_marker(stage.marker)
                 selected = "> " if stage.id == selected_stage else "  "
                 active = " (active)" if stage.id == current_stage else ""
-                workflow.add_option(Option(Text(f"{selected}{marker} {stage.title}{active}",
-                                               style=family_color(stage.family)), id=stage.id))
+                line = Text(f"{selected}{marker} {stage.title}{active}", style=family_color(stage.family))
+                if stage.id == valid_stage:
+                    line.append(f"  {agent_plan.completed}/{agent_plan.count} ", style="#958EA0")
+                    line.append(run_glyph("▾", "v") if workflow.expanded else run_glyph("▸", ">"), style="#D0BCFF")
+                    if workflow.expanded:
+                        for task in agent_plan.items:
+                            symbol, shade = {
+                                "completed": (run_glyph("✓", "+"), "#A8E6B0"),
+                                "in_progress": (run_glyph("◉", "*"), "#D0BCFF"),
+                                "pending": (run_glyph("○", "o"), "#958EA0"),
+                                "failed": (run_glyph("×", "x"), "#FFB4AB"),
+                                "unknown": ("?", "#958EA0"),
+                            }[task.status]
+                            line.append("\n      ")
+                            line.append(symbol, style=shade)
+                            line.append(" " + task.text, style="#CBC3D7")
+                workflow.add_option(Option(line, id=stage.id))
+            if chosen is not None:
+                try:
+                    workflow.highlighted = workflow.get_option_index(chosen)
+                except Exception:
+                    pass
         values = [("Status", status)]
         if progress not in {"—", "-", ""}:
             values.append(("Progress", progress))

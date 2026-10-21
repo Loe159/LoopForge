@@ -385,6 +385,61 @@
     color: #E7E0ED;
 }
 
+/* Sub-agent: compact inline disclosure, only native-linked children. */
+.run-delegation-entry {
+    height: auto;
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: transparent;
+}
+.run-delegation-entry > CollapsibleTitle {
+    width: 1fr;
+    height: 1;
+    padding: 0 1;
+    color: #E7E0ED;
+    text-overflow: ellipsis;
+}
+.run-delegation-entry > CollapsibleTitle:focus {
+    background: #D0BCFF;
+    color: #0A0A0A;
+}
+.run-delegation-entry > Contents {
+    height: auto;
+    padding: 0 0 0 2;
+}
+.run-delegation-content {
+    height: auto;
+    max-height: 25;
+    margin: 0 0 1 1;
+    padding: 0 0 0 1;
+    border-left: solid #494454;
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-size: 1 1;
+}
+.run-delegation-detail {
+    height: auto;
+    padding: 0 0 1 0;
+    background: transparent;
+    color: #CBC3D7;
+}
+.run-delegation-children {
+    height: auto;
+    padding: 0;
+}
+.run-delegation-message {
+    height: auto;
+    margin: 1 0;
+    padding: 0 1;
+    border-left: solid #CBC3D7;
+}
+.run-delegation-event {
+    height: auto;
+    color: #CBC3D7;
+    padding: 0 1;
+}
+
 /* Reasoning is secondary conversation content, never a framed tool card. */
 .run-reasoning-entry {
     margin: 1 0 1 1;
