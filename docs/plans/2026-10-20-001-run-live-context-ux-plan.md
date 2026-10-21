@@ -173,6 +173,15 @@ Les modes ne changent ni l'exécution ni la conservation. Ils ne sont **pas** de
 | Final answer / livrable | Message final original + référence au livrable | Texte/artefact dans la source appropriée. |
 | Fin d'exécution | **Carte finale** dans la chronologie | Résultat moteur, validations, changements prouvés, suite réelle. |
 
+**Décision UX du 21/10/2026 — Error / Warning / Unknown : composant conservé en l'état.**
+Le fonctionnement et le rendu actuels sont jugés suffisants. Les maquettes de refonte
+proposées ne sont pas retenues : **aucune refonte visuelle, aucun nouveau composant
+et aucune interaction supplémentaire ne sont à implémenter** pour ces entrées.
+Cette décision ne modifie pas les garanties de fidélité des états et des sources
+(`failed`/`blocked`/`unknown`, provenance et absence de succès inféré), ni la
+visibilité des erreurs dans le flux déjà exigée par ce plan. Une correction de
+bug éventuelle reste distincte d'une refonte UX.
+
 Le **reasoning replié** conserve son emplacement d'origine, sans dérouler sa prose par défaut. Le reste du flux reste lisible et densément monospace, avec peu de conteneurs bordés.
 
 ### 4.3 Outils : identité, rendu incrémental et détail plein écran
