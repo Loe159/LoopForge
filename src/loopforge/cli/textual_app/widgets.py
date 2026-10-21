@@ -688,6 +688,7 @@ class RunChangesExplorer(Vertical):
         self._signature: object = None
         self._files: tuple[Any, ...] = ()
         self._selected_path = ""
+        self._option_file_indices: dict[str, int] = {}
         self._preview_signature: object = None
 
     def compose(self) -> ComposeResult:
@@ -734,35 +735,56 @@ class RunChangesExplorer(Vertical):
         paths = [file.path for file in files]
         selected_index = paths.index(old_path) if old_path in paths else 0
 
-        heading = Text("Run cumulative" if cumulative else "Attempt", style="bold #D0BCFF")
-        if session_label and not cumulative:
-            heading.append(f" · {session_label}", style="#CBC3D7")
-        heading.append(f" · {len(files)} files", style="#E7E0ED")
+        heading = Text(f"{len(files)} files", style="bold #E7E0ED")
         if files and all(file.additions is not None and file.deletions is not None
                          for file in files):
             heading.append(f"  +{sum(f.additions for f in files)}", style="#A8E6B0")
             heading.append(f"  -{sum(f.deletions for f in files)}", style="#FFB4AB")
-        heading.append("\n" + ("Retained verification patch" if cumulative
-                                else "Workspace snapshots"), style="#958EA0")
+        heading.append(" · " + ("Cumulative patch" if cumulative else "Workspace capture"),
+                       style="#958EA0")
         heading.append(" · " + evidence.capture_state, style="#958EA0")
         if evidence.stale:
-            heading.append(" · STALE (earlier candidate)", style="#FFB869")
-        if evidence.message:
-            heading.append("\n" + evidence.message[:280], style="#958EA0")
+            heading.append(" · STALE", style="#FFB869")
+        if evidence.message and (not files or evidence.stale or evidence.capture_state != "complete"):
+            heading.append("\n" + evidence.message[:140], style="#958EA0")
         if evidence.base_commit:
-            heading.append("\nGit base: " + str(evidence.base_commit)[:40], style="#958EA0")
+            heading.append("\nBase: " + str(evidence.base_commit)[:16], style="#958EA0")
         self.query_one("#run-changes-summary", Static).update(heading)
 
         picker = self.query_one("#run-changes-file-list", OptionList)
         picker.clear_options()
+        self._option_file_indices.clear()
+        # File-only hierarchy. Directory rows are decorative and non-selectable;
+        # selecting a file always resolves to the authoritative file evidence.
+        paths_seen: set[tuple[str, ...]] = set()
+        selected_option = 0
+        option_position = 0
         for index, file in enumerate(files):
-            label = Text(file.path.rsplit("/", 1)[-1], style="#E7E0ED",
-                         no_wrap=True, overflow="ellipsis")
-            label.append("\n" + self._action(file.status) + "  ", style="#958EA0")
-            label.append_text(self._counts(file))
-            picker.add_option(Option(label, id=f"change-file-{index}"))
+            parts = [part for part in file.path.replace("\\", "/").split("/") if part]
+            if not parts:
+                parts = [file.path]
+            for depth in range(len(parts) - 1):
+                directory = tuple(parts[:depth + 1])
+                if directory in paths_seen:
+                    continue
+                paths_seen.add(directory)
+                folder_label = Text("  " * depth + run_glyph("▾ ", "v ") + parts[depth] + "/",
+                                    style="#958EA0", no_wrap=True, overflow="ellipsis")
+                picker.add_option(Option(folder_label, id=f"dir-{option_position}",
+                                         disabled=True))
+                option_position += 1
+            filename = Text("  " * (len(parts) - 1) + run_glyph("• ", "* ") + parts[-1],
+                            style="#E7E0ED", no_wrap=True, overflow="ellipsis")
+            filename.append("  ")
+            filename.append_text(self._counts(file))
+            option_id = f"change-file-{index}"
+            picker.add_option(Option(filename, id=option_id))
+            self._option_file_indices[option_id] = index
+            if index == selected_index:
+                selected_option = option_position
+            option_position += 1
         if files:
-            picker.highlighted = selected_index
+            picker.highlighted = selected_option
             self._select_file(selected_index)
         else:
             self._selected_path = ""
@@ -805,12 +827,18 @@ class RunChangesExplorer(Vertical):
 
     def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
         if event.option_list.id == "run-changes-file-list":
-            self._select_file(event.option_index)
+            if event.option:
+                index = self._option_file_indices.get(event.option.id)
+                if index is not None:
+                    self._select_file(index)
             event.stop()
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         if event.option_list.id == "run-changes-file-list":
-            self._select_file(event.option_index)
+            if event.option:
+                index = self._option_file_indices.get(event.option.id)
+                if index is not None:
+                    self._select_file(index)
             event.stop()
 
 

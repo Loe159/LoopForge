@@ -147,7 +147,7 @@ class CockpitPilotTests(unittest.IsolatedAsyncioTestCase):
                     picker = explorer.query_one("#run-changes-file-list")
                     self.assertTrue(explorer.display)
                     self.assertFalse(app.query_one("#run-document-view").display)
-                    self.assertEqual(len(picker.options), 3)
+                    self.assertEqual(len(picker.options), 5)
                     self.assertEqual(explorer._selected_path, "src/a.py")
                     self.assertIn("return True", explorer.query_one(
                         "#run-changes-diff-text").render().plain)
@@ -182,10 +182,10 @@ class CockpitPilotTests(unittest.IsolatedAsyncioTestCase):
                     await pilot.pause()
                     self.assertEqual(explorer._selected_path, "src/a.py")
                     summary = explorer.query_one("#run-changes-summary").render().plain
-                    self.assertIn("Run cumulative", summary)
+                    self.assertIn("Cumulative patch", summary)
                     self.assertIn("STALE", summary)
-                    self.assertIn("Retained verification patch", summary)
-                    self.assertEqual(len(picker.options), 1)
+                    self.assertIn("Earlier verification candidate.", summary)
+                    self.assertEqual(len(picker.options), 2)
                     renamed = replace(changes, files=(
                         RunFileChange("src/new_name.py", "renamed",
                             previous_path="src/old_name.py", additions=1, deletions=1,
@@ -220,22 +220,48 @@ class CockpitPilotTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(explorer.display)
             self.assertEqual(app._snapshot.run.reading.view, "Changes")
             self.assertFalse(app._snapshot.run.reading.cumulative)
-            self.assertIn("Attempt", explorer.query_one(
+            self.assertIn("Workspace capture", explorer.query_one(
                 "#run-changes-summary").render().plain)
             await pilot.click("#run-diff-cumulative")
             await pilot.pause()
             self.assertTrue(app._snapshot.run.reading.cumulative)
             self.assertEqual(app._snapshot.run.changes.source,
                              "deterministic-verification-patch")
-            self.assertIn("Run cumulative", explorer.query_one(
+            self.assertIn("Cumulative patch", explorer.query_one(
                 "#run-changes-summary").render().plain)
             await pilot.click("#run-diff-attempt")
             await pilot.pause()
             self.assertFalse(app._snapshot.run.reading.cumulative)
             self.assertEqual(app._snapshot.run.changes.source,
                              "runner-workspace-snapshots")
-            self.assertIn("Attempt", explorer.query_one(
+            self.assertIn("Workspace capture", explorer.query_one(
                 "#run-changes-summary").render().plain)
+
+    async def test_changes_tree_and_single_line_controls(self):
+        from tools.demo_changes_explorer import ChangesExplorerDemo
+        for width in (60, 80, 120, 160):
+            with self.subTest(width=width):
+                app = ChangesExplorerDemo()
+                async with app.run_test(size=(width, 30)) as pilot:
+                    await pilot.pause(0.4)
+                    options = app.query_one("#run-changes-file-list").options
+                    folders = [o for o in options if o.id.startswith("dir-")]
+                    files = [o for o in options if o.id.startswith("change-file-")]
+                    self.assertEqual(len(files), 3)
+                    self.assertEqual(len(folders), 5)
+                    self.assertTrue(all(o.disabled for o in folders))
+                    self.assertTrue(all(not o.disabled for o in files))
+                    attempt = app.query_one("#run-diff-attempt").region
+                    cumulative = app.query_one("#run-diff-cumulative").region
+                    self.assertEqual(attempt.y, cumulative.y)
+                    self.assertEqual(attempt.x + attempt.width, cumulative.x)
+                    preview = app.query_one("#run-changes-preview").region
+                    tree = app.query_one("#run-changes-files").region
+                    if width <= 80:
+                        self.assertGreaterEqual(preview.y, tree.y + tree.height)
+                        self.assertGreaterEqual(preview.height, 5)
+                    else:
+                        self.assertEqual(preview.y, tree.y)
 
     async def test_compact_supervision_overlay_and_escape(self):
         from loopforge.cli.textual_app import LoopForgeApp

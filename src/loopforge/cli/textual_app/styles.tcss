@@ -939,6 +939,7 @@ Header, Footer {
 #run-reading-controls, #run-changes-controls {
     height: 1;
     width: 1fr;
+    layout: horizontal;
     padding: 0 2;
 }
 #run-reading-controls .run-link, #run-changes-controls .run-link {
@@ -976,8 +977,8 @@ Header, Footer {
 #run-changes-summary {
     width: 1fr;
     height: auto;
-    max-height: 6;
-    margin: 0 0 1 0;
+    max-height: 3;
+    margin: 0 0 0 0;
     color: #CBC3D7;
 }
 #run-changes-body {
@@ -987,13 +988,14 @@ Header, Footer {
 }
 #run-changes-files {
     width: 32%;
-    min-width: 26;
+    min-width: 24;
     max-width: 42;
     height: 1fr;
     min-height: 0;
     border-right: solid #494454;
 }
 #run-changes-file-list {
+    border: none;
     width: 1fr;
     height: 1fr;
     min-height: 0;
@@ -1042,8 +1044,8 @@ Header, Footer {
 }
 .width-60 #run-changes-files, .width-80 #run-changes-files {
     width: 1fr;
-    height: 8;
-    min-height: 4;
+    height: 6;
+    min-height: 3;
     border-right: none;
     border-bottom: solid #494454;
 }
