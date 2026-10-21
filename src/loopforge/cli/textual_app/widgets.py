@@ -15,9 +15,11 @@ from rich.console import Group
 from rich.text import Text
 from textual.binding import Binding
 from textual.app import ComposeResult
+from textual.content import Content
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.widgets import OptionList
 from textual.widgets import Button, Collapsible, Input, Static, Select
+from textual.widgets._collapsible import CollapsibleTitle
 from textual.message import Message
 from textual.events import Resize, DescendantFocus, DescendantBlur
 from textual.widgets.option_list import Option
@@ -437,6 +439,11 @@ class RunDelegationEntry(Collapsible):
         if warning:
             title.append(warning, style="#742A24" if self._title_focused else "#FFB4AB")
         self.title = title
+        # Textual's reactive equality compares Content by plain text; changes
+        # to Rich spans alone do not trigger CollapsibleTitle's watcher. Force
+        # the actual displayed label to use the updated focus palette.
+        self._title.set_reactive(CollapsibleTitle.label, Content.from_text(title))
+        self._title._update_label()
 
     @staticmethod
     def _child_failed(entry: TranscriptEntry) -> bool:

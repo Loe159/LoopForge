@@ -236,6 +236,49 @@ class DelegationFocusContrastTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(rgb(second.title, 0), (10, 10, 10))
 
 
+class UnlinkedDelegationVisibleContrastTests(unittest.IsolatedAsyncioTestCase):
+    async def test_spawn_agent_renders_dark_spans_not_stale_light_spans(self):
+        # Inspect the actual CollapsibleTitle content: RunDelegationEntry.title
+        # alone can change while Textual silently retains stale Rich styles.
+        for width in (52, 80, 120):
+            with self.subTest(width=width):
+                app = DelegationApp()
+                linked = TranscriptEntry("linked", "delegation", "Security review", "", "running",
+                                         children=(TranscriptEntry("tool-1", "tool", "Read", "", "completed"),))
+                unlinked = TranscriptEntry("unlinked", "delegation", "spawn_agent", "Observed", "unknown")
+                async with app.run_test(size=(width, 24)) as pilot:
+                    output = app.query_one(RunAgentOutput)
+                    output.update(Text(""), scope="same", entries=(linked, unlinked))
+                    await pilot.pause()
+                    first, second = list(app.query(RunDelegationEntry))
+                    widget = second.query_one(CollapsibleTitle)
+                    self.assertIn("#E7E0ED", repr(widget.content))
+                    self.assertIn("149, 142, 160", repr(widget.content))
+                    widget.focus()
+                    await pilot.pause()
+                    self.assertEqual(widget.styles.background.rgb, (208, 188, 255))
+                    self.assertIn("#0A0A0A", repr(widget.content))
+                    self.assertIn("63, 56, 72", repr(widget.content))
+                    self.assertNotIn("#E7E0ED", repr(widget.content))
+                    self.assertNotIn("149, 142, 160", repr(widget.content))
+                    await pilot.press("enter")
+                    await pilot.pause()
+                    self.assertFalse(second.collapsed)
+                    self.assertIn("#0A0A0A", repr(widget.content))
+                    output.update(Text(""), scope="same", entries=(linked, replace(unlinked, body="New native detail")))
+                    await pilot.pause()
+                    self.assertIs(second, list(app.query(RunDelegationEntry))[1])
+                    self.assertIn("#0A0A0A", repr(widget.content))
+                    first.query_one(CollapsibleTitle).focus()
+                    await pilot.pause()
+                    self.assertIn("#E7E0ED", repr(widget.content))
+                    self.assertIn("149, 142, 160", repr(widget.content))
+                    await pilot.click(widget)
+                    await pilot.pause()
+                    self.assertIn("#0A0A0A", repr(widget.content))
+                    self.assertIn("63, 56, 72", repr(widget.content))
+
+
 class RealRunDelegationTests(unittest.IsolatedAsyncioTestCase):
     async def test_real_run_keyboard_escape_follow_and_responsive(self):
         from tools.demo_sub_agent import SubAgentDemo
