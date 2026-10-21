@@ -2,10 +2,10 @@
 title: "LoopForge Run — composant 6 : Plan / TODO imbriqué dans Workflow"
 type: ux-component-implementation-handoff
 date: 2026-10-21
-status: design-approved-implementation-prepared
+status: visually-accepted
 parent_plan: 2026-10-20-002-run-live-visual-refinement-plan.md
 component: 6
-implementation: tested-awaiting-user-visual-review
+implementation: visually-accepted
 push: forbidden-without-explicit-request
 ---
 
@@ -93,4 +93,8 @@ Aucun changement du code de production, aucun commit et aucun push dans cette é
 - Les quatre vues restent visibles en bas de la sidebar, sans doublon du plan dans Live.
 - `compileall` et `git diff --check` réussis. Tests ciblés et de navigation passés ; un test historique de scroll Live a montré une instabilité de timing sur sa première exécution puis a réussi à deux nouvelles exécutions.
 - `python -m unittest` complet : non conclu, environnement connecté limité dans la durée d'exécution.
-- **Validation visuelle utilisateur encore attendue ; aucun push.**
+- **Validation visuelle approuvée par l’utilisateur le 21 octobre 2026 ; aucun push.**
+
+## Validation visuelle — 21 octobre 2026
+
+L’utilisateur a explicitement validé le composant 6 après démonstration, captures et tests. Statut : **terminé et accepté visuellement**. L’implémentation demeure locale ; le push n’est pas autorisé par cette validation.
