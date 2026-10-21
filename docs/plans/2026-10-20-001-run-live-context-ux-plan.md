@@ -198,6 +198,23 @@ Affichage approuvé : une délégation observée donne un **bloc repliable**, av
 
 Ne pas ajouter un orchestrateur LLM ni une session auxiliaire pour reconstituer les sous-agents. Les données actuellement non capturées nécessitent une extension explicite des adapters.
 
+#### Décision de design validée — Variante A « Flux compact » (21 octobre 2026)
+
+**Statut du composant Sous-agent / Délégation : design approuvé ; implémentation et acceptation visuelle du composant réel en attente.** La validation concerne exclusivement sa présentation dans Live et n'autorise ni travaux sur les composants voisins, ni changement de comportement moteur, ni push.
+
+- **Ligne repliée par défaut** : `▸ Sub-agent · Security review    ◌ Running` (titre natif et statut connu seulement). Alignement monospace, sans carte bordée ; focus lavande inversé seulement lorsque la ligne possède le focus, fond discret hors focus.
+- **Expansion inline** : une seule indentation et un trait vertical neutre pour distinguer les événements réellement enfants. Montrer mission native si disponible, messages d'agent, appels d'outils/Read/Search, reasoning public replié et réponse native finale. Conserver l'ordre d'origine et permettre de déplier chaque outil ; aucune synthèse IA nouvelle.
+- **États** : running animé ; completed vert uniquement sur résultat observé ; failed corail avec erreur réelle visible ; unknown neutre si le résultat manque après arrêt. Un échec d'enfant ne devient pas automatiquement un blocage du run (seul le moteur fait autorité). Ne jamais afficher de fausse réussite ou de statut d'approbation.
+- **Relation fiable obligatoire** : les enfants n'apparaissent sous la délégation que si le harnais fournit une identité/corrélation parent-enfant attestable, isolée par run/stage/session/attempt. Un outil de spawn sans corrélation reste une entrée `Delegation · …` dépliable avec ses paramètres/résultats observés, mais sans arborescence inventée. Aucun message libre ne crée de lien.
+- **Streaming/focus** : l'appel est mis à jour sur la même clé stable, sans doublon, sans refermer l'élément ni repositionner le focus. Enter et clic déplient/replient, Esc revient à la lecture précédente sans annuler le run ; expansion/scroll manuel suspend le follow. Navigation et commandes LoopForge habituelles conservées.
+- **Densité et responsive** : pas de panneau d'inspecteur ; sidebar de supervision inchangée, menu des quatre vues ancré en bas à droite. Vers 60–80 colonnes, masquer la sidebar au profit de la supervision compacte, tronquer le titre et retourner à la ligne les détails ; maintenir commande et actions visibles, y compris à faible hauteur. Glyphes ASCII alternatifs et statut textuel accessibles sans couleur.
+- **Provenance et sécurité** : les contenus d'agent sont non fiables, échappés et bornés ; sortie longue inspectable par le mécanisme de détail en lecture seule. N'afficher durée, nombre d'outils, mission ou métriques que si observés. Les vues Focused/All/Raw ne modifient ni la conservation des événements ni leur autorité.
+
+**État existant à réutiliser lors de l'implémentation** : `RunToolEntry` fournit déjà un `Collapsible` et des mises à jour en place ; `adapters/event_store.py` peut enregistrer un `parent_id` natif pour certains événements, mais `cli/run_projection.py` ne construit pas encore un arbre de délégations portable. Avant codage, vérifier les contrats réels des harness et ajouter des tests de corrélation, concurrence, ordre, streaming, panne/unknown, sécurité, redimensionnement (48/52/60/80/100/120/160) et navigation clavier/souris. L’absence de lien fiable doit donner un rendu neutre.
+
+**Handoff** : prochaine étape uniquement sur demande explicite — implémenter ce composant approuvé, tester sur la vraie TUI, committer localement puis demander une acceptation visuelle distincte. Pas de push sans demande explicite.
+
+
 ### 4.6 Suivi du bas, lecture, reprise
 
 Au départ, Live suit la fin du flux. Dès que l'utilisateur :
