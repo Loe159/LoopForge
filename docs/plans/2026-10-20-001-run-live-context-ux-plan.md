@@ -209,7 +209,7 @@ Ne pas ajouter un orchestrateur LLM ni une session auxiliaire pour reconstituer 
 
 #### Décision de design validée — Variante A « Flux compact » (21 octobre 2026)
 
-**Statut du composant Sous-agent / Délégation : design approuvé ; implémentation et acceptation visuelle du composant réel en attente.** La validation concerne exclusivement sa présentation dans Live et n'autorise ni travaux sur les composants voisins, ni changement de comportement moteur, ni push.
+**Statut du composant Sous-agent / Délégation : variante A implémentée, testée et validée visuellement par l’utilisateur le 21 octobre 2026.** La validation concerne exclusivement sa présentation dans Live et n'autorise ni travaux sur les composants voisins, ni changement de comportement moteur, ni push.
 
 - **Ligne repliée par défaut** : `▸ Sub-agent · Security review    ◌ Running` (titre natif et statut connu seulement). Alignement monospace, sans carte bordée ; focus lavande inversé seulement lorsque la ligne possède le focus, fond discret hors focus.
 - **Expansion inline** : une seule indentation et un trait vertical neutre pour distinguer les événements réellement enfants. Montrer mission native si disponible, messages d'agent, appels d'outils/Read/Search, reasoning public replié et réponse native finale. Conserver l'ordre d'origine et permettre de déplier chaque outil ; aucune synthèse IA nouvelle.
@@ -221,7 +221,7 @@ Ne pas ajouter un orchestrateur LLM ni une session auxiliaire pour reconstituer 
 
 **État existant à réutiliser lors de l'implémentation** : `RunToolEntry` fournit déjà un `Collapsible` et des mises à jour en place ; `adapters/event_store.py` peut enregistrer un `parent_id` natif pour certains événements, mais `cli/run_projection.py` ne construit pas encore un arbre de délégations portable. Avant codage, vérifier les contrats réels des harness et ajouter des tests de corrélation, concurrence, ordre, streaming, panne/unknown, sécurité, redimensionnement (48/52/60/80/100/120/160) et navigation clavier/souris. L’absence de lien fiable doit donner un rendu neutre.
 
-**Handoff** : prochaine étape uniquement sur demande explicite — implémenter ce composant approuvé, tester sur la vraie TUI, committer localement puis demander une acceptation visuelle distincte. Pas de push sans demande explicite.
+**Validation visuelle** : acceptée explicitement après correction de contraste du focus sur les lignes `Sub-agent · …` et `Delegation · spawn_agent`. Cause corrigée : Textual conservait des styles Rich Text périmés dans `CollapsibleTitle` lorsque seuls les spans/couleurs changeaient. La mise à jour effective du titre et son comportement après expansion, streaming et perte de focus sont couverts par des tests dédiés. Commits locaux d’implémentation et correction : `adc2979`, `7e11961`, `90598ff`. Démo : `PYTHONPATH=src .venv/bin/python tools/demo_sub_agent.py`. Aucun push demandé.
 
 
 ### 4.6 Suivi du bas, lecture, reprise
