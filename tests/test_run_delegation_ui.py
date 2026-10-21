@@ -187,6 +187,55 @@ class DelegationWidgetTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("[red]literal[/red]", parent.detail.content.renderables[1].plain)
 
 
+class DelegationFocusContrastTests(unittest.IsolatedAsyncioTestCase):
+    async def test_lavender_focus_restyles_every_rich_text_span_and_blur_restores_it(self):
+        from rich.console import Console
+        from rich.text import Text
+
+        def rgb(label: Text, offset: int) -> tuple[int, int, int]:
+            color = label.get_style_at_offset(Console(), offset).color
+            assert color is not None and color.triplet is not None
+            return tuple(color.triplet)
+
+        for width in (52, 80, 120):
+            with self.subTest(width=width):
+                app = DelegationApp()
+                child = TranscriptEntry("failed-tool", "tool", "Shell", "exit 1", "failed")
+                entry = TranscriptEntry("delegate", "delegation", "Security review", "", "running",
+                                        children=(child,))
+                other = TranscriptEntry("other", "delegation", "Other task", "", "unknown")
+                async with app.run_test(size=(width, 25)) as pilot:
+                    output = app.query_one(RunAgentOutput)
+                    output.update(Text(""), entries=(entry, other), scope="focus-case")
+                    await pilot.pause()
+                    first, second = list(app.query(RunDelegationEntry))
+                    self.assertEqual(rgb(first.title, 0), (231, 224, 237))
+                    self.assertEqual(rgb(first.title, first.title.plain.index("Running")), (208, 188, 255))
+                    title = first.query_one(CollapsibleTitle)
+                    title.focus()
+                    await pilot.pause()
+                    self.assertIs(app.focused, title)
+                    self.assertEqual(rgb(first.title, 0), (10, 10, 10))
+                    self.assertEqual(rgb(first.title, first.title.plain.index("Running")), (36, 27, 53))
+                    self.assertEqual(rgb(first.title, first.title.plain.index("Child error")), (116, 42, 36))
+                    self.assertEqual(title.styles.background.rgb, (208, 188, 255))
+                    for status, expected in (("completed", (32, 83, 43)),
+                                             ("failed", (116, 42, 36)),
+                                             ("unknown", (63, 56, 72)),
+                                             ("running", (36, 27, 53))):
+                        output.update(Text(""), scope="focus-case", entries=(
+                            replace(entry, status=status), other))
+                        await pilot.pause()
+                        self.assertIs(app.focused, title)
+                        self.assertEqual(rgb(first.title, 0), (10, 10, 10))
+                        self.assertEqual(rgb(first.title, first.title.plain.index(status.title())), expected)
+                    second.query_one(CollapsibleTitle).focus()
+                    await pilot.pause()
+                    self.assertEqual(rgb(first.title, 0), (231, 224, 237))
+                    self.assertEqual(rgb(first.title, first.title.plain.index("Running")), (208, 188, 255))
+                    self.assertEqual(rgb(second.title, 0), (10, 10, 10))
+
+
 class RealRunDelegationTests(unittest.IsolatedAsyncioTestCase):
     async def test_real_run_keyboard_escape_follow_and_responsive(self):
         from tools.demo_sub_agent import SubAgentDemo

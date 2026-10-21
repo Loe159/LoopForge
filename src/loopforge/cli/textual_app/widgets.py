@@ -19,7 +19,7 @@ from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.widgets import OptionList
 from textual.widgets import Button, Collapsible, Input, Static, Select
 from textual.message import Message
-from textual.events import Resize
+from textual.events import Resize, DescendantFocus, DescendantBlur
 from textual.widgets.option_list import Option
 
 from loopforge.cli.textual_app.run_presenter import (
@@ -374,6 +374,7 @@ class RunDelegationEntry(Collapsible):
     def __init__(self, entry: TranscriptEntry) -> None:
         self.entry = entry
         self.phase = 0
+        self._title_focused = False
         self.detail = Static("", markup=False, classes="run-delegation-detail")
         self._child_list = Vertical(classes="run-delegation-children")
         self._child_items: dict[str, Static | RunToolEntry | RunFileChangeEntry | RunDelegationEntry] = {}
@@ -391,6 +392,16 @@ class RunDelegationEntry(Collapsible):
 
     def on_resize(self) -> None:
         self.refresh_title()
+
+    def on_descendant_focus(self, event: DescendantFocus) -> None:
+        if event.widget.parent is self:
+            self._title_focused = True
+            self.refresh_title()
+
+    def on_descendant_blur(self, event: DescendantBlur) -> None:
+        if event.widget.parent is self:
+            self._title_focused = False
+            self.refresh_title()
 
     def refresh_title(self) -> None:
         linked = bool(self.entry.children)
@@ -412,13 +423,19 @@ class RunDelegationEntry(Collapsible):
         limit = max(8, width - reserved)
         if len(label) > limit:
             label = label[:max(1, limit - 1)].rstrip() + run_glyph("…", ".")
-        title = Text(label, style="bold #E7E0ED")
-        color = (semantic_color("danger") if self.entry.status == "failed"
-                 else semantic_color("success") if self.entry.status == "completed"
-                 else "#D0BCFF" if self.entry.status == "running" else "#958EA0")
+        # Rich Text spans override CollapsibleTitle's :focus CSS foreground.
+        # Build focused spans with dark colors that contrast with lavender.
+        title = Text(label, style="bold " + ("#0A0A0A" if self._title_focused else "#E7E0ED"))
+        if self._title_focused:
+            color = {"running": "#241B35", "completed": "#20532B",
+                     "failed": "#742A24", "unknown": "#3F3848"}.get(self.entry.status, "#3F3848")
+        else:
+            color = (semantic_color("danger") if self.entry.status == "failed"
+                     else semantic_color("success") if self.entry.status == "completed"
+                     else "#D0BCFF" if self.entry.status == "running" else "#958EA0")
         title.append(f"  {marker} {state}", style=color)
         if warning:
-            title.append(warning, style="#FFB4AB")
+            title.append(warning, style="#742A24" if self._title_focused else "#FFB4AB")
         self.title = title
 
     @staticmethod
