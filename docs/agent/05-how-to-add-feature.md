@@ -1,5 +1,15 @@
 # How to add a feature
 
+## Create or refine a Textual screen
+
+Follow [the iterative TUI design workflow](08-iterative-tui-design.md) and the
+repository-maintainer skill at `.agents/skills/loopforge-tui-refinement/SKILL.md`.
+Audit the existing screen, propose terminal-native mockups for **one component**,
+wait for explicit visual approval, implement only that slice, run functional and
+responsive Textual/Pilot tests, create a focused commit, and **wait for user
+visual acceptance before the next component**. A passing test suite does not
+replace that visual acceptance.
+
 ## Add a CLI command
 
 1. Declare parser arguments, help, examples, and topic mapping in
