@@ -1632,6 +1632,7 @@ class LoopForgeApp(App[None]):
     def _render_run_reading_controls(self, snapshot: UiSnapshot) -> None:
         reading = snapshot.run.reading
         view = reading.view
+        self.query_one("#run-dashboard").set_class(view == "Changes", "changes-view")
         agent = snapshot.run.agent
         shell = snapshot.run.shell
         stage = reading.stage_id or agent.stage_id or (shell.run.current_stage if shell and shell.run else "")

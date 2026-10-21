@@ -689,12 +689,16 @@ class RunChangesExplorer(Vertical):
         self._files: tuple[Any, ...] = ()
         self._selected_path = ""
         self._option_file_indices: dict[str, int] = {}
+        self._option_directories: dict[str, tuple[str, ...]] = {}
+        self._collapsed_directories: set[tuple[str, ...]] = set()
+        self._tree_open = False  # Compact screens start with full diff visibility.
         self._preview_signature: object = None
 
     def compose(self) -> ComposeResult:
         yield Static("", id="run-changes-summary", markup=False)
         with Horizontal(id="run-changes-body"):
             with Vertical(id="run-changes-files"):
+                yield Button("Files", id="run-changes-tree-toggle", classes="run-link")
                 yield OptionList(id="run-changes-file-list")
             with Vertical(id="run-changes-preview"):
                 yield Static("", id="run-changes-file-heading", markup=False)
@@ -729,6 +733,9 @@ class RunChangesExplorer(Vertical):
             return
 
         old_path = self._selected_path if scope == self._selection_scope else ""
+        if scope != self._selection_scope:
+            self._collapsed_directories.clear()
+            self._tree_open = False
         self._selection_scope = scope
         self._signature = signature
         self._files = files
@@ -751,40 +758,8 @@ class RunChangesExplorer(Vertical):
             heading.append("\nBase: " + str(evidence.base_commit)[:16], style="#958EA0")
         self.query_one("#run-changes-summary", Static).update(heading)
 
-        picker = self.query_one("#run-changes-file-list", OptionList)
-        picker.clear_options()
-        self._option_file_indices.clear()
-        # File-only hierarchy. Directory rows are decorative and non-selectable;
-        # selecting a file always resolves to the authoritative file evidence.
-        paths_seen: set[tuple[str, ...]] = set()
-        selected_option = 0
-        option_position = 0
-        for index, file in enumerate(files):
-            parts = [part for part in file.path.replace("\\", "/").split("/") if part]
-            if not parts:
-                parts = [file.path]
-            for depth in range(len(parts) - 1):
-                directory = tuple(parts[:depth + 1])
-                if directory in paths_seen:
-                    continue
-                paths_seen.add(directory)
-                folder_label = Text("  " * depth + run_glyph("▾ ", "v ") + parts[depth] + "/",
-                                    style="#958EA0", no_wrap=True, overflow="ellipsis")
-                picker.add_option(Option(folder_label, id=f"dir-{option_position}",
-                                         disabled=True))
-                option_position += 1
-            filename = Text("  " * (len(parts) - 1) + run_glyph("• ", "* ") + parts[-1],
-                            style="#E7E0ED", no_wrap=True, overflow="ellipsis")
-            filename.append("  ")
-            filename.append_text(self._counts(file))
-            option_id = f"change-file-{index}"
-            picker.add_option(Option(filename, id=option_id))
-            self._option_file_indices[option_id] = index
-            if index == selected_index:
-                selected_option = option_position
-            option_position += 1
+        self._render_tree(selected_index=selected_index)
         if files:
-            picker.highlighted = selected_option
             self._select_file(selected_index)
         else:
             self._selected_path = ""
@@ -794,6 +769,109 @@ class RunChangesExplorer(Vertical):
             self.query_one("#run-changes-diff-text", Static).update(
                 Text(evidence.message or "No reliable snapshot for this selection.",
                      style="#958EA0"))
+            self._update_tree_visibility()
+
+    def _render_tree(self, *, selected_index: int | None = None,
+                     focus_folder: tuple[str, ...] | None = None) -> None:
+        picker = self.query_one("#run-changes-file-list", OptionList)
+        picker.clear_options()
+        self._option_file_indices.clear()
+        self._option_directories.clear()
+        root: dict[str, Any] = {"directories": {}, "files": []}
+        for index, file in enumerate(self._files):
+            parts = [part for part in file.path.replace("\\", "/").split("/") if part]
+            if not parts:
+                parts = [file.path]
+            node = root
+            for part in parts[:-1]:
+                node = node["directories"].setdefault(
+                    part, {"directories": {}, "files": []})
+            node["files"].append((parts[-1], index))
+
+        # Directory identity is its full relative path, not an option index:
+        # collapsing a node does not make a neighboring file appear selected.
+        desired_id = ""
+
+        def populate(node: dict[str, Any], ancestors: tuple[str, ...]) -> None:
+            nonlocal desired_id
+            depth = len(ancestors)
+            for folder, children in sorted(node["directories"].items()):
+                folder_path = (*ancestors, folder)
+                closed = folder_path in self._collapsed_directories
+                option_id = f"change-dir-{len(self._option_directories)}"
+                mark = run_glyph("▸ ", "> ") if closed else run_glyph("▾ ", "v ")
+                label = Text("  " * depth + mark + folder + "/",
+                             style="#D0BCFF" if closed else "#CBC3D7",
+                             no_wrap=True, overflow="ellipsis")
+                picker.add_option(Option(label, id=option_id))
+                self._option_directories[option_id] = folder_path
+                if folder_path == focus_folder:
+                    desired_id = option_id
+                if not closed:
+                    populate(children, folder_path)
+            for name, index in node["files"]:
+                file = self._files[index]
+                label = Text("  " * depth + run_glyph("• ", "* ") + name,
+                             style="#E7E0ED", no_wrap=True, overflow="ellipsis")
+                label.append("  ")
+                label.append_text(self._counts(file))
+                option_id = f"change-file-{index}"
+                picker.add_option(Option(label, id=option_id))
+                self._option_file_indices[option_id] = index
+                if index == selected_index and not desired_id and focus_folder is None:
+                    desired_id = option_id
+
+        populate(root, ())
+        if desired_id:
+            for idx, option in enumerate(picker.options):
+                if option.id == desired_id:
+                    picker.highlighted = idx
+                    break
+        self._update_tree_visibility()
+
+    def _update_tree_visibility(self) -> None:
+        container = self.query_one("#run-changes-files")
+        container.set_class(self._tree_open, "tree-open")
+        self.set_class(self._tree_open, "compact-tree-open")
+        toggle = self.query_one("#run-changes-tree-toggle", Button)
+        marker = run_glyph("▾", "v") if self._tree_open else run_glyph("▸", ">")
+        current = self._selected_path.rsplit("/", 1)[-1]
+        toggle.label = f"{marker} Files ({len(self._files)})" + (
+            f" · {current}" if current and not self._tree_open else ""
+        )
+
+    def _toggle_folder(self, path: tuple[str, ...], *, open_only: bool = False,
+                       close_only: bool = False) -> None:
+        collapsed = path in self._collapsed_directories
+        if (collapsed and not close_only) or (not collapsed and open_only):
+            self._collapsed_directories.discard(path)
+        elif not collapsed and not open_only:
+            self._collapsed_directories.add(path)
+        else:
+            return
+        self._render_tree(focus_folder=path)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "run-changes-tree-toggle":
+            self._tree_open = not self._tree_open
+            self._update_tree_visibility()
+            if self._tree_open:
+                self.query_one("#run-changes-file-list", OptionList).focus()
+            event.stop()
+
+    def on_key(self, event: Any) -> None:
+        picker = self.query_one("#run-changes-file-list", OptionList)
+        if not picker.has_focus or event.key not in {"left", "right"}:
+            return
+        position = picker.highlighted
+        if position is None or position >= len(picker.options):
+            return
+        option = picker.options[position]
+        path = self._option_directories.get(option.id)
+        if path is not None:
+            self._toggle_folder(path, open_only=event.key == "right",
+                                close_only=event.key == "left")
+            event.stop()
 
     def _select_file(self, index: int) -> None:
         if not isinstance(index, int) or not 0 <= index < len(self._files):
@@ -824,6 +902,7 @@ class RunChangesExplorer(Vertical):
         if file.path != old_path:
             self.query_one("#run-changes-diff-scroll", VerticalScroll).scroll_home(
                 animate=False)
+        self._update_tree_visibility()
 
     def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
         if event.option_list.id == "run-changes-file-list":
@@ -836,9 +915,17 @@ class RunChangesExplorer(Vertical):
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         if event.option_list.id == "run-changes-file-list":
             if event.option:
-                index = self._option_file_indices.get(event.option.id)
-                if index is not None:
-                    self._select_file(index)
+                directory = self._option_directories.get(event.option.id)
+                if directory is not None:
+                    self._toggle_folder(directory)
+                else:
+                    index = self._option_file_indices.get(event.option.id)
+                    if index is not None:
+                        self._select_file(index)
+                        # Compact mode: give the preview the entire space.
+                        self._tree_open = False
+                        self._update_tree_visibility()
+                        self.query_one("#run-changes-tree-toggle", Button).focus()
             event.stop()
 
 

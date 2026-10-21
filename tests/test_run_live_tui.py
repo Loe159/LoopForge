@@ -153,8 +153,13 @@ class CockpitPilotTests(unittest.IsolatedAsyncioTestCase):
                         "#run-changes-diff-text").render().plain)
                     self.assertGreater(explorer.query_one(
                         "#run-changes-preview").size.height, 0)
+                    if width <= 80:
+                        await pilot.click("#run-changes-tree-toggle")
+                        await pilot.pause()
                     picker.focus()
-                    await pilot.press("down")
+                    picker.highlighted = next(
+                        i for i, option in enumerate(picker.options)
+                        if option.id == "change-file-1")
                     await pilot.pause()
                     self.assertEqual(explorer._selected_path, "docs/old_notes.md")
                     self.assertIn("Old notes", explorer.query_one(
@@ -163,7 +168,9 @@ class CockpitPilotTests(unittest.IsolatedAsyncioTestCase):
                     app._render_snapshot(fake)
                     await pilot.pause()
                     self.assertEqual(explorer._selected_path, "docs/old_notes.md")
-                    await pilot.press("down")
+                    picker.highlighted = next(
+                        i for i, option in enumerate(picker.options)
+                        if option.id == "change-file-2")
                     await pilot.pause()
                     self.assertEqual(explorer._selected_path, "logo.bin")
                     self.assertIn("Binary change", explorer.query_one(
@@ -242,26 +249,126 @@ class CockpitPilotTests(unittest.IsolatedAsyncioTestCase):
         for width in (60, 80, 120, 160):
             with self.subTest(width=width):
                 app = ChangesExplorerDemo()
-                async with app.run_test(size=(width, 30)) as pilot:
+                async with app.run_test(size=(width, 24)) as pilot:
                     await pilot.pause(0.4)
-                    options = app.query_one("#run-changes-file-list").options
-                    folders = [o for o in options if o.id.startswith("dir-")]
+                    explorer = app.query_one("#run-changes-explorer")
+                    picker = app.query_one("#run-changes-file-list")
+                    options = picker.options
+                    folders = [o for o in options if o.id.startswith("change-dir-")]
                     files = [o for o in options if o.id.startswith("change-file-")]
                     self.assertEqual(len(files), 3)
                     self.assertEqual(len(folders), 5)
-                    self.assertTrue(all(o.disabled for o in folders))
+                    self.assertTrue(all(not o.disabled for o in folders))
                     self.assertTrue(all(not o.disabled for o in files))
                     attempt = app.query_one("#run-diff-attempt").region
                     cumulative = app.query_one("#run-diff-cumulative").region
                     self.assertEqual(attempt.y, cumulative.y)
                     self.assertEqual(attempt.x + attempt.width, cumulative.x)
+                    summary = app.query_one("#run-changes-summary").region
+                    self.assertGreater(summary.y, attempt.y + attempt.height)
                     preview = app.query_one("#run-changes-preview").region
                     tree = app.query_one("#run-changes-files").region
                     if width <= 80:
                         self.assertGreaterEqual(preview.y, tree.y + tree.height)
-                        self.assertGreaterEqual(preview.height, 5)
+                        self.assertGreaterEqual(
+                            app.query_one("#run-changes-diff-scroll").size.height, 5)
+                        self.assertFalse(explorer._tree_open)
+                        self.assertFalse(picker.display)
+                        await pilot.click("#run-changes-tree-toggle")
+                        await pilot.pause()
+                        self.assertTrue(explorer._tree_open)
+                        self.assertTrue(picker.display)
+                        self.assertFalse(app.query_one("#run-changes-preview").display)
                     else:
                         self.assertEqual(preview.y, tree.y)
+
+                    # Enter and left/right all operate on directory hierarchy.
+                    picker.focus()
+                    picker.highlighted = 0  # docs/
+                    await pilot.pause()
+                    await pilot.press("enter")
+                    await pilot.pause()
+                    self.assertIn(("docs",), explorer._collapsed_directories)
+                    self.assertEqual(len(picker.options), 7)
+                    self.assertEqual(explorer._selected_path,
+                                     "src/loopforge/cli/run_presenter.py")
+                    await pilot.press("right")
+                    await pilot.pause()
+                    self.assertNotIn(("docs",), explorer._collapsed_directories)
+                    self.assertEqual(len(picker.options), 8)
+                    await pilot.press("left")
+                    await pilot.pause()
+                    self.assertIn(("docs",), explorer._collapsed_directories)
+
+                    # Nested src/loopforge can collapse independently.
+                    picker.highlighted = next(
+                        i for i, option in enumerate(picker.options)
+                        if explorer._option_directories.get(option.id) == ("src",))
+                    await pilot.pause()
+                    await pilot.press("enter")
+                    await pilot.pause()
+                    self.assertIn(("src",), explorer._collapsed_directories)
+                    self.assertFalse(any(
+                        path == ("src", "loopforge") for path
+                        in explorer._option_directories.values()))
+                    await pilot.press("enter")
+                    await pilot.pause()
+                    self.assertNotIn(("src",), explorer._collapsed_directories)
+
+                    # In compact mode choosing a file restores the full diff.
+                    if width <= 80:
+                        picker.highlighted = next(
+                            i for i, option in enumerate(picker.options)
+                            if option.id == "change-file-0")
+                        await pilot.pause()
+                        await pilot.press("enter")
+                        await pilot.pause()
+                        self.assertFalse(explorer._tree_open)
+                        self.assertTrue(app.query_one("#run-changes-preview").display)
+                        self.assertIn("return default_config",
+                                      app.query_one("#run-changes-diff-text").render().plain)
+
+    async def test_changes_tree_mouse_toggle_survives_refresh_and_returns_to_diff(self):
+        from tools.demo_changes_explorer import ChangesExplorerDemo
+        app = ChangesExplorerDemo()
+        async with app.run_test(size=(60, 24)) as pilot:
+            await pilot.pause(0.4)
+            explorer = app.query_one("#run-changes-explorer")
+            self.assertFalse(explorer._tree_open)
+            self.assertTrue(app.query_one("#run-command-bar").display)
+            await pilot.click("#run-changes-tree-toggle")
+            await pilot.pause()
+            picker = app.query_one("#run-changes-file-list")
+            await pilot.click("#run-changes-file-list", offset=(3, 0))
+            await pilot.pause()
+            self.assertIn(("docs",), explorer._collapsed_directories)
+            self.assertNotIn("change-file-2",
+                             {option.id for option in picker.options})
+            app._render_snapshot(app._snapshot)
+            await pilot.pause()
+            self.assertIn(("docs",), explorer._collapsed_directories)
+            self.assertTrue(explorer._tree_open)
+            await pilot.click("#run-changes-file-list", offset=(3, 0))
+            await pilot.pause()
+            self.assertNotIn(("docs",), explorer._collapsed_directories)
+            # Select the remaining source file and reclaim diff space.
+            picker.highlighted = next(
+                i for i, option in enumerate(picker.options)
+                if option.id == "change-file-0")
+            picker.focus()
+            await pilot.press("enter")
+            await pilot.pause()
+            self.assertFalse(explorer._tree_open)
+            self.assertTrue(app.query_one("#run-changes-preview").display)
+            self.assertGreaterEqual(
+                app.query_one("#run-changes-diff-scroll").size.height, 5)
+            self.assertIn("run_presenter.py",
+                          app.query_one("#run-changes-tree-toggle").label.plain)
+            self.assertTrue(app.query_one("#run-command-bar").display)
+            # Navigating back to Live restores the normal compact context.
+            app._change_run_reading(view="Live")
+            await pilot.pause()
+            self.assertTrue(app.query_one("#run-compact-context").display)
 
     async def test_compact_supervision_overlay_and_escape(self):
         from loopforge.cli.textual_app import LoopForgeApp

@@ -953,6 +953,7 @@ Header, Footer {
 }
 #run-changes-controls {
     display: none;
+    margin-bottom: 1;
 }
 #run-document-view {
     display: none;
@@ -985,6 +986,16 @@ Header, Footer {
     width: 1fr;
     height: 1fr;
     min-height: 0;
+}
+#run-changes-tree-toggle {
+    display: none;
+    height: 1;
+    width: 1fr;
+    min-width: 0;
+    padding: 0 1;
+    text-align: left;
+    background: transparent;
+    color: #D0BCFF;
 }
 #run-changes-files {
     width: 32%;
@@ -1044,10 +1055,29 @@ Header, Footer {
 }
 .width-60 #run-changes-files, .width-80 #run-changes-files {
     width: 1fr;
-    height: 6;
-    min-height: 3;
+    height: 1;
+    min-height: 1;
     border-right: none;
-    border-bottom: solid #494454;
+    border-bottom: none;
+}
+.width-60 #run-changes-tree-toggle, .width-80 #run-changes-tree-toggle {
+    display: block;
+}
+.width-60 #run-changes-files.tree-open, .width-80 #run-changes-files.tree-open {
+    height: 1fr;
+    border-bottom: none;
+}
+.width-60 #run-changes-explorer.compact-tree-open #run-changes-preview,
+.width-80 #run-changes-explorer.compact-tree-open #run-changes-preview {
+    display: none;
+}
+.width-60 #run-changes-files #run-changes-file-list,
+.width-80 #run-changes-files #run-changes-file-list {
+    display: none;
+}
+.width-60 #run-changes-files.tree-open #run-changes-file-list,
+.width-80 #run-changes-files.tree-open #run-changes-file-list {
+    display: block;
 }
 .width-60 #run-changes-preview, .width-80 #run-changes-preview {
     width: 1fr;
@@ -1055,6 +1085,23 @@ Header, Footer {
     min-height: 0;
     padding-left: 0;
     padding-top: 1;
+}
+
+/* Compact Changes: favor the active pane rather than two unusable slivers. */
+.width-60 #run-dashboard.changes-view #run-compact-context,
+.width-80 #run-dashboard.changes-view #run-compact-context {
+    display: none;
+}
+.width-60 #run-dashboard.changes-view #run-command-bar,
+.width-80 #run-dashboard.changes-view #run-command-bar {
+    height: 3;
+}
+.width-60 #run-dashboard.changes-view #run-command-hint,
+.width-80 #run-dashboard.changes-view #run-command-hint {
+    display: none;
+}
+.width-60 #run-changes-file-heading, .width-80 #run-changes-file-heading {
+    padding: 0 1;
 }
 
 .run-document-entry {
