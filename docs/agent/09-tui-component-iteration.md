@@ -25,7 +25,7 @@ and [danger zones](07-danger-zones.md). Developer skill:
    Separate distinct interactions; do not treat approval of one as approval of
    the whole screen. Track *proposed → mockup ready → design approved →
    implemented/tested → visually accepted* **per component**.
-3. **Show a terminal-native mockup before coding.** Usually propose meaningful
+3. **Show interactive in-chat terminal mockups before coding.** Prefer paired `AppBlock` dark previews with functional DIL selection controls, as specified below. Do not generate images. Then: Usually propose meaningful
    **A/B alternatives**, not just labels. Show realistic terminal text/layout,
    dimensions, empty/loading/busy/error states when relevant, keyboard/mouse
    behavior, provenance labels, and a recommendation with tradeoffs. Keep the
@@ -53,6 +53,77 @@ and [danger zones](07-danger-zones.md). Developer skill:
    are requested, return to steps 5–8 **for the same component**. Only mark it
    *visually accepted* after the user explicitly approves the actual result.
    Then present mockups for the **next** component; do not implement it yet.
+
+## Default dynamic ChatGPT mockups — exact format
+
+**Canonical design gate:** the successful LoopForge Run/Live sessions used in-chat
+HTML/CSS mockups that looked like the actual dark terminal, accompanied by
+interactive choice controls. They were not image-generated pictures,
+generic white-background interfaces, or only local Textual scripts.
+
+### Tools and props
+
+1. Author **two distinct AppBlock previews** in the same ChatGPT reply:
+   `AppBlock title="Variante A — ..." language="html" variant="inline"`
+   and `AppBlock title="Variante B — ..." language="html" variant="inline"`.
+   Inside each block supply self-contained HTML + CSS. These previews are visual
+   and need not duplicate the entire Textual implementation.
+2. Use explicit `DESIGN.md` palette: `#15121B` panel background, `#1D1A23`
+   code/command surface, `#494454` dividers, `#E7E0ED` body text, `#CBC3D7`
+   secondary text, `#958EA0` muted labels and `#D0BCFF` focus. Syntax colors
+   follow the product design. Force monospace, dense spacing, flat rectangular
+   surfaces. Never use a default white browser canvas or unrelated web styling.
+3. Outside AppBlock, declare client state with `{@body const [choice,setChoice]
+   = DIL.useState("A")}` and optionally `{@body const [notes,setNotes]
+   = DIL.useState("")}`. Add a controlled `<radio-group direction="col"
+   value={choice} onChange={setChoice}>` with two `<radio value="A">` /
+   `<radio value="B">` children. Optional `<textarea rows={2} value={notes}
+   onChange={setNotes} />` captures feedback.
+4. Use `<button onClick={() => GenUI.issueNewTurn(...)}>` with the choice
+   and optional notes to send the user's approval. The callback must be
+   user-triggered, never in an effect or generated JSON text.
+5. Show the tradeoffs, keyboard/mouse intent and relevant empty/loading/error
+   states. Present both variants, not merely labels or a textual suggestion.
+
+### Complete illustrative in-chat mockup (DIL example)
+
+~~~jsx
+<AppBlock title="Variante A — Compact" language="html" variant="inline">
+  <div class="lf-a"><div>Run #1 · Live</div><div class="lf-a-body">Agent Message</div><div>› Type / for commands</div></div>
+  <style>.lf-a {background:#15121B;color:#E7E0ED;padding:12px;border:1px solid #494454;font:12px/1.5 ui-monospace,monospace}.lf-a-body{background:#1D1A23;padding:8px;margin:8px 0}</style>
+</AppBlock>
+<AppBlock title="Variante B — Structured" language="html" variant="inline">
+  <div class="lf-b"><div>Run #1 · Live</div><div class="lf-b-grid"><span>Agents</span><span>Reasoning · Tool Call</span></div><div>› Type / for commands</div></div>
+  <style>.lf-b{background:#15121B;color:#E7E0ED;padding:12px;border:1px solid #494454;font:12px/1.5 ui-monospace,monospace}.lf-b-grid{display:grid;grid-template-columns:30% 70%;gap:6px;background:#1D1A23;padding:8px}</style>
+</AppBlock>
+{@body const [choice,setChoice] = DIL.useState("A")}
+{@body const [notes,setNotes] = DIL.useState("")}
+<box border radius="lg" padding={3} gap={3}>
+  **Quelle variante choisis-tu ?**
+  <radio-group direction="col" value={choice} onChange={setChoice}>
+    <radio value="A">A — Compact</radio>
+    <radio value="B">B — Structured</radio>
+  </radio-group>
+  <textarea rows={2} value={notes} onChange={setNotes} placeholder="Ajustements…"/>
+  <button block onClick={() => GenUI.issueNewTurn("Je valide la variante " + choice +
+    ". " + (notes.trim() ? "Ajustements : " + notes.trim() + ". " : "") +
+    "Implémente uniquement ce composant, teste-le et crée un commit local sans push.")}>Valider la variante</button>
+</box>
+~~~
+
+AppBlock is only the styled visualization; **active form controls stay in DIL**.
+Never substitute `image_gen` (or a generated picture) for these ChatGPT
+mockups. If DIL/AppBlock is unavailable, explicitly say so and use the
+closest supported interactive terminal preview, not a default white sketch.
+
+### Different post-approval stage: real Textual
+
+After explicit design approval implement the selected widget only, use
+`tools/demo_<component>.py` with synthetic in-memory data and run real
+Textual pilots: `app.run_test(size=(120,35))`, `pilot.press("down")`,
+`pilot.click("#widget-id")`, `pilot.resize_terminal(60,24)`.
+Inspect screenshots at 48/52/60/80/100/120/160 columns and short heights.
+Test and commit locally; request a *separate* visual acceptance gate.
 
 ## Approval and handoff record
 

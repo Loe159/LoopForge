@@ -21,6 +21,12 @@ Run commands from the repository root.
   except for platform-specific guards (e.g., Textual availability).
 - Every commit must pass the full suite. Flaky tests must be fixed, not skipped.
 
+## Tools for mockup approval (before any implementation)
+
+In ChatGPT, author separate `AppBlock title="Variante A — ..." language="html" variant="inline"` and corresponding B. Supply HTML and CSS with LoopForge dark palette. Add top-level `DIL.useState`, a controlled `radio-group` (value/onChange), optional `textarea` and a button calling `GenUI.issueNewTurn`. Details and complete example are in [the component iteration playbook](09-tui-component-iteration.md).
+
+After mockup approval, use the real Textual application and `app.run_test(size=(120, 35))` with `pilot.press`, `pilot.click`, `pilot.resize_terminal`. A local `tools/demo_<component>.py` is a production-review aid, not the default in-chat mockup medium.
+
 ## TUI redesign validation and review gates
 
 For any new/changed Textual component, follow

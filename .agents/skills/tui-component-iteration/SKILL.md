@@ -48,6 +48,28 @@ approval → next mockup.**
    Mark the component accepted *only* after confirmation; only then propose
    the next component's mockups.
 
+## Default interactive mockups in ChatGPT
+
+Use two ChatGPT `AppBlock` components, each `language="html"` and
+`variant="inline"`, with distinct `title="Variante A — ..."` and
+`title="Variante B — ..."`. Place HTML/CSS in each visualization, use
+LoopForge dark `#15121B` surfaces, `#E7E0ED` text, monospaced typography,
+and `DESIGN.md` palette (no white defaults). Never use image generation
+for a TUI mockup.
+
+Provide DIL controls in the chat reply: `DIL.useState`, controlled
+`radio-group` with values A/B, optional `textarea`, and a working `button`
+whose `onClick` invokes `GenUI.issueNewTurn` with the selected option.
+See the **complete example with exact props** in
+`docs/agent/09-tui-component-iteration.md`.
+
+These AppBlock previews are the **pre-implementation design gate**. A
+`tools/demo_<component>.py` or `app.run_test(...)` Textual preview is a
+**separate post-approval** validation method. Do not conflate the two.
+
+Only fall back if ChatGPT's inline preview capabilities are unavailable;
+explicitly state that limitation and avoid static generated images.
+
 ## Specific protections
 
 - **No implementation before mockup selection. No next component before visual

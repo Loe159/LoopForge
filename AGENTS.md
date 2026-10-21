@@ -19,6 +19,7 @@ autonomy: verification is evidence, never review or publication authority.
 
 - Follow [the component-by-component TUI workflow](docs/agent/09-tui-component-iteration.md)
   and the development skill at `.agents/skills/tui-component-iteration/SKILL.md`.
+- **Default in-chat mockups:** before production code, render two dark terminal-style `AppBlock` previews (A/B), and use real DIL `radio-group`, `textarea` and `button` controls for selection. Never default to AI-generated images or white-background mocks.
 - Inventory the existing screen, propose concrete terminal mockups (normally A/B),
   and **wait for explicit user approval of a variant before editing production UI**.
 - Change only the approved component; verify behavior, keyboard/mouse navigation,

@@ -23,7 +23,8 @@ and the repository-local development skill at
 1. Read `DESIGN.md`, the current screen/presenter/state and its tests. Write an
    inventory of components, navigation/focus, rendering provenance, constraints,
    and responsive breakpoints. Reuse existing Textual widgets/presenters.
-2. Split the work into user-visible components. For **one** component, present
+2. **Use interactive ChatGPT mockups first:** render two variants with `AppBlock` (title A/B, language HTML, variant inline), style explicitly with `DESIGN.md` dark colors and include a DIL radio choice, comments and functional confirmation action. Do not generate images for terminal mockups. Then split the implementation by component.
+3. Split the work into user-visible components. For **one** component, present
    two terminal-native mockups (or explain why one suffices), edge states, and
    the proposed keyboard/mouse interactions. **Wait for the user's explicit
    design approval**; record the chosen option and feedback.
