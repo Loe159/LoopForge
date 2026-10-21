@@ -328,6 +328,87 @@ class CockpitPilotTests(unittest.IsolatedAsyncioTestCase):
                         self.assertIn("return default_config",
                                       app.query_one("#run-changes-diff-text").render().plain)
 
+    async def test_changes_tree_arrow_keys_enter_children_and_go_to_parent(self):
+        from tools.demo_changes_explorer import ChangesExplorerDemo
+        for width in (60, 80, 120, 160):
+            with self.subTest(columns=width):
+                app = ChangesExplorerDemo()
+                async with app.run_test(size=(width, 30)) as pilot:
+                    await pilot.pause(0.4)
+                    explorer = app.query_one("#run-changes-explorer")
+                    if width <= 80:
+                        await pilot.click("#run-changes-tree-toggle")
+                        await pilot.pause()
+                    picker = app.query_one("#run-changes-file-list")
+                    picker.focus()
+                    picker.highlighted = next(
+                        i for i, o in enumerate(picker.options)
+                        if explorer._option_directories.get(o.id) == ("src", "loopforge"))
+                    await pilot.pause()
+                    self.assertEqual(app.focused, picker)
+
+                    # Left collapses an open folder, left again selects its parent.
+                    await pilot.press("left")
+                    await pilot.pause()
+                    self.assertIn(("src", "loopforge"), explorer._collapsed_directories)
+                    self.assertEqual(explorer._option_directories.get(
+                        picker.options[picker.highlighted].id), ("src", "loopforge"))
+                    await pilot.press("left")
+                    await pilot.pause()
+                    self.assertEqual(explorer._option_directories.get(
+                        picker.options[picker.highlighted].id), ("src",))
+
+                    # Right on the expanded parent enters the next child.
+                    await pilot.press("right")
+                    await pilot.pause()
+                    self.assertEqual(explorer._option_directories.get(
+                        picker.options[picker.highlighted].id), ("src", "loopforge"))
+                    await pilot.press("right")
+                    await pilot.pause()
+                    self.assertNotIn(("src", "loopforge"), explorer._collapsed_directories)
+                    await pilot.press("right")
+                    await pilot.pause()
+                    self.assertEqual(explorer._option_directories.get(
+                        picker.options[picker.highlighted].id), ("src", "loopforge", "cli"))
+
+                    # Up/down move through both folder and file rows.
+                    await pilot.press("down")
+                    await pilot.pause()
+                    self.assertEqual(picker.options[picker.highlighted].id, "change-file-0")
+                    self.assertEqual(explorer._selected_path,
+                                     "src/loopforge/cli/run_presenter.py")
+                    await pilot.press("left")
+                    await pilot.pause()
+                    self.assertEqual(explorer._option_directories.get(
+                        picker.options[picker.highlighted].id),
+                        ("src", "loopforge", "cli"))
+                    self.assertEqual(explorer._selected_path,
+                                     "src/loopforge/cli/run_presenter.py")
+                    await pilot.press("down")
+                    await pilot.pause()
+                    self.assertEqual(picker.options[picker.highlighted].id, "change-file-0")
+
+                    # A new snapshot within the same scope does not steal
+                    # focus from the directory currently highlighted.
+                    await pilot.press("left")
+                    await pilot.pause()
+                    app._render_snapshot(app._snapshot)
+                    await pilot.pause()
+                    self.assertEqual(explorer._option_directories.get(
+                        picker.options[picker.highlighted].id),
+                        ("src", "loopforge", "cli"))
+
+                    if width <= 80:
+                        picker.highlighted = next(
+                            i for i, o in enumerate(picker.options)
+                            if o.id == "change-file-0")
+                        await pilot.pause()
+                        await pilot.press("right")
+                        await pilot.pause()
+                        self.assertFalse(explorer._tree_open)
+                        self.assertTrue(app.query_one("#run-changes-preview").display)
+                        self.assertTrue(app.query_one("#run-command-bar").display)
+
     async def test_changes_tree_mouse_toggle_survives_refresh_and_returns_to_diff(self):
         from tools.demo_changes_explorer import ChangesExplorerDemo
         app = ChangesExplorerDemo()

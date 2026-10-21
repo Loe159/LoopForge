@@ -732,8 +732,9 @@ class RunChangesExplorer(Vertical):
         if signature == self._signature:
             return
 
-        old_path = self._selected_path if scope == self._selection_scope else ""
-        if scope != self._selection_scope:
+        same_scope = scope == self._selection_scope
+        old_path = self._selected_path if same_scope else ""
+        if not same_scope:
             self._collapsed_directories.clear()
             self._tree_open = False
         self._selection_scope = scope
@@ -758,7 +759,15 @@ class RunChangesExplorer(Vertical):
             heading.append("\nBase: " + str(evidence.base_commit)[:16], style="#958EA0")
         self.query_one("#run-changes-summary", Static).update(heading)
 
-        self._render_tree(selected_index=selected_index)
+        # Retained captures may refresh while the cursor is on a directory.
+        # Preserve that node rather than jumping back to the last previewed file.
+        focused_folder = None
+        if same_scope and self._option_directories:
+            picker = self.query_one("#run-changes-file-list", OptionList)
+            position = picker.highlighted
+            if position is not None and position < len(picker.options):
+                focused_folder = self._option_directories.get(picker.options[position].id)
+        self._render_tree(selected_index=selected_index, focus_folder=focused_folder)
         if files:
             self._select_file(selected_index)
         else:
@@ -859,6 +868,14 @@ class RunChangesExplorer(Vertical):
                 self.query_one("#run-changes-file-list", OptionList).focus()
             event.stop()
 
+    def _highlight_directory(self, path: tuple[str, ...]) -> None:
+        """Move the keyboard cursor to a visible ancestor without changing preview."""
+        picker = self.query_one("#run-changes-file-list", OptionList)
+        for index, option in enumerate(picker.options):
+            if self._option_directories.get(option.id) == path:
+                picker.highlighted = index
+                return
+
     def on_key(self, event: Any) -> None:
         picker = self.query_one("#run-changes-file-list", OptionList)
         if not picker.has_focus or event.key not in {"left", "right"}:
@@ -869,9 +886,38 @@ class RunChangesExplorer(Vertical):
         option = picker.options[position]
         path = self._option_directories.get(option.id)
         if path is not None:
-            self._toggle_folder(path, open_only=event.key == "right",
-                                close_only=event.key == "left")
-            event.stop()
+            if event.key == "right":
+                if path in self._collapsed_directories:
+                    self._toggle_folder(path, open_only=True)
+                elif position + 1 < len(picker.options):
+                    # Right on an already-expanded folder enters its first child.
+                    next_option = picker.options[position + 1]
+                    next_path = self._option_directories.get(next_option.id)
+                    next_file_index = self._option_file_indices.get(next_option.id)
+                    if ((next_path is not None and next_path[:len(path)] == path)
+                            or (next_file_index is not None and
+                                self._files[next_file_index].path.replace("\\", "/").split("/")[:len(path)]
+                                == list(path))):
+                        picker.highlighted = position + 1
+            elif path not in self._collapsed_directories:
+                self._toggle_folder(path, close_only=True)
+            elif len(path) > 1:
+                self._highlight_directory(path[:-1])
+        else:
+            file_index = self._option_file_indices.get(option.id)
+            if file_index is not None:
+                if event.key == "left":
+                    parts = self._files[file_index].path.replace("\\", "/").split("/")
+                    if len(parts) > 1:
+                        self._highlight_directory(tuple(parts[:-1]))
+                elif self.query_one("#run-changes-tree-toggle", Button).display:
+                    # On compact terminals right opens the selected preview.
+                    # On wide terminals the preview is already visible, so
+                    # keep keyboard focus in the tree for continued navigation.
+                    self._tree_open = False
+                    self._update_tree_visibility()
+                    self.query_one("#run-changes-tree-toggle", Button).focus()
+        event.stop()
 
     def _select_file(self, index: int) -> None:
         if not isinstance(index, int) or not 0 <= index < len(self._files):
