@@ -26,7 +26,7 @@ from loopforge.cli.textual_app.run_presenter import (
     tool_output_renderable,
     TranscriptEntry,
 )
-from loopforge.cli.textual_app.widgets import RunAgentOutput, RunToolEntry
+from loopforge.cli.textual_app.widgets import RunAgentOutput, RunToolEntry, RunReasoningEntry
 
 
 def codex_call(identity, status, command="pytest", output=""):
@@ -318,6 +318,79 @@ class TranscriptApp(App):
 
     def compose(self) -> ComposeResult:
         yield RunAgentOutput(id="run-agent-output")
+
+
+class ReasoningWidgetTests(unittest.IsolatedAsyncioTestCase):
+    async def test_reasoning_is_quiet_collapsed_and_keyboard_mouse_accessible(self):
+        body = "Check routing before editing. [red]literal[/red]"
+        reasoning = TranscriptEntry("reasoning:1", "reasoning", "Reasoning", body)
+        for width in (60, 80, 120, 160):
+            with self.subTest(columns=width):
+                app = TranscriptApp()
+                async with app.run_test(size=(width, 24)) as pilot:
+                    output = app.query_one(RunAgentOutput)
+                    output.update(Text(""), entries=(reasoning,), scope="run-one",
+                                  adapter_label="Codex")
+                    await pilot.pause()
+                    entry = app.query_one(RunReasoningEntry)
+                    self.assertTrue(entry.collapsed)
+                    self.assertTrue(entry.has_class("run-reasoning-entry"))
+                    self.assertIn("Reasoning", entry.title.plain)
+                    self.assertIn("Codex", entry.title.plain)
+                    self.assertNotIn("Source", entry.title.plain)
+                    self.assertNotIn("Source:", str(entry.detail.render()))
+                    self.assertIn(body, entry.detail.content.plain)
+                    self.assertFalse(entry.styles.border)
+                    self.assertLessEqual(entry.size.width, width)
+                    title = entry.query_one("CollapsibleTitle")
+                    title.focus()
+                    await pilot.press("enter")
+                    await pilot.pause()
+                    self.assertFalse(entry.collapsed)
+                    self.assertIs(app.focused, title)
+                    self.assertEqual(entry.query_one(".run-tool-detail").styles.background.a, 0)
+                    await pilot.click(title)
+                    await pilot.pause()
+                    self.assertTrue(entry.collapsed)
+
+    async def test_reasoning_preserves_expansion_on_streaming_but_not_new_scope(self):
+        app = TranscriptApp()
+        first = TranscriptEntry("reasoning:same", "reasoning", "Reasoning", "Checking")
+        second = replace(first, body="Checking tests. [b]literal[/b]")
+        async with app.run_test(size=(80, 24)) as pilot:
+            output = app.query_one(RunAgentOutput)
+            output.update(Text(""), scope="one", entries=(first,))
+            await pilot.pause()
+            entry = app.query_one(RunReasoningEntry)
+            title = entry.query_one("CollapsibleTitle")
+            title.focus()
+            await pilot.press("enter")
+            output.update(Text(""), scope="one", entries=(second,))
+            await pilot.pause()
+            self.assertIs(entry, app.query_one(RunReasoningEntry))
+            self.assertFalse(entry.collapsed)
+            self.assertIs(app.focused, title)
+            self.assertIn("[b]literal[/b]", entry.detail.content.plain)
+            output.update(Text(""), scope="two", entries=(second,))
+            await pilot.pause()
+            self.assertIsNot(entry, app.query_one(RunReasoningEntry))
+            self.assertTrue(app.query_one(RunReasoningEntry).collapsed)
+            output.update(Text(""), scope="two", entries=())
+            await pilot.pause()
+            self.assertFalse(app.query(RunReasoningEntry))
+
+    async def test_no_exposed_reasoning_creates_no_disclosure(self):
+        app = TranscriptApp()
+        async with app.run_test(size=(80, 24)) as pilot:
+            output = app.query_one(RunAgentOutput)
+            partial = TranscriptEntry("reasoning:late", "reasoning", "Reasoning", "")
+            output.update(Text(""), entries=(partial,), scope="run")
+            await pilot.pause()
+            self.assertFalse(app.query(RunReasoningEntry))
+            output.update(Text(""), entries=(replace(partial, body="Visible now"),),
+                          scope="run")
+            await pilot.pause()
+            self.assertEqual(len(app.query(RunReasoningEntry)), 1)
 
 
 class TranscriptWidgetTests(unittest.IsolatedAsyncioTestCase):

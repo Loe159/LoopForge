@@ -337,6 +337,34 @@ class RunToolEntry(Collapsible):
         self.title = title
 
 
+class RunReasoningEntry(RunToolEntry):
+    """Quiet, read-only disclosure for reasoning actually exposed by the harness.
+
+    Reuses the tool disclosure's stable identity and follow-suspension behavior;
+    no private reasoning is reconstructed or attributed to the agent.
+    """
+
+    def __init__(self, entry: TranscriptEntry, *, adapter_label: str = "") -> None:
+        self.adapter_label = adapter_label
+        super().__init__(entry)
+        self.add_class("run-reasoning-entry")
+
+    def update_entry(self, entry: TranscriptEntry) -> None:
+        self.entry = entry
+        self._output = entry.body
+        body = agent_body_renderable(entry.body)
+        if isinstance(body, Text):
+            body.stylize("#CBC3D7")
+        self.detail.update(body)
+        self.refresh_title()
+
+    def refresh_title(self) -> None:
+        title = Text("Reasoning", style="italic #958EA0")
+        if self.adapter_label:
+            title.append("  ·  " + self.adapter_label, style="#958EA0")
+        self.title = title
+
+
 def _file_change_row(file: DeclaredFileChange) -> Collapsible:
     """Each native-declared path expands its captured session diff inline."""
     action = {"modified": "Edit", "added": "Add", "deleted": "Delete",
@@ -454,6 +482,9 @@ class RunAgentOutput(Vertical):
         if not active:
             entries = tuple(replace(entry, status="unknown") if entry.status == "running" else entry
                             for entry in entries)
+        # An empty native reasoning event does not expose any content to read.
+        entries = tuple(entry for entry in entries
+                        if entry.kind != "reasoning" or entry.body.strip())
         if entries == self._entries:
             return
         self._entries = entries
@@ -466,7 +497,9 @@ class RunAgentOutput(Vertical):
             if item is None:
                 if entry.kind == "file_change":
                     item = RunFileChangeEntry(entry, source_label=adapter_label)
-                elif entry.kind in {"tool", "reasoning", "group", "delegation"}:
+                elif entry.kind == "reasoning":
+                    item = RunReasoningEntry(entry, adapter_label=adapter_label)
+                elif entry.kind in {"tool", "group", "delegation"}:
                     item = RunToolEntry(entry)
                 else:
                     text = Text()
@@ -482,21 +515,6 @@ class RunAgentOutput(Vertical):
                         self._items[entry.key] = item
                         self.mount(item)
                         continue
-                    elif entry.kind == "reasoning":
-                        text.append("Reasoning\n", style="italic #958EA0")
-                        body = agent_body_renderable(entry.body)
-                        if isinstance(body, Text):
-                            body.stylize("#958EA0")
-                            text.append_text(body)
-                        else:
-                            item = Static(
-                                Group(Text("Reasoning", style="italic #958EA0"), body),
-                                markup=False,
-                                classes=f"run-entry-{entry.kind}",
-                            )
-                            self._items[entry.key] = item
-                            self.mount(item)
-                            continue
                     else:
                         text.append(entry.title, style="#958EA0")
                         if entry.body:

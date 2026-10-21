@@ -385,6 +385,31 @@
     color: #E7E0ED;
 }
 
+/* Reasoning is secondary conversation content, never a framed tool card. */
+.run-reasoning-entry {
+    margin: 1 0 1 1;
+}
+
+.run-reasoning-entry > CollapsibleTitle {
+    color: #958EA0;
+    text-style: italic;
+}
+
+.run-reasoning-entry > Contents {
+    padding: 0 0 0 1;
+}
+
+.run-reasoning-entry .run-tool-content {
+    margin: 0 0 1 0;
+    background: transparent;
+}
+
+.run-reasoning-entry .run-tool-detail {
+    padding: 0 1;
+    background: transparent;
+    color: #CBC3D7;
+}
+
 /* One compact native event with independent Kilo-like file diff disclosures. */
 .run-file-change-entry, .run-file-change-row {
     height: auto;

@@ -51,6 +51,33 @@ class CockpitPilotTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(app.query_one("#run-activity-feed").display)
             self.assertFalse(app.query_one("#run-document-view").display)
 
+    async def test_expanding_reasoning_suspends_follow_like_tool_details(self):
+        from unittest.mock import patch
+        from loopforge.cli.textual_app import LoopForgeApp
+        from loopforge.cli.textual_app.widgets import RunReasoningEntry
+        app = LoopForgeApp(
+            SimpleNamespace(project_dir=Path.cwd(), theme="dark"),
+            load_on_mount=False,
+        )
+        async with app.run_test(size=(120, 35)) as pilot:
+            snapshot = synthetic_run(app)
+            agent = replace(snapshot.run.agent, structured_events=(
+                {"kind": "reasoning", "title": "Reasoning",
+                 "body": "Only exposed reasoning.", "native_id": "reason-1",
+                 "order": 0},
+            ), event_count=1)
+            app._screen = "run"
+            app._render_snapshot(replace(snapshot, run=replace(snapshot.run, agent=agent)))
+            await pilot.pause()
+            entry = app.query_one(RunReasoningEntry)
+            self.assertTrue(entry.collapsed)
+            with patch.object(app, "_suspend_run_follow") as suspend:
+                entry.query_one("CollapsibleTitle").focus()
+                await pilot.press("enter")
+                await pilot.pause()
+                suspend.assert_called_once()
+            self.assertFalse(entry.collapsed)
+
     async def test_live_feed_variant_a_has_no_outer_frame(self):
         from loopforge.cli.textual_app import LoopForgeApp
         from loopforge.cli.textual_app.widgets import RunToolEntry
