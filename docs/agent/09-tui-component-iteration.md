@@ -8,15 +8,15 @@ Apply the same discipline for a small component when user review is important.
 approval of the delivered UI. Automated tests cannot stand in for **visual
 acceptance**. Neither gate authorizes a Git push or publication.
 
-See \`DESIGN.md\`, \`AGENTS.md\`, [coding patterns](03-coding-patterns.md),
+See `DESIGN.md`, `AGENTS.md`, [coding patterns](03-coding-patterns.md),
 [adding features](05-how-to-add-feature.md), [build/test](06-build-test-run.md),
 and [danger zones](07-danger-zones.md). Developer skill:
-\`../../.agents/skills/tui-component-iteration/SKILL.md\`.
+`../../.agents/skills/tui-component-iteration/SKILL.md`.
 
 ## Repeatable loop — one component at a time
 
 1. **Inspect the running surface and contracts.** Read the existing widgets,
-   presenter, state projector, styles, test cases, \`DESIGN.md\`, and related
+   presenter, state projector, styles, test cases, `DESIGN.md`, and related
    product/decision documents. List what each component displays, where its
    data comes from, its navigation/focus ownership, responsive behavior, and
    semantic constraints. Do not infer “verified” data from an agent transcript.
@@ -56,7 +56,7 @@ and [danger zones](07-danger-zones.md). Developer skill:
 
 ## Approval and handoff record
 
-Keep a short, versioned record (e.g. in \`docs/plans/\`) containing:
+Keep a short, versioned record (e.g. in `docs/plans/`) containing:
 
 | Field | Required information |
 | --- | --- |
@@ -99,15 +99,15 @@ Select applicable cases, then record actual outcomes:
   screen switching and command shortcuts. Exercise neighbor components to
   catch incidental CSS/callback changes.
 
-Use \`python -m unittest\`, focused \`tests/test_run_*.py\` and
-\`tests/test_cli_textual_app.py\` as appropriate, \`python -m compileall -q src\`,
-and \`git diff --check\`. When execution is unavailable or times out, report
+Use `python -m unittest`, focused `tests/test_run_*.py` and
+`tests/test_cli_textual_app.py` as appropriate, `python -m compileall -q src`,
+and `git diff --check`. When execution is unavailable or times out, report
 exactly which checks passed and which did not run. Do not claim a full-suite
 pass from partial batches.
 
 ## Deterministic visual demo rules
 
-- Prefer a dedicated \`tools/demo_<component>.py\` that renders the **real**
+- Prefer a dedicated `tools/demo_<component>.py` that renders the **real**
   widget/screen using in-memory synthetic snapshot objects.
 - Include representative adjacent content and states (one successful example,
   one edge case). No filesystem mutation, external services, model calls, or
