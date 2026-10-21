@@ -968,10 +968,12 @@ class RunChangesExplorer(Vertical):
                     index = self._option_file_indices.get(event.option.id)
                     if index is not None:
                         self._select_file(index)
-                        # Compact mode: give the preview the entire space.
-                        self._tree_open = False
-                        self._update_tree_visibility()
-                        self.query_one("#run-changes-tree-toggle", Button).focus()
+                        # The single-pane toggle exists only below 52 columns.
+                        toggle = self.query_one("#run-changes-tree-toggle", Button)
+                        if toggle.display:
+                            self._tree_open = False
+                            self._update_tree_visibility()
+                            toggle.focus()
             event.stop()
 
 

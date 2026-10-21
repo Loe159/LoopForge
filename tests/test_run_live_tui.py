@@ -153,7 +153,7 @@ class CockpitPilotTests(unittest.IsolatedAsyncioTestCase):
                         "#run-changes-diff-text").render().plain)
                     self.assertGreater(explorer.query_one(
                         "#run-changes-preview").size.height, 0)
-                    if width <= 80:
+                    if width < 52:
                         await pilot.click("#run-changes-tree-toggle")
                         await pilot.pause()
                     picker.focus()
@@ -246,7 +246,7 @@ class CockpitPilotTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_changes_tree_and_single_line_controls(self):
         from tools.demo_changes_explorer import ChangesExplorerDemo
-        for width in (60, 80, 120, 160):
+        for width in (48, 60, 80, 100, 120, 160):
             with self.subTest(width=width):
                 app = ChangesExplorerDemo()
                 async with app.run_test(size=(width, 24)) as pilot:
@@ -268,10 +268,9 @@ class CockpitPilotTests(unittest.IsolatedAsyncioTestCase):
                     self.assertGreater(summary.y, attempt.y + attempt.height)
                     preview = app.query_one("#run-changes-preview").region
                     tree = app.query_one("#run-changes-files").region
-                    if width <= 80:
+                    if width < 52:
                         self.assertGreaterEqual(preview.y, tree.y + tree.height)
-                        self.assertGreaterEqual(
-                            app.query_one("#run-changes-diff-scroll").size.height, 5)
+                        self.assertTrue(app.query_one("#run-changes-tree-toggle").display)
                         self.assertFalse(explorer._tree_open)
                         self.assertFalse(picker.display)
                         await pilot.click("#run-changes-tree-toggle")
@@ -280,7 +279,14 @@ class CockpitPilotTests(unittest.IsolatedAsyncioTestCase):
                         self.assertTrue(picker.display)
                         self.assertFalse(app.query_one("#run-changes-preview").display)
                     else:
+                        self.assertFalse(app.query_one("#run-changes-tree-toggle").display)
+                        self.assertTrue(picker.display)
                         self.assertEqual(preview.y, tree.y)
+                        self.assertEqual(preview.x, tree.x + tree.width)
+                        self.assertGreaterEqual(preview.width, 25)
+                        self.assertGreaterEqual(tree.width, 22 if width < 120 else 24)
+                        self.assertGreaterEqual(
+                            app.query_one("#run-changes-diff-scroll").size.height, 4)
 
                     # Enter and left/right all operate on directory hierarchy.
                     picker.focus()
@@ -316,7 +322,7 @@ class CockpitPilotTests(unittest.IsolatedAsyncioTestCase):
                     self.assertNotIn(("src",), explorer._collapsed_directories)
 
                     # In compact mode choosing a file restores the full diff.
-                    if width <= 80:
+                    if width < 52:
                         picker.highlighted = next(
                             i for i, option in enumerate(picker.options)
                             if option.id == "change-file-0")
@@ -328,15 +334,83 @@ class CockpitPilotTests(unittest.IsolatedAsyncioTestCase):
                         self.assertIn("return default_config",
                                       app.query_one("#run-changes-diff-text").render().plain)
 
+    async def test_changes_resizes_between_two_panes_and_ultra_narrow(self):
+        from tools.demo_changes_explorer import ChangesExplorerDemo
+        app = ChangesExplorerDemo()
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause(0.4)
+            explorer = app.query_one("#run-changes-explorer")
+            picker = app.query_one("#run-changes-file-list")
+            # Make a change to the selected file to catch accidental resets.
+            picker.focus()
+            picker.highlighted = next(i for i, opt in enumerate(picker.options)
+                                      if opt.id == "change-file-1")
+            await pilot.pause()
+            self.assertEqual(explorer._selected_path, "tests/test_run_transcript_ui.py")
+            for width in (80, 60, 52, 120, 100):
+                await pilot.resize_terminal(width, 30)
+                await pilot.pause()
+                with self.subTest(width=width):
+                    tree = app.query_one("#run-changes-files")
+                    preview = app.query_one("#run-changes-preview")
+                    self.assertFalse(app.has_class("changes-ultra-narrow"))
+                    self.assertEqual(tree.region.y, preview.region.y)
+                    self.assertEqual(tree.region.x + tree.region.width,
+                                     preview.region.x)
+                    self.assertGreaterEqual(preview.region.width, 25)
+                    self.assertTrue(picker.display)
+                    self.assertFalse(app.query_one("#run-changes-tree-toggle").display)
+                    self.assertEqual(explorer._selected_path,
+                                     "tests/test_run_transcript_ui.py")
+                    self.assertTrue(app.query_one("#run-command-bar").display)
+
+            await pilot.resize_terminal(48, 30)
+            await pilot.pause()
+            self.assertTrue(app.has_class("changes-ultra-narrow"))
+            self.assertFalse(picker.display)
+            self.assertTrue(app.query_one("#run-changes-tree-toggle").display)
+            await pilot.click("#run-changes-tree-toggle")
+            await pilot.pause()
+            self.assertTrue(picker.display)
+            await pilot.resize_terminal(80, 30)
+            await pilot.pause()
+            self.assertFalse(app.has_class("changes-ultra-narrow"))
+            self.assertTrue(picker.display)
+            self.assertTrue(app.query_one("#run-changes-preview").display)
+            self.assertEqual(explorer._selected_path, "tests/test_run_transcript_ui.py")
+
+    async def test_changes_two_pane_file_select_does_not_hide_tree(self):
+        from tools.demo_changes_explorer import ChangesExplorerDemo
+        for width in (60, 80, 100, 120):
+            with self.subTest(width=width):
+                app = ChangesExplorerDemo()
+                async with app.run_test(size=(width, 28)) as pilot:
+                    await pilot.pause(0.4)
+                    explorer = app.query_one("#run-changes-explorer")
+                    picker = app.query_one("#run-changes-file-list")
+                    picker.focus()
+                    picker.highlighted = next(i for i, opt in enumerate(picker.options)
+                                              if opt.id == "change-file-1")
+                    await pilot.pause()
+                    await pilot.press("enter")
+                    await pilot.pause()
+                    self.assertTrue(picker.display)
+                    self.assertTrue(app.query_one("#run-changes-preview").display)
+                    self.assertEqual(app.focused, picker)
+                    self.assertEqual(explorer._selected_path,
+                                     "tests/test_run_transcript_ui.py")
+                    self.assertIn("test_config", app.query_one(
+                        "#run-changes-diff-text").render().plain)
+
     async def test_changes_tree_arrow_keys_enter_children_and_go_to_parent(self):
         from tools.demo_changes_explorer import ChangesExplorerDemo
-        for width in (60, 80, 120, 160):
+        for width in (48, 60, 80, 120, 160):
             with self.subTest(columns=width):
                 app = ChangesExplorerDemo()
                 async with app.run_test(size=(width, 30)) as pilot:
                     await pilot.pause(0.4)
                     explorer = app.query_one("#run-changes-explorer")
-                    if width <= 80:
+                    if width < 52:
                         await pilot.click("#run-changes-tree-toggle")
                         await pilot.pause()
                     picker = app.query_one("#run-changes-file-list")
@@ -398,7 +472,7 @@ class CockpitPilotTests(unittest.IsolatedAsyncioTestCase):
                         picker.options[picker.highlighted].id),
                         ("src", "loopforge", "cli"))
 
-                    if width <= 80:
+                    if width < 52:
                         picker.highlighted = next(
                             i for i, o in enumerate(picker.options)
                             if o.id == "change-file-0")
@@ -412,7 +486,7 @@ class CockpitPilotTests(unittest.IsolatedAsyncioTestCase):
     async def test_changes_tree_mouse_toggle_survives_refresh_and_returns_to_diff(self):
         from tools.demo_changes_explorer import ChangesExplorerDemo
         app = ChangesExplorerDemo()
-        async with app.run_test(size=(60, 24)) as pilot:
+        async with app.run_test(size=(48, 24)) as pilot:
             await pilot.pause(0.4)
             explorer = app.query_one("#run-changes-explorer")
             self.assertFalse(explorer._tree_open)
@@ -441,8 +515,9 @@ class CockpitPilotTests(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertFalse(explorer._tree_open)
             self.assertTrue(app.query_one("#run-changes-preview").display)
+            # Ultra-narrow fallback keeps a scrollable preview even at 48x24.
             self.assertGreaterEqual(
-                app.query_one("#run-changes-diff-scroll").size.height, 5)
+                app.query_one("#run-changes-diff-scroll").size.height, 3)
             self.assertIn("run_presenter.py",
                           app.query_one("#run-changes-tree-toggle").label.plain)
             self.assertTrue(app.query_one("#run-command-bar").display)

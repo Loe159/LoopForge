@@ -2030,6 +2030,8 @@ class LoopForgeApp(App[None]):
 
         self.remove_class("width-60", "width-80", "width-120", "width-160")
         self.add_class(width_class_for(width))
+        # Unlike global responsive widths, Changes can stay two-pane at 60 cols.
+        self.set_class(width < 52, "changes-ultra-narrow")
 
     def _handle_exception(self, error: Exception) -> None:
         if self.is_running:

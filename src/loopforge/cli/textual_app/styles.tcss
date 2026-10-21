@@ -1047,47 +1047,71 @@ Header, Footer {
     height: auto;
     background: #1D1A23;
 }
+/* Changes uses a real two-pane explorer at 60–119 columns too.
+   Only genuinely tiny terminals (< 52 columns) switch to one pane. */
 .width-60 #run-changes-explorer, .width-80 #run-changes-explorer {
     padding: 0 1;
 }
 .width-60 #run-changes-body, .width-80 #run-changes-body {
-    layout: vertical;
+    layout: horizontal;
 }
-.width-60 #run-changes-files, .width-80 #run-changes-files {
-    width: 1fr;
-    height: 1;
-    min-height: 1;
-    border-right: none;
-    border-bottom: none;
+.width-60 #run-changes-files {
+    width: 22;
+    min-width: 18;
+    max-width: 22;
 }
-.width-60 #run-changes-tree-toggle, .width-80 #run-changes-tree-toggle {
-    display: block;
-}
-.width-60 #run-changes-files.tree-open, .width-80 #run-changes-files.tree-open {
-    height: 1fr;
-    border-bottom: none;
-}
-.width-60 #run-changes-explorer.compact-tree-open #run-changes-preview,
-.width-80 #run-changes-explorer.compact-tree-open #run-changes-preview {
-    display: none;
-}
-.width-60 #run-changes-files #run-changes-file-list,
-.width-80 #run-changes-files #run-changes-file-list {
-    display: none;
-}
-.width-60 #run-changes-files.tree-open #run-changes-file-list,
-.width-80 #run-changes-files.tree-open #run-changes-file-list {
-    display: block;
+.width-80 #run-changes-files {
+    width: 28;
+    min-width: 22;
+    max-width: 28;
 }
 .width-60 #run-changes-preview, .width-80 #run-changes-preview {
     width: 1fr;
+    min-width: 0;
+    padding-left: 1;
+    padding-top: 0;
+}
+.width-60 #run-changes-file-heading, .width-80 #run-changes-file-heading {
+    height: auto;
+    max-height: 2;
+    padding: 0 1;
+}
+
+/* Below 52 columns only, allow the user to switch between full panes. */
+.changes-ultra-narrow #run-changes-body {
+    layout: vertical;
+}
+.changes-ultra-narrow #run-changes-files {
+    width: 1fr;
+    max-width: 100%;
+    min-width: 0;
+    height: 1;
+    min-height: 1;
+    border-right: none;
+}
+.changes-ultra-narrow #run-changes-tree-toggle {
+    display: block;
+}
+.changes-ultra-narrow #run-changes-files.tree-open {
     height: 1fr;
-    min-height: 0;
+}
+.changes-ultra-narrow #run-changes-explorer.compact-tree-open #run-changes-preview {
+    display: none;
+}
+.changes-ultra-narrow #run-changes-files #run-changes-file-list {
+    display: none;
+}
+.changes-ultra-narrow #run-changes-files.tree-open #run-changes-file-list {
+    display: block;
+}
+.changes-ultra-narrow #run-changes-preview {
+    width: 1fr;
+    min-width: 0;
     padding-left: 0;
     padding-top: 1;
 }
 
-/* Compact Changes: favor the active pane rather than two unusable slivers. */
+/* Narrow Changes: reclaim vertical space without sacrificing two-pane layout. */
 .width-60 #run-dashboard.changes-view #run-compact-context,
 .width-80 #run-dashboard.changes-view #run-compact-context {
     display: none;
@@ -1100,10 +1124,6 @@ Header, Footer {
 .width-80 #run-dashboard.changes-view #run-command-hint {
     display: none;
 }
-.width-60 #run-changes-file-heading, .width-80 #run-changes-file-heading {
-    padding: 0 1;
-}
-
 .run-document-entry {
     height: auto;
     padding: 0;
