@@ -376,9 +376,12 @@ class StateStore:
         session = getattr(self._run_agent, "session_id", "")
         if self._reading.view == "Context" and session:
             self._context = load_run_context(status.run_dir, session)
-        elif self._reading.view == "Changes":
+        elif self._reading.view in {"Live", "Changes"}:
+            # Live file-change disclosures use the selected execution's retained
+            # workspace diff, never the cumulative patch from another scope.
             self._changes = load_run_changes(
-                status, self._run_agent, cumulative=self._reading.cumulative,
+                status, self._run_agent,
+                cumulative=self._reading.cumulative if self._reading.view == "Changes" else False,
             )
         elif self._reading.view == "Evidences":
             self._evidences = load_run_evidences(

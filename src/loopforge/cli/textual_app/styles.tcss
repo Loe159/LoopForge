@@ -385,22 +385,24 @@
     color: #E7E0ED;
 }
 
-/* File changes: one native event = one compact, expandable group. */
-.run-file-change-entry {
+/* One compact native event with independent Kilo-like file diff disclosures. */
+.run-file-change-entry, .run-file-change-row {
     height: auto;
     padding: 0;
     margin: 0;
     border: none;
     background: transparent;
 }
-.run-file-change-entry > CollapsibleTitle {
+.run-file-change-entry > CollapsibleTitle,
+.run-file-change-row > CollapsibleTitle {
     width: 1fr;
     height: 1;
     padding: 0;
     color: #E7E0ED;
     text-overflow: ellipsis;
 }
-.run-file-change-entry > CollapsibleTitle:focus {
+.run-file-change-entry > CollapsibleTitle:focus,
+.run-file-change-row > CollapsibleTitle:focus {
     background: #2A2435;
     color: #D0BCFF;
 }
@@ -410,11 +412,11 @@
 }
 .run-file-change-content {
     height: auto;
-    max-height: 17;
+    max-height: 24;
     overflow-y: auto;
     overflow-x: hidden;
     margin: 0 0 1 1;
-    padding: 1 0 0 1;
+    padding: 0 0 0 1;
     border-left: solid #494454;
     scrollbar-size: 1 1;
     scrollbar-background: #15121B;
@@ -425,39 +427,31 @@
 }
 .run-file-change-row {
     width: 1fr;
-    height: 1;
-    padding: 0 1;
 }
-.run-file-change-path {
+.run-file-change-row > Contents {
+    height: auto;
+    padding: 0 0 0 2;
+}
+.run-file-diff-scroll {
+    height: auto;
+    max-height: 12;
     width: 1fr;
-    min-width: 0;
-    height: 1;
-    text-overflow: ellipsis;
+    overflow-y: auto;
+    overflow-x: auto;
+    background: #1D1A23;
+    scrollbar-size: 1 1;
 }
-.run-file-change-stats {
+.run-file-diff-text {
     width: auto;
-    height: 1;
-    color: #CBC3D7;
-    text-align: right;
-}
-.run-file-change-footer {
-    width: 1fr;
-    height: 1;
-    margin-top: 1;
+    height: auto;
+    background: #1D1A23;
 }
 .run-file-change-origin {
     height: 1;
     width: 1fr;
+    margin-top: 1;
     color: #958EA0;
     text-overflow: ellipsis;
-}
-.run-file-changes-link {
-    width: auto;
-    min-width: 10;
-    height: 1;
-    padding: 0 1;
-    background: transparent;
-    color: #D0BCFF;
 }
 .run-file-change-empty {
     height: auto;

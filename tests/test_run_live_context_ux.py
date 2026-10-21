@@ -68,6 +68,29 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual(len(entries[0].file_changes), 3)
         self.assertTrue(all(f.additions is None for f in entries[0].file_changes))
 
+    def test_inline_diff_requires_retained_capture_and_rejects_harness_diff(self):
+        from loopforge.cli.textual_app.run_presenter import file_diff_renderable
+        from loopforge.cli.run_changes import RunChangesSnapshot, RunFileChange
+        event = {"kind": "file_change", "native_id": "ed1", "order": 0,
+                 "files": [{"path": "src/file.py", "action": "modified",
+                            "diff": "@@ -1 +1 @@\n-fake\n+fake"}]}
+        plain, = project_events((event,))
+        self.assertIn("unavailable", file_diff_renderable(plain.file_changes[0]).plain)
+        verified = RunChangesSnapshot(capture_state="complete",
+            source="runner-workspace-snapshots", files=(
+                RunFileChange("src/file.py", "modified", diff=
+                    "--- a/src/file.py\n+++ b/src/file.py\n@@ -17,5 +17,5 @@\n"
+                    " before1\n before2\n before3\n-    return None\n+    return True\n after1\n"),))
+        checked, = project_events((event,), verified_changes=verified)
+        rendered = file_diff_renderable(checked.file_changes[0])
+        self.assertIn("  20 -", rendered.plain)
+        self.assertIn("  20 +", rendered.plain)
+        self.assertNotIn("@@", rendered.plain)
+        self.assertNotIn("fake", rendered.plain)
+        self.assertGreater(len(rendered.spans), 10)
+        stale, = project_events((event,), verified_changes=replace(verified, stale=True))
+        self.assertFalse(stale.file_changes[0].diff)
+
     def test_file_change_counts_require_complete_session_snapshot(self):
         from loopforge.cli.run_changes import RunChangesSnapshot, RunFileChange
         event = {"kind": "file_change", "native_id": "change-1", "order": 0,

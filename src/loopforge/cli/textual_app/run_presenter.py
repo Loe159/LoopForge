@@ -14,6 +14,8 @@ from rich.style import Style
 from rich.theme import Theme
 from rich.syntax import Syntax, PygmentsSyntaxTheme
 from pygments.style import Style as PygmentsStyle
+from pygments.lexers import get_lexer_for_filename
+from pygments.util import ClassNotFound
 from pygments.token import Comment, Keyword, Name, Number, Operator, Punctuation, String
 from rich.text import Text
 
@@ -143,6 +145,9 @@ class DeclaredFileChange:
     action: str = "unknown"
     additions: int | None = None
     deletions: int | None = None
+    diff: str = ""
+    truncated: bool = False
+    binary: bool = False
 
 
 @dataclass(frozen=True)
@@ -246,6 +251,65 @@ class LoopForgeSyntaxStyle(PygmentsStyle):
 
 
 _TOOL_SYNTAX_THEME = PygmentsSyntaxTheme(LoopForgeSyntaxStyle)
+
+_DIFF_HUNK = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+
+
+def file_diff_renderable(file: DeclaredFileChange) -> Text:
+    """Render a retained, session-scoped unified diff as one numbered column.
+
+    The retained Git/difflib hunks already include three context lines. Never
+    make up missing context, merge inferred changes, or show headers as code.
+    """
+    if file.binary:
+        return Text("Binary change; no text diff available.", style="#958EA0")
+    if not file.diff:
+        return Text("Verified diff unavailable for this file.", style="#958EA0")
+    try:
+        lexer = get_lexer_for_filename(file.path, stripnl=False, ensurenl=False)
+    except ClassNotFound:
+        lexer = "text"
+    output = Text(no_wrap=True, overflow="crop")
+    old_line = new_line = 0
+    rows = 0
+    in_hunk = False
+    for line in file.diff.splitlines():
+        match = _DIFF_HUNK.match(line)
+        if match:
+            if in_hunk and rows:
+                output.append("    " + run_glyph("⋯", "...") + "\n", style="#958EA0")
+            old_line, new_line = int(match[1]), int(match[2])
+            in_hunk = True
+            continue
+        if not in_hunk or line.startswith("\\ No newline at end of file"):
+            continue
+        prefix = line[:1]
+        if prefix not in {" ", "+", "-"}:
+            # A truncated capture can end with a malformed partial line.
+            continue
+        if rows >= 400:
+            output.append("Diff preview limited to 400 lines.\n", style="#958EA0")
+            break
+        number = old_line if prefix == "-" else new_line
+        if prefix != "+":
+            old_line += 1
+        if prefix != "-":
+            new_line += 1
+        bg = "#392428" if prefix == "-" else "#20382B" if prefix == "+" else "#1D1A23"
+        marker = prefix if prefix in {"+", "-"} else " "
+        start = len(output)
+        output.append(f"{number:>4} {marker} ", style="#958EA0" if prefix == " " else "#FFB4AB" if prefix == "-" else "#A8E6B0")
+        code = line[1:]
+        output.append_text(Syntax(code, lexer, theme=_TOOL_SYNTAX_THEME, background_color=bg).highlight(code))
+        # Syntax colors take priority; the line's background remains visible.
+        output.stylize(f"on {bg}", start, len(output))
+        output.append("\n")
+        rows += 1
+    if not rows:
+        return Text("No parseable diff hunks in retained capture.", style="#958EA0")
+    if file.truncated:
+        output.append("Diff preview truncated by capture limit.\n", style="#FFB869")
+    return output
 
 
 def tool_output_renderable(value: str) -> Text | Syntax | Group:

@@ -54,7 +54,12 @@ def project_events(events: tuple[Mapping[str, Any], ...], *,
                 # individual harness event. Never trust counters in value.
                 additions = proof.additions if proof is not None else None
                 deletions = proof.deletions if proof is not None else None
-                declared.append(DeclaredFileChange(path, action, additions, deletions))
+                declared.append(DeclaredFileChange(
+                    path, action, additions, deletions,
+                    diff=proof.diff if proof is not None else "",
+                    truncated=proof.truncated if proof is not None else False,
+                    binary=proof.binary if proof is not None else False,
+                ))
         entry = TranscriptEntry(key, kind, title, body, status, file_changes=tuple(declared))
         category = str(value.get("category") or "")
         if identity and identity in index_by_native:

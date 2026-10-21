@@ -30,6 +30,7 @@ from loopforge.cli.textual_app.run_presenter import (
     DeclaredFileChange,
     agent_body_renderable,
     agent_message_renderable,
+    file_diff_renderable,
     tool_display,
     tool_output_renderable,
     transcript_entries,
@@ -335,35 +336,32 @@ class RunToolEntry(Collapsible):
         self.title = title
 
 
-def _file_change_row(file: DeclaredFileChange) -> Horizontal:
-    """Action icon + full path (ellipsized visually) + captured counts."""
-    marker, color = {
-        "modified": (run_glyph("✎", "~"), "#CBC3D7"),
-        "added": (run_glyph("✚", "+"), "#A8E6B0"),
-        "deleted": (run_glyph("−", "-"), "#FFB4AB"),
-        "renamed": (run_glyph("↪", ">"), "#D0BCFF"),
-    }.get(file.action, ("?", "#958EA0"))
-    name = Text(marker + "  ", style=color)
-    name.append(file.path, style="#E7E0ED")
-    stats = Text()
+def _file_change_row(file: DeclaredFileChange) -> Collapsible:
+    """Each native-declared path expands its captured session diff inline."""
+    action = {"modified": "Edit", "added": "Add", "deleted": "Delete",
+              "renamed": "Rename"}.get(file.action, "File")
+    title = Text(f"{action}  {file.path}", style="bold #E7E0ED")
     if file.additions is not None:
-        stats.append(f"+{file.additions}", style="#A8E6B0")
+        title.append(f"  +{file.additions}", style="#A8E6B0")
     if file.deletions is not None:
-        if stats:
-            stats.append("  ")
-        stats.append(f"-{file.deletions}", style="#FFB4AB")
-    return Horizontal(
-        Static(name, markup=False, classes="run-file-change-path"),
-        Static(stats, markup=False, classes="run-file-change-stats"),
+        title.append(f"  -{file.deletions}", style="#FFB4AB")
+    return Collapsible(
+        VerticalScroll(
+            Static(file_diff_renderable(file), markup=False, classes="run-file-diff-text"),
+            classes="run-file-diff-scroll",
+        ),
+        title=title, collapsed=True,
+        collapsed_symbol=run_glyph("▸", ">"),
+        expanded_symbol=run_glyph("▾", "v"),
         classes="run-file-change-row",
     )
 
 
 class RunFileChangeEntry(Collapsible):
-    """One declared native file-change event, grouped by its producer item.
+    """One native event, with an independent disclosure for each declared file.
 
-    Counts, if present, are the selected session's captured workspace totals.
-    They do not attest the event itself. 'Changes' opens the existing view.
+    Counts and inline diffs are from the selected execution's captured
+    workspace snapshot, never proof of an individual harness edit.
     """
 
     def __init__(self, entry: TranscriptEntry, *, source_label: str = "") -> None:
@@ -377,15 +375,9 @@ class RunFileChangeEntry(Collapsible):
         )
         self._rows = Vertical(*initial_rows, classes="run-file-change-rows")
         self._origin = Static("", markup=False, classes="run-file-change-origin")
-        self._link = Button(
-            "Changes " + run_glyph("↗", ">"),
-            classes="run-link run-file-changes-link",
-        )
-        footer = Horizontal(self._origin, self._link, classes="run-file-change-footer")
-        self._content = Vertical(self._rows, footer, classes="run-file-change-content")
+        self._content = Vertical(self._rows, self._origin, classes="run-file-change-content")
         super().__init__(
-            self._content,
-            title="", collapsed=True,
+            self._content, title="", collapsed=True,
             collapsed_symbol=run_glyph("▸", ">"),
             expanded_symbol=run_glyph("▾", "v"),
             classes="run-file-change-entry",
@@ -393,6 +385,12 @@ class RunFileChangeEntry(Collapsible):
         self.update_entry(entry)
 
     def update_entry(self, entry: TranscriptEntry) -> None:
+        # Keep per-file disclosures when a retained capture becomes available.
+        expanded = {}
+        if self._rows.is_mounted:
+            for file, child in zip(self.entry.file_changes, self._rows.query(".run-file-change-row")):
+                if isinstance(child, Collapsible):
+                    expanded[file.path] = not child.collapsed
         self.entry = entry
         files = entry.file_changes
         word = "file" if len(files) == 1 else "files"
@@ -403,16 +401,19 @@ class RunFileChangeEntry(Collapsible):
         if self.source_label:
             title.append("  " + self.source_label, style="#958EA0")
         self.title = title
-        had_counts = any(file.additions is not None or file.deletions is not None
-                         for file in files)
+        has_capture = any(file.diff or file.additions is not None
+                          or file.deletions is not None for file in files)
         origin = "Declared by agent"
-        if had_counts:
-            origin += " · +/- from captured session diff"
+        if has_capture:
+            origin += " · snapshot diff (entire session)"
         self._origin.update(Text(origin, style="#958EA0"))
         if self._rows.is_mounted:
             self._rows.remove_children()
             if files:
-                self._rows.mount(*(_file_change_row(file) for file in files))
+                children = tuple(_file_change_row(file) for file in files)
+                for child, file in zip(children, files):
+                    child.collapsed = not expanded.get(file.path, False)
+                self._rows.mount(*children)
             else:
                 self._rows.mount(Static(Text(
                     "File paths unavailable in this native event.", style="#958EA0"),

@@ -3,7 +3,7 @@ title: "Run TUI — amélioration visuelle composant par composant"
 type: ux-visual-refinement-plan
 date: 2026-10-20
 status: plan-approved
-implementation: components-1-and-2-validated-component-3-implemented-awaiting-review
+implementation: components-1-and-2-validated-component-3-inline-diff-implemented-awaiting-review
 parent_plan: 2026-10-20-001-run-live-context-ux-plan.md
 ---
 
@@ -84,4 +84,4 @@ Aucun changement d'orchestration, de workflow, de permission, de prise d'autorit
 
 ## 8. État du chantier
 
-**Plan validé.** Composant 1 (Tool Call) : variante **hybride validée** (ligne compacte à la Codex, détails structurés) ; supprimer de la surface Live « Recorded tool response », les raccourcis contextuels redondants et le Call ID visible. Implémentation locale effectuée, **validée visuellement par l’utilisateur** après ajustement variante A (suppression du cadre extérieur « Agent Output », conservation des rails discrets). Composant 2 (Agent Message) : maquette A validée, Markdown Rich non cliquable, blocs de code colorés, listes et citations sobres, streaming partiel testé ; implémentation locale et tests effectués, **validée visuellement par l’utilisateur** après amélioration du contraste du code inline et des citations. Composant 3 (File Changed) : affichage groupé inspiré Codex/OpenCode validé, sans M/A/D, chemins natifs déclarés, compteurs uniquement depuis captures de session complètes, lien Changes ; implémenté et testé, **en attente de validation visuelle utilisateur**. Aucun autre composant n’est approuvé pour implémentation.
+**Plan validé.** Composant 1 (Tool Call) : variante **hybride validée** (ligne compacte à la Codex, détails structurés) ; supprimer de la surface Live « Recorded tool response », les raccourcis contextuels redondants et le Call ID visible. Implémentation locale effectuée, **validée visuellement par l’utilisateur** après ajustement variante A (suppression du cadre extérieur « Agent Output », conservation des rails discrets). Composant 2 (Agent Message) : maquette A validée, Markdown Rich non cliquable, blocs de code colorés, listes et citations sobres, streaming partiel testé ; implémentation locale et tests effectués, **validée visuellement par l’utilisateur** après amélioration du contraste du code inline et des citations. Composant 3 (File Changed) : affichage groupé inspiré Codex/OpenCode validé, sans M/A/D, chemins natifs déclarés, compteurs uniquement depuis captures de session complètes, diff inline repliable par fichier avec numérotation sur une seule colonne, coloration syntaxique, trois lignes de contexte et sans bouton Changes ; implémenté et testé, **en attente de validation visuelle utilisateur**. Aucun autre composant n’est approuvé pour implémentation.

@@ -674,7 +674,8 @@ class LoopForgeApp(App[None]):
         if self._screen == "run":
             if isinstance(self.focused, CollapsibleTitle):
                 parent = self.focused.parent
-                if isinstance(parent, RunFileChangeEntry):
+                if isinstance(parent, RunFileChangeEntry) or (
+                        isinstance(parent, Collapsible) and parent.has_class("run-file-change-row")):
                     parent.collapsed = not parent.collapsed
                     return
             action = self._snapshot.run.shell.run.next_action if self._snapshot.run.shell and self._snapshot.run.shell.run else None
@@ -1746,7 +1747,7 @@ class LoopForgeApp(App[None]):
             entries = project_events(
                 agent.structured_events, mode=reading.mode,
                 session_closed=agent.session_closed,
-                verified_changes=(snapshot.run.changes if not reading.cumulative else None),
+                verified_changes=snapshot.run.changes,
             )
             body = Text("\n".join(e.title + "\n" + e.body for e in entries))
         activity.update_content(
@@ -1849,9 +1850,7 @@ class LoopForgeApp(App[None]):
         name = event.button.id or ""
         if self._screen != "run":
             return
-        if event.button.has_class("run-file-changes-link"):
-            self._change_run_reading(view="Changes", cumulative=False)
-        elif name.startswith("run-view-"):
+        if name.startswith("run-view-"):
             self._change_run_reading(view=name.removeprefix("run-view-").title())
         elif name.startswith("run-mode-"):
             self._change_run_reading(mode=name.removeprefix("run-mode-").title())

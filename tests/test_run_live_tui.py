@@ -77,7 +77,7 @@ class CockpitPilotTests(unittest.IsolatedAsyncioTestCase):
                     )
                     self.assertTrue(app.query_one("#run-activity-feed").display)
 
-    async def test_file_change_group_expands_and_opens_changes(self):
+    async def test_file_change_inline_diffs_keyboard_and_context(self):
         from tools.demo_file_changed import FileChangedDemo
         from loopforge.cli.textual_app.widgets import RunFileChangeEntry
         for width in (60, 80, 120, 160):
@@ -91,30 +91,24 @@ class CockpitPilotTests(unittest.IsolatedAsyncioTestCase):
                     await pilot.press("enter")
                     await pilot.pause()
                     self.assertFalse(entry.collapsed)
-                    self.assertEqual(len(entry.query(".run-file-change-row")), 3)
-                    self.assertEqual(
-                        [s.render().plain for s in entry.query(".run-file-change-stats")],
-                        ["+24  -8", "+86  -0", "+0  -42"],
-                    )
-                    await pilot.click(".run-file-changes-link")
+                    rows = list(entry.query(".run-file-change-row"))
+                    self.assertEqual(len(rows), 3)
+                    self.assertTrue(all(row.collapsed for row in rows))
+                    self.assertIn("+1", rows[0].title.plain)
+                    self.assertFalse(app.query(".run-file-changes-link"))
+                    rows[0].query_one("CollapsibleTitle").focus()
+                    await pilot.press("enter")
                     await pilot.pause()
-                    self.assertEqual(app._snapshot.run.reading.view, "Changes")
-                    self.assertIsNotNone(app._snapshot.run.shell)
-                    documents = app.query_one("#run-document-view")
-                    self.assertTrue(documents.display)
-                    self.assertFalse(app.query_one("#run-activity-feed").display)
-                    self.assertEqual(set(documents._items), {
-                        "summary", "change-0", "change-1", "change-2",
-                    })
-                    # The in-memory fixture must survive a round trip.
-                    if width >= 120:
-                        await pilot.click("#run-view-live")
-                    else:
-                        # Narrow layouts place view navigation in the F6 overlay.
-                        app._change_run_reading(view="Live")
-                    await pilot.pause()
+                    self.assertFalse(rows[0].collapsed)
+                    self.assertTrue(rows[1].collapsed)
+                    diff = rows[0].query_one(".run-file-diff-text").render()
+                    self.assertIn("   4 -", diff.plain)
+                    self.assertIn("   4 +", diff.plain)
+                    self.assertIn("   1  ", diff.plain)
+                    self.assertIn("   7  ", diff.plain)
+                    self.assertNotIn("@@ -", diff.plain)
+                    self.assertGreater(len(diff.spans), 20)
                     self.assertEqual(app._snapshot.run.reading.view, "Live")
-                    self.assertEqual(len(app.query(RunFileChangeEntry)), 1)
                     self.assertNotIn("Loading agent output", app._snapshot.run.agent.agent_output)
 
     async def test_compact_supervision_overlay_and_escape(self):
