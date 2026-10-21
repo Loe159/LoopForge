@@ -16,7 +16,7 @@ from rich.syntax import Syntax, PygmentsSyntaxTheme
 from pygments.style import Style as PygmentsStyle
 from pygments.lexers import get_lexer_for_filename
 from pygments.util import ClassNotFound
-from pygments.token import Comment, Keyword, Name, Number, Operator, Punctuation, String
+from pygments.token import Comment, Generic, Keyword, Name, Number, Operator, Punctuation, String, Text as PygmentsText
 from rich.text import Text
 
 from loopforge.adapters.local_implementation_adapter import observable_stream_text
@@ -238,6 +238,14 @@ class LoopForgeSyntaxStyle(PygmentsStyle):
     background_color = "#1D1A23"
     default_style = "#E7E0ED"
     styles = {
+        # Unstyled Pygments tokens otherwise become black on dark surfaces,
+        # notably Markdown Text/Generic content in removed diff lines.
+        PygmentsText: "#E7E0ED",
+        Generic: "#E7E0ED",
+        Generic.Heading: "bold #D0BCFF",
+        Generic.Subheading: "bold #D0BCFF",
+        Generic.Strong: "bold #E7E0ED",
+        Generic.Emph: "italic #E7E0ED",
         Comment: "#958EA0",
         Keyword: "#D0BCFF",
         Name: "#E7E0ED",

@@ -91,6 +91,26 @@ class ProjectionTests(unittest.TestCase):
         stale, = project_events((event,), verified_changes=replace(verified, stale=True))
         self.assertFalse(stale.file_changes[0].diff)
 
+    def test_deleted_markdown_diff_text_is_readable_on_dark_red(self):
+        from rich.console import Console
+        from loopforge.cli.textual_app.run_presenter import DeclaredFileChange, file_diff_renderable
+
+        file = DeclaredFileChange(
+            "docs/old_notes.md", "deleted", 0, 3,
+            "--- a/docs/old_notes.md\n+++ b/docs/old_notes.md\n"
+            "@@ -1,3 +0,0 @@\n-# Old notes\n-Unused entry\n-Deprecated flag\n",
+        )
+        console = Console(width=100, color_system="truecolor")
+        diff = file_diff_renderable(file)
+        lines = [line for line in diff.split("\n") if line.plain.strip()]
+        self.assertEqual(len(lines), 3)
+        for line in lines:
+            self.assertIn(" - ", line.plain)
+            offset = next(i for i, ch in enumerate(line.plain) if ch.isalpha())
+            style = line.get_style_at_offset(console, offset)
+            self.assertEqual(style.color.triplet, (231, 224, 237))
+            self.assertEqual(style.bgcolor.triplet, (57, 36, 40))
+
     def test_file_change_counts_require_complete_session_snapshot(self):
         from loopforge.cli.run_changes import RunChangesSnapshot, RunFileChange
         event = {"kind": "file_change", "native_id": "change-1", "order": 0,
