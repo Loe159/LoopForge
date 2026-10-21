@@ -62,6 +62,7 @@ from loopforge.cli.textual_app.widgets import (
     RunToolEntry,
     RunFileChangeEntry,
     RunDocumentView,
+    RunChangesExplorer,
     RunDetailEntry,
     ScreenList,
 )
@@ -1668,9 +1669,23 @@ class LoopForgeApp(App[None]):
                 (name == "cumulative") == reading.cumulative, "selected")
         feed = self.query_one("#run-activity-feed", RunActivityFeed)
         documents = self.query_one("#run-document-view", RunDocumentView)
+        explorer = self.query_one("#run-changes-explorer", RunChangesExplorer)
         feed.display = view == "Live"
-        documents.display = view != "Live"
+        documents.display = view in {"Context", "Evidences"}
+        explorer.display = view == "Changes"
         if view == "Live":
+            return
+        if view == "Changes":
+            selected_session = reading.session_id or agent.session_id
+            explorer.update_changes(
+                (snapshot.selected_run_id, stage, selected_session, reading.cumulative),
+                snapshot.run.changes, cumulative=reading.cumulative,
+                session_label=next(
+                    (str(session.get("label") or "") for session in sessions
+                     if session.get("session_id") == selected_session),
+                    "",
+                ),
+            )
             return
         sections: list[tuple[str, str, str, bool]] = []
         if view == "Context":
@@ -1687,30 +1702,6 @@ class LoopForgeApp(App[None]):
                     sections.insert(0, ("context-note", "Capture information", context.message, True))
             if not sections:
                 sections.append(("empty", "Context", "No captured context for this execution.", True))
-        elif view == "Changes":
-            change = snapshot.run.changes
-            if change is not None:
-                lines = [change.message, "Source: " + change.source, "Capture: " + change.capture_state]
-                if change.base_commit:
-                    lines.append("Git base: " + str(change.base_commit))
-                if change.before_head:
-                    lines.append("Before HEAD: " + str(change.before_head))
-                if change.after_head:
-                    lines.append("After HEAD: " + str(change.after_head))
-                sections.append(("summary", change.scope.title() + " · " + str(len(change.files)) + " files",
-                                 "\n".join(lines), True))
-                for index, changed in enumerate(change.files):
-                    count = (f" +{changed.additions}/-{changed.deletions}" if
-                             changed.additions is not None and changed.deletions is not None else "")
-                    marker = " · binary" if changed.binary else ""
-                    title = changed.status.upper() + " · " + changed.path + count + marker
-                    body = changed.diff or ("Binary change; no text diff." if changed.binary else
-                                            "No retained text diff for this path.")
-                    if changed.truncated:
-                        body += "\n[Diff preview bounded; full output not retained here.]"
-                    sections.append((f"change-{index}", title, body, False))
-            if not sections:
-                sections.append(("no-changes", "Changes", "No reliable snapshot for this selection.", True))
         else:
             evidence = snapshot.run.evidences
             if evidence is not None:

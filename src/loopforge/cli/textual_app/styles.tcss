@@ -964,6 +964,97 @@ Header, Footer {
     scrollbar-color: #494454;
     background: #15121B;
 }
+/* Changes variant B: explorer + syntax-highlighted preview, vertical when narrow. */
+#run-changes-explorer {
+    display: none;
+    width: 1fr;
+    height: 1fr;
+    min-height: 0;
+    padding: 0 2;
+    background: #15121B;
+}
+#run-changes-summary {
+    width: 1fr;
+    height: auto;
+    max-height: 6;
+    margin: 0 0 1 0;
+    color: #CBC3D7;
+}
+#run-changes-body {
+    width: 1fr;
+    height: 1fr;
+    min-height: 0;
+}
+#run-changes-files {
+    width: 32%;
+    min-width: 26;
+    max-width: 42;
+    height: 1fr;
+    min-height: 0;
+    border-right: solid #494454;
+}
+#run-changes-file-list {
+    width: 1fr;
+    height: 1fr;
+    min-height: 0;
+    background: #15121B;
+}
+#run-changes-file-list > .option-list--option {
+    padding: 0 1;
+}
+#run-changes-file-list > .option-list--option-highlighted {
+    color: #D0BCFF;
+    background: #2C2832;
+}
+#run-changes-preview {
+    width: 1fr;
+    height: 1fr;
+    min-width: 0;
+    min-height: 0;
+    padding-left: 1;
+}
+#run-changes-file-heading {
+    height: auto;
+    max-height: 3;
+    padding: 0 1 1 1;
+    text-overflow: ellipsis;
+}
+#run-changes-diff-scroll {
+    width: 1fr;
+    height: 1fr;
+    min-height: 0;
+    background: #1D1A23;
+    overflow-x: auto;
+    overflow-y: auto;
+    scrollbar-size: 1 1;
+    scrollbar-color: #494454;
+}
+#run-changes-diff-text {
+    width: auto;
+    height: auto;
+    background: #1D1A23;
+}
+.width-60 #run-changes-explorer, .width-80 #run-changes-explorer {
+    padding: 0 1;
+}
+.width-60 #run-changes-body, .width-80 #run-changes-body {
+    layout: vertical;
+}
+.width-60 #run-changes-files, .width-80 #run-changes-files {
+    width: 1fr;
+    height: 8;
+    min-height: 4;
+    border-right: none;
+    border-bottom: solid #494454;
+}
+.width-60 #run-changes-preview, .width-80 #run-changes-preview {
+    width: 1fr;
+    height: 1fr;
+    min-height: 0;
+    padding-left: 0;
+    padding-top: 1;
+}
+
 .run-document-entry {
     height: auto;
     padding: 0;

@@ -111,6 +111,132 @@ class CockpitPilotTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(app._snapshot.run.reading.view, "Live")
                     self.assertNotIn("Loading agent output", app._snapshot.run.agent.agent_output)
 
+    async def test_changes_explorer_selects_files_and_preserves_evidence_scope(self):
+        from loopforge.cli.textual_app import LoopForgeApp
+        from loopforge.cli.textual_app.widgets import RunChangesExplorer
+        from loopforge.cli.run_changes import RunChangesSnapshot, RunFileChange
+        from loopforge.cli.run_reading import RunReading
+        for width in (60, 80, 120, 160):
+            with self.subTest(width=width):
+                app = LoopForgeApp(
+                    SimpleNamespace(project_dir=Path.cwd(), theme="dark"),
+                    load_on_mount=False)
+                async with app.run_test(size=(width, 35)) as pilot:
+                    source = synthetic_run(app)
+                    changes = RunChangesSnapshot(
+                        capture_state="complete", message="Observed execution",
+                        source="runner-workspace-snapshots",
+                        files=(
+                            RunFileChange("src/a.py", "modified", additions=1, deletions=1,
+                                diff="--- a/src/a.py\n+++ b/src/a.py\n@@ -1,3 +1,3 @@\n"
+                                     " def main():\n-    return False\n+    return True\n pass\n"),
+                            RunFileChange("docs/old_notes.md", "deleted",
+                                additions=0, deletions=2,
+                                diff="--- a/docs/old_notes.md\n+++ /dev/null\n"
+                                     "@@ -1,2 +0,0 @@\n-# Old notes\n-Deprecated flag\n"),
+                            RunFileChange("logo.bin", "added", binary=True),
+                        ),
+                    )
+                    app._screen = "run"
+                    fake = replace(source, run=replace(
+                        source.run, reading=RunReading(view="Changes"),
+                        changes=changes))
+                    app._render_snapshot(fake)
+                    await pilot.pause()
+                    explorer = app.query_one(RunChangesExplorer)
+                    picker = explorer.query_one("#run-changes-file-list")
+                    self.assertTrue(explorer.display)
+                    self.assertFalse(app.query_one("#run-document-view").display)
+                    self.assertEqual(len(picker.options), 3)
+                    self.assertEqual(explorer._selected_path, "src/a.py")
+                    self.assertIn("return True", explorer.query_one(
+                        "#run-changes-diff-text").render().plain)
+                    self.assertGreater(explorer.query_one(
+                        "#run-changes-preview").size.height, 0)
+                    picker.focus()
+                    await pilot.press("down")
+                    await pilot.pause()
+                    self.assertEqual(explorer._selected_path, "docs/old_notes.md")
+                    self.assertIn("Old notes", explorer.query_one(
+                        "#run-changes-diff-text").render().plain)
+                    # Updating the same retained capture must not reset selection.
+                    app._render_snapshot(fake)
+                    await pilot.pause()
+                    self.assertEqual(explorer._selected_path, "docs/old_notes.md")
+                    await pilot.press("down")
+                    await pilot.pause()
+                    self.assertEqual(explorer._selected_path, "logo.bin")
+                    self.assertIn("Binary change", explorer.query_one(
+                        "#run-changes-diff-text").render().plain)
+                    cumulative = replace(changes, scope="run cumulative",
+                        source="deterministic-verification-patch", stale=True,
+                        message="Earlier verification candidate.",
+                        files=(RunFileChange("src/a.py", "modified", additions=2,
+                            deletions=0, diff="--- a/src/a.py\n+++ b/src/a.py\n"
+                                                "@@ -1,0 +1,2 @@\n+hello\n+world\n"),))
+                    # Switch scope: selection and provenance must follow the patch,
+                    # never reuse a file from the previous attempt.
+                    app._render_snapshot(replace(fake, run=replace(
+                        fake.run, reading=RunReading(view="Changes", cumulative=True),
+                        changes=cumulative)))
+                    await pilot.pause()
+                    self.assertEqual(explorer._selected_path, "src/a.py")
+                    summary = explorer.query_one("#run-changes-summary").render().plain
+                    self.assertIn("Run cumulative", summary)
+                    self.assertIn("STALE", summary)
+                    self.assertIn("Retained verification patch", summary)
+                    self.assertEqual(len(picker.options), 1)
+                    renamed = replace(changes, files=(
+                        RunFileChange("src/new_name.py", "renamed",
+                            previous_path="src/old_name.py", additions=1, deletions=1,
+                            truncated=True, diff="--- a/src/old_name.py\n"
+                            "+++ b/src/new_name.py\n@@ -1 +1 @@\n-old\n+new\n"),))
+                    app._render_snapshot(replace(fake, run=replace(
+                        fake.run, changes=renamed)))
+                    await pilot.pause()
+                    selected_title = explorer.query_one("#run-changes-file-heading").render().plain
+                    self.assertIn("Rename", selected_title)
+                    self.assertIn("From: src/old_name.py", selected_title)
+                    self.assertIn("truncated", selected_title)
+                    self.assertIn("truncated", explorer.query_one(
+                        "#run-changes-diff-text").render().plain)
+
+                    empty = replace(changes, capture_state="unavailable", files=(),
+                        message="Capture unavailable")
+                    app._render_snapshot(replace(fake, run=replace(
+                        fake.run, changes=empty)))
+                    await pilot.pause()
+                    self.assertFalse(picker.options)
+                    self.assertIn("Capture unavailable", explorer.query_one(
+                        "#run-changes-diff-text").render().plain)
+
+    async def test_changes_explorer_demo_switches_attempt_and_cumulative(self):
+        from tools.demo_changes_explorer import ChangesExplorerDemo
+        from loopforge.cli.textual_app.widgets import RunChangesExplorer
+        app = ChangesExplorerDemo()
+        async with app.run_test(size=(120, 35)) as pilot:
+            await pilot.pause(0.4)
+            explorer = app.query_one(RunChangesExplorer)
+            self.assertTrue(explorer.display)
+            self.assertEqual(app._snapshot.run.reading.view, "Changes")
+            self.assertFalse(app._snapshot.run.reading.cumulative)
+            self.assertIn("Attempt", explorer.query_one(
+                "#run-changes-summary").render().plain)
+            await pilot.click("#run-diff-cumulative")
+            await pilot.pause()
+            self.assertTrue(app._snapshot.run.reading.cumulative)
+            self.assertEqual(app._snapshot.run.changes.source,
+                             "deterministic-verification-patch")
+            self.assertIn("Run cumulative", explorer.query_one(
+                "#run-changes-summary").render().plain)
+            await pilot.click("#run-diff-attempt")
+            await pilot.pause()
+            self.assertFalse(app._snapshot.run.reading.cumulative)
+            self.assertEqual(app._snapshot.run.changes.source,
+                             "runner-workspace-snapshots")
+            self.assertIn("Attempt", explorer.query_one(
+                "#run-changes-summary").render().plain)
+
     async def test_compact_supervision_overlay_and_escape(self):
         from loopforge.cli.textual_app import LoopForgeApp
         from loopforge.cli.textual_app.screens import RunSupervisionScreen
@@ -135,7 +261,7 @@ class CockpitPilotTests(unittest.IsolatedAsyncioTestCase):
         from loopforge.cli.run_context import RunContextSection, RunContextSnapshot
         from loopforge.cli.run_changes import RunChangesSnapshot, RunFileChange
         from loopforge.cli.run_evidences import RunEvidencesSnapshot, RunEvidenceSection
-        from loopforge.cli.textual_app.widgets import RunDocumentView
+        from loopforge.cli.textual_app.widgets import RunDocumentView, RunChangesExplorer
         app = LoopForgeApp(SimpleNamespace(project_dir=Path.cwd(), theme="dark"),
                            load_on_mount=False)
         async with app.run_test(size=(120, 28)) as pilot:
@@ -159,15 +285,18 @@ class CockpitPilotTests(unittest.IsolatedAsyncioTestCase):
                 app._render_snapshot(fake)
                 await pilot.pause()
                 view = app.query_one("#run-document-view", RunDocumentView)
-                self.assertTrue(view.display)
+                explorer = app.query_one(RunChangesExplorer)
+                self.assertEqual(view.display, name != "Changes")
+                self.assertEqual(explorer.display, name == "Changes")
                 self.assertFalse(app.query_one("#run-activity-feed").display)
-                self.assertGreaterEqual(len(view._items), 1, name)
                 if name == "Context":
                     self.assertIn("mission", view._items)
                     self.assertIn("raw", view._items)
                 elif name == "Changes":
-                    self.assertIn("change-0", view._items)
-                    self.assertNotIn("mission", view._items)
+                    self.assertEqual(explorer._selected_path, "src/a.py")
+                    self.assertIn("1 - a", explorer.query_one(
+                        "#run-changes-diff-text").render().plain)
+                    self.assertFalse(view.display)
                 else:
                     self.assertIn("checks", view._items)
                     self.assertNotIn("change-0", view._items)

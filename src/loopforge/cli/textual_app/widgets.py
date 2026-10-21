@@ -676,6 +676,144 @@ class RunDocumentView(VerticalScroll):
                 item.detail.update(Text(body))
 
 
+class RunChangesExplorer(Vertical):
+    """Read-only explorer of the selected run's retained changes.
+
+    Never reads workspace files: the code preview is the captured, bounded diff.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._selection_scope: object = None
+        self._signature: object = None
+        self._files: tuple[Any, ...] = ()
+        self._selected_path = ""
+        self._preview_signature: object = None
+
+    def compose(self) -> ComposeResult:
+        yield Static("", id="run-changes-summary", markup=False)
+        with Horizontal(id="run-changes-body"):
+            with Vertical(id="run-changes-files"):
+                yield OptionList(id="run-changes-file-list")
+            with Vertical(id="run-changes-preview"):
+                yield Static("", id="run-changes-file-heading", markup=False)
+                with VerticalScroll(id="run-changes-diff-scroll"):
+                    yield Static("", id="run-changes-diff-text", markup=False)
+
+    @staticmethod
+    def _action(status: str) -> str:
+        return {"modified": "Edit", "added": "Add", "deleted": "Delete",
+                "renamed": "Rename"}.get(status, "Change")
+
+    @staticmethod
+    def _counts(file: Any) -> Text:
+        value = Text()
+        if file.additions is not None:
+            value.append(f"+{file.additions}", style="#A8E6B0")
+        if file.deletions is not None:
+            if value:
+                value.append("  ")
+            value.append(f"-{file.deletions}", style="#FFB4AB")
+        return value
+
+    def update_changes(self, scope: object, evidence: Any, *,
+                       cumulative: bool = False, session_label: str = "") -> None:
+        if evidence is None:
+            from loopforge.cli.run_changes import RunChangesSnapshot
+            evidence = RunChangesSnapshot()
+        files = tuple(evidence.files)
+        signature = (scope, evidence.scope, evidence.source, evidence.capture_state,
+                     evidence.message, evidence.stale, evidence.base_commit, files)
+        if signature == self._signature:
+            return
+
+        old_path = self._selected_path if scope == self._selection_scope else ""
+        self._selection_scope = scope
+        self._signature = signature
+        self._files = files
+        paths = [file.path for file in files]
+        selected_index = paths.index(old_path) if old_path in paths else 0
+
+        heading = Text("Run cumulative" if cumulative else "Attempt", style="bold #D0BCFF")
+        if session_label and not cumulative:
+            heading.append(f" · {session_label}", style="#CBC3D7")
+        heading.append(f" · {len(files)} files", style="#E7E0ED")
+        if files and all(file.additions is not None and file.deletions is not None
+                         for file in files):
+            heading.append(f"  +{sum(f.additions for f in files)}", style="#A8E6B0")
+            heading.append(f"  -{sum(f.deletions for f in files)}", style="#FFB4AB")
+        heading.append("\n" + ("Retained verification patch" if cumulative
+                                else "Workspace snapshots"), style="#958EA0")
+        heading.append(" · " + evidence.capture_state, style="#958EA0")
+        if evidence.stale:
+            heading.append(" · STALE (earlier candidate)", style="#FFB869")
+        if evidence.message:
+            heading.append("\n" + evidence.message[:280], style="#958EA0")
+        if evidence.base_commit:
+            heading.append("\nGit base: " + str(evidence.base_commit)[:40], style="#958EA0")
+        self.query_one("#run-changes-summary", Static).update(heading)
+
+        picker = self.query_one("#run-changes-file-list", OptionList)
+        picker.clear_options()
+        for index, file in enumerate(files):
+            label = Text(file.path.rsplit("/", 1)[-1], style="#E7E0ED",
+                         no_wrap=True, overflow="ellipsis")
+            label.append("\n" + self._action(file.status) + "  ", style="#958EA0")
+            label.append_text(self._counts(file))
+            picker.add_option(Option(label, id=f"change-file-{index}"))
+        if files:
+            picker.highlighted = selected_index
+            self._select_file(selected_index)
+        else:
+            self._selected_path = ""
+            self._preview_signature = None
+            self.query_one("#run-changes-file-heading", Static).update(
+                Text("No retained file changes", style="#CBC3D7"))
+            self.query_one("#run-changes-diff-text", Static).update(
+                Text(evidence.message or "No reliable snapshot for this selection.",
+                     style="#958EA0"))
+
+    def _select_file(self, index: int) -> None:
+        if not isinstance(index, int) or not 0 <= index < len(self._files):
+            return
+        file = self._files[index]
+        old_path = self._selected_path
+        self._selected_path = file.path
+        title = Text(f"{self._action(file.status)} · {file.path}", style="bold #E7E0ED")
+        count = self._counts(file)
+        if count:
+            title.append("  ")
+            title.append_text(count)
+        if file.previous_path:
+            title.append("\nFrom: " + file.previous_path, style="#958EA0")
+        if file.binary:
+            title.append(" · binary", style="#FFB869")
+        if file.truncated:
+            title.append(" · truncated", style="#FFB869")
+        self.query_one("#run-changes-file-heading", Static).update(title)
+        from loopforge.cli.textual_app.run_presenter import DeclaredFileChange
+        signature = (file.path, file.diff, file.binary, file.truncated)
+        if signature != self._preview_signature:
+            self.query_one("#run-changes-diff-text", Static).update(
+                file_diff_renderable(DeclaredFileChange(
+                    file.path, file.status, file.additions, file.deletions,
+                    file.diff, file.truncated, file.binary)))
+            self._preview_signature = signature
+        if file.path != old_path:
+            self.query_one("#run-changes-diff-scroll", VerticalScroll).scroll_home(
+                animate=False)
+
+    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        if event.option_list.id == "run-changes-file-list":
+            self._select_file(event.option_index)
+            event.stop()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if event.option_list.id == "run-changes-file-list":
+            self._select_file(event.option_index)
+            event.stop()
+
+
 class RunCommandBar(Container):
     """Command entry shown when the run is not waiting on a human gate."""
 
@@ -836,6 +974,7 @@ class RunDashboard(Vertical):
                     yield Button("Run cumulative", id="run-diff-cumulative", classes="run-link")
                 yield RunActivityFeed()
                 yield RunDocumentView(id="run-document-view")
+                yield RunChangesExplorer(id="run-changes-explorer")
                 yield RunRequiredAction()
                 yield RunCommandBar()
             yield RunContextSidebar(id="run-context")
