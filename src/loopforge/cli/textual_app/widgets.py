@@ -1245,23 +1245,36 @@ class RunWorkflowList(OptionList):
         self.expanded = True
         self.toggle_plan: Callable[[], None] | None = None
 
+    def _cursor_on_plan(self) -> bool:
+        position = self.highlighted
+        return (self.plan_stage and position is not None
+                and position < len(self.options)
+                and self.options[position].id == self.plan_stage)
+
     def action_cursor_right(self) -> None:
-        if self.plan_stage and not self.expanded and self.toggle_plan:
+        if self._cursor_on_plan() and not self.expanded and self.toggle_plan:
             self.toggle_plan()
 
     def action_cursor_left(self) -> None:
-        if self.plan_stage and self.expanded and self.toggle_plan:
+        if self._cursor_on_plan() and self.expanded and self.toggle_plan:
             self.toggle_plan()
 
     async def _on_click(self, event: Any) -> None:
-        index = event.style.meta.get("option")
-        if index is not None and 0 <= index < len(self.options):
-            option = self.options[index]
-            if option.id == self.plan_stage and self.highlighted == index and self.toggle_plan:
-                self.toggle_plan()
-                event.stop()
-                return
-        await super()._on_click(event)
+        if event.style.meta.get("workflow_todo"):
+            # Textual walks base-class handlers after the subclass handler;
+            # stop() alone does not suppress OptionList._on_click.
+            event.prevent_default()
+            event.stop()  # An agent TODO is never a selectable engine stage.
+            return
+        if (event.style.meta.get("plan_toggle")
+                and event.style.meta.get("option") is not None
+                and self.toggle_plan):
+            self.toggle_plan()
+            event.prevent_default()
+            event.stop()
+            return
+        # The inherited OptionList handler still runs through Textual's MRO.
+        # Never call it explicitly here: that would select the stage twice.
 
 
 class RunContextSidebar(Vertical):
@@ -1314,7 +1327,9 @@ class RunContextSidebar(Vertical):
         problem_button.label = Text(f"{len(problems)} problems · Inspect" if problems else "")
         problem_button.tooltip = "\n".join(problems)
         workflow = self.query_one("#run-context-steps", RunWorkflowList)
-        valid_stage = plan_stage if agent_plan.items and any(stage.id == plan_stage for stage in steps) else ""
+        valid_stage = (plan_stage if agent_plan.items
+                       and (not selected_stage or selected_stage == plan_stage)
+                       and any(stage.id == plan_stage for stage in steps) else "")
         workflow.plan_stage = valid_stage
         workflow.expanded = getattr(self, "_plan_expanded", True)
         workflow.toggle_plan = self._toggle_plan
@@ -1328,11 +1343,17 @@ class RunContextSidebar(Vertical):
             for stage in steps:
                 marker = terminal_marker(stage.marker)
                 selected = "> " if stage.id == selected_stage else "  "
-                active = " (active)" if stage.id == current_stage else ""
-                line = Text(f"{selected}{marker} {stage.title}{active}", style=family_color(stage.family))
+                # The marker already encodes engine activity; avoid wrapping a
+                # redundant '(active)' in the narrow workflow column.
+                line = Text(f"{selected}{marker} {stage.title}", style=family_color(stage.family))
                 if stage.id == valid_stage:
-                    line.append(f"  {agent_plan.completed}/{agent_plan.count} ", style="#958EA0")
-                    line.append(run_glyph("▾", "v") if workflow.expanded else run_glyph("▸", ">"), style="#D0BCFF")
+                    if all(item.status != "unknown" for item in agent_plan.items):
+                        line.append(f"  {agent_plan.completed}/{agent_plan.count} ", style="#958EA0")
+                    else:
+                        line.append("  ")
+                    from rich.style import Style
+                    line.append(run_glyph("▾", "v") if workflow.expanded else run_glyph("▸", ">"),
+                                style=Style(color="#D0BCFF", meta={"plan_toggle": True}))
                     if workflow.expanded:
                         for task in agent_plan.items:
                             symbol, shade = {
@@ -1342,13 +1363,15 @@ class RunContextSidebar(Vertical):
                                 "failed": (run_glyph("×", "x"), "#FFB4AB"),
                                 "unknown": ("?", "#958EA0"),
                             }[task.status]
-                            line.append("\n      ")
-                            line.append(symbol, style=shade)
-                            line.append(" " + task.text, style="#CBC3D7")
+                            from rich.style import Style
+                            line.append("\n  " + symbol + " " + task.text,
+                                        style=Style(color=shade if task.status != "completed" else "#CBC3D7",
+                                                    meta={"workflow_todo": True}))
                 workflow.add_option(Option(line, id=stage.id))
-            if chosen is not None:
+            cursor_id = chosen or selected_stage or current_stage
+            if cursor_id:
                 try:
-                    workflow.highlighted = workflow.get_option_index(chosen)
+                    workflow.highlighted = workflow.get_option_index(cursor_id)
                 except Exception:
                     pass
         values = [("Status", status)]

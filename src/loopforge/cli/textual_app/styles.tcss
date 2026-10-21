@@ -939,7 +939,7 @@ Header, Footer {
 }
 
 .width-120 #run-context {
-    width: 36;
+    width: 40;
 }
 
 .width-160 #run-context {
@@ -991,8 +991,9 @@ Header, Footer {
     color: #0A0A0A;
 }
 #run-view-tabs {
-    height: 5;
-    min-height: 5;
+    /* Top border + top padding + four 1-row entries. */
+    height: 6;
+    min-height: 6;
     padding-top: 1;
     border-top: solid #494454;
 }
@@ -1273,6 +1274,11 @@ Header, Footer {
     height: auto;
     max-height: 12;
     background: #15121B;
+    border: none;
+    padding: 0;
+}
+#run-context-steps > .option-list--option {
+    padding: 0;
 }
 #run-context-steps > .option-list--option-highlighted {
     background: #2C2832;

@@ -1758,11 +1758,11 @@ class LoopForgeApp(App[None]):
                                       raw or "No raw source captured for this execution."),)
             body = Text(title + "\n" + (raw or "No raw source captured."))
         elif agent.structured_events:
-            entries = project_events(
+            entries = tuple(entry for entry in project_events(
                 agent.structured_events, mode=reading.mode,
                 session_closed=agent.session_closed,
                 verified_changes=snapshot.run.changes,
-            )
+            ) if entry.kind != "plan")
             body = Text("\n".join(e.title + "\n" + e.body for e in entries))
         activity.update_content(
             heading=_run_attempt_heading(snapshot), system_prompt="",

@@ -56,6 +56,7 @@ class RunSupervisionScreen(ModalScreen[tuple[str, str] | None]):
         shell = snapshot.run.shell
         if shell is None or shell.run is None:
             return
+        from loopforge.cli.agent_plan import project_agent_plan
         self.query_one(RunContextSidebar).update_content(
             status=shell.run.status, status_color="#E7E0ED", progress="", uptime="", tokens="",
             steps=shell.stages, current_stage=shell.run.current_stage,
@@ -63,6 +64,9 @@ class RunSupervisionScreen(ModalScreen[tuple[str, str] | None]):
             project=shell.project.name, branch=snapshot.project.branch,
             pack=shell.project.pack or "", adapter=snapshot.run.agent.adapter,
             view=snapshot.run.reading.view, metrics=snapshot.run.metrics,
+            agent_plan=project_agent_plan(snapshot.run.agent.structured_events),
+            plan_stage=snapshot.run.agent.stage_id,
+            plan_scope=f"{snapshot.selected_run_id}:{snapshot.run.agent.stage_id}:{snapshot.run.agent.session_id}",
         )
 
     def action_close(self) -> None:
