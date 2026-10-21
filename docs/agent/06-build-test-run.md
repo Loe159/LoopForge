@@ -21,6 +21,34 @@ Run commands from the repository root.
   except for platform-specific guards (e.g., Textual availability).
 - Every commit must pass the full suite. Flaky tests must be fixed, not skipped.
 
+## TUI redesign validation and review gates
+
+For any new/changed Textual component, follow
+[the component iteration playbook](09-tui-component-iteration.md). Validate
+the implementation **after** the user approves its mockup and **before**
+requesting final visual acceptance:
+
+- Exercise the real Textual app with `app.run_test(size=(columns, rows))`,
+  keyboard `pilot.press(...)`, clicks, and terminal resize. Include representative
+  widths such as 48, 52, 60, 80, 100, 120, 160 columns and short heights such as
+  24 rows **when relevant to the component**; assert usable regions, rather
+  than relying on static CSS guesses.
+- Check focus ownership, arrow keys, Enter/Escape, mouse parity, scrolling,
+  clipping/truncation, ASCII fallback, semantic contrast, loading/empty/error
+  states, dynamic updates, state persistence and re-entry into the screen.
+- Keep a small reproducible preview under `tools/demo_<component>.py` when
+  valuable. Use synthetic in-memory fixtures; never mutate a user's workspace,
+  and never label synthetic evidence as a verified Git or runner change.
+  Verify that navigation in the demo does not inadvertently reload an empty
+  real StateStore.
+- Run focused regression tests plus the full supported suite, compile checks,
+  and `git diff --check`. If tools time out, run available tests in explicit
+  batches and **report that the full suite was not completed**; never assert
+  an unobserved pass.
+- Inspect screenshots/real terminal output at narrow and wide sizes.
+  Automated success is **not** visual acceptance. Wait for user confirmation
+  before closing the component and starting the next one.
+
 ## Environment and tooling
 
 - Python 3.11+ is required by `pyproject.toml`.

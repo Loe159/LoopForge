@@ -13,6 +13,32 @@
    there.
 6. Test parser/dispatch boundaries and integration output/artifacts.
 
+## Add or redesign a Textual screen or component
+
+Treat interactive UI as a user-reviewed, iterative change, not a single
+unvalidated redesign. Follow [the TUI component iteration playbook](09-tui-component-iteration.md)
+and the repository-local development skill at
+`../../.agents/skills/tui-component-iteration/SKILL.md`.
+
+1. Read `DESIGN.md`, the current screen/presenter/state and its tests. Write an
+   inventory of components, navigation/focus, rendering provenance, constraints,
+   and responsive breakpoints. Reuse existing Textual widgets/presenters.
+2. Split the work into user-visible components. For **one** component, present
+   two terminal-native mockups (or explain why one suffices), edge states, and
+   the proposed keyboard/mouse interactions. **Wait for the user's explicit
+   design approval**; record the chosen option and feedback.
+3. Implement **only that approved scope**, without refactoring other components
+   incidentally. Add focused automated tests and a deterministic TUI preview,
+   if useful; test narrow/wide layouts, resize, focus and loading/empty/error
+   behavior. Consult [test guidance](06-build-test-run.md).
+4. Create a narrow commit; do not push without authorization. Ask the user to
+   inspect the actual rendering, apply feedback as a new tested commit, and
+   mark the component visually accepted **only after confirmation**. Proceed
+   to the next component only then.
+
+A mockup, automated pilot and visual acceptance serve different purposes.
+No simulated demo result should be described as verified production evidence.
+
 ## Add an engine operation or configuration field
 
 1. Add an immutable `*Result` near existing engine result types.
