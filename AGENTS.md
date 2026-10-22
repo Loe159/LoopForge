@@ -15,6 +15,20 @@ autonomy: verification is evidence, never review or publication authority.
 - Follow `05-how-to-add-feature.md`; commands are in `06-build-test-run.md`;
   sensitive contracts are in `07-danger-zones.md`.
 
+## Designing or redesigning Textual screens
+
+- Follow [the component-by-component TUI workflow](docs/agent/09-tui-component-iteration.md)
+  and the development skill at `.agents/skills/tui-component-iteration/SKILL.md`.
+- **Default in-chat mockups:** before production code, render two dark terminal-style `AppBlock` previews (A/B), and use real DIL `radio-group`, `textarea` and `button` controls for selection. Never default to AI-generated images or white-background mocks.
+- Inventory the existing screen, propose concrete terminal mockups (normally A/B),
+  and **wait for explicit user approval of a variant before editing production UI**.
+- Change only the approved component; verify behavior, keyboard/mouse navigation,
+  accessibility, and multiple terminal sizes using real Textual pilot tests and
+  an optional deterministic demo. Record test results honestly.
+- Commit each approved implementation/correction, but **do not push unless asked**.
+  Request explicit **visual acceptance** before starting the next component.
+  Design approval and visual acceptance are separate gates.
+
 ## Boundaries
 
 - Keep `loopforge.cli:main` stable. The facade is
