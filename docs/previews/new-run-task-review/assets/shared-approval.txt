@@ -1,0 +1,28 @@
+Commun · Confirmation de la tâche
+80 x 24 cellules · Proposition terminal native
+MAQUETTE · Données fictives · Sans action moteur
+
+  LoopForge    AUTH DEMO                                       Run #42
+
+────────────────────────────────────────────────────────────────────────────────
+  Task · Live
+  Project  AUTH DEMO · /work/auth-demo
+  generic-code · supervised · codex
+
+   Approve task for Run #42?
+
+   Reject expired tokens in the API.
+
+   Criteria: 2 recorded · checks not run.
+
+   This records task approval. Research remains a separate action.
+
+   Approval required
+
+
+
+    Approve task            Back
+
+
+
+  Tab Choose   Enter Activate   Esc Back

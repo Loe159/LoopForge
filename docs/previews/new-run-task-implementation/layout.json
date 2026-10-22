@@ -1,0 +1,261 @@
+[
+  {
+    "name": "empty-120x40",
+    "size": [
+      120,
+      40
+    ],
+    "regions": {
+      "task-workspace": [
+        2,
+        8,
+        116,
+        26
+      ],
+      "task-submit": [
+        2,
+        38,
+        14,
+        1
+      ],
+      "task-actions": [
+        2,
+        35,
+        116,
+        5
+      ]
+    }
+  },
+  {
+    "name": "filled-120x40",
+    "size": [
+      120,
+      40
+    ],
+    "regions": {
+      "task-workspace": [
+        2,
+        8,
+        116,
+        26
+      ],
+      "task-submit": [
+        2,
+        38,
+        14,
+        1
+      ],
+      "task-actions": [
+        2,
+        35,
+        116,
+        5
+      ]
+    }
+  },
+  {
+    "name": "filled-80x24",
+    "size": [
+      80,
+      24
+    ],
+    "regions": {
+      "task-workspace": [
+        1,
+        6,
+        78,
+        13
+      ],
+      "task-submit": [
+        1,
+        22,
+        14,
+        1
+      ],
+      "task-actions": [
+        1,
+        19,
+        78,
+        5
+      ]
+    }
+  },
+  {
+    "name": "filled-60x24",
+    "size": [
+      60,
+      24
+    ],
+    "regions": {
+      "task-workspace": [
+        1,
+        6,
+        58,
+        13
+      ],
+      "task-submit": [
+        1,
+        22,
+        14,
+        1
+      ],
+      "task-actions": [
+        1,
+        19,
+        58,
+        5
+      ]
+    }
+  },
+  {
+    "name": "filled-160x40",
+    "size": [
+      160,
+      40
+    ],
+    "regions": {
+      "task-workspace": [
+        2,
+        8,
+        156,
+        26
+      ],
+      "task-submit": [
+        2,
+        38,
+        14,
+        1
+      ],
+      "task-actions": [
+        2,
+        35,
+        156,
+        5
+      ]
+    }
+  },
+  {
+    "name": "rubric-120x40",
+    "size": [
+      120,
+      40
+    ],
+    "regions": {
+      "task-workspace": [
+        2,
+        8,
+        116,
+        26
+      ],
+      "task-submit": [
+        2,
+        38,
+        14,
+        1
+      ],
+      "task-actions": [
+        2,
+        35,
+        116,
+        5
+      ]
+    }
+  },
+  {
+    "name": "complete-80x24",
+    "size": [
+      80,
+      24
+    ],
+    "regions": {
+      "task-workspace": [
+        1,
+        6,
+        78,
+        13
+      ],
+      "task-submit": [
+        1,
+        22,
+        18,
+        1
+      ],
+      "task-actions": [
+        1,
+        19,
+        78,
+        5
+      ]
+    }
+  },
+  {
+    "name": "error-80x24",
+    "size": [
+      80,
+      24
+    ],
+    "regions": {
+      "task-workspace": [
+        1,
+        6,
+        78,
+        11
+      ],
+      "task-submit": [
+        1,
+        22,
+        14,
+        1
+      ],
+      "task-actions": [
+        1,
+        19,
+        78,
+        5
+      ]
+    }
+  },
+  {
+    "name": "saving-80x24",
+    "size": [
+      80,
+      24
+    ],
+    "regions": {
+      "task-workspace": [
+        1,
+        6,
+        78,
+        13
+      ],
+      "task-submit": [
+        1,
+        22,
+        14,
+        1
+      ],
+      "task-actions": [
+        1,
+        19,
+        78,
+        5
+      ]
+    }
+  },
+  {
+    "name": "discard-80x24",
+    "size": [
+      80,
+      24
+    ],
+    "regions": {}
+  },
+  {
+    "name": "task-120x40",
+    "size": [
+      120,
+      40
+    ],
+    "regions": {}
+  }
+]

@@ -1,0 +1,28 @@
+14 / Hauteur faible · Running
+120 colonnes × 24 lignes · Contenu défilable, vues ancrées en bas
+MAQUETTE · Données fictives · Sans action moteur
+
+ LoopForge / AUTH DEMO / Run #42                                                                               RUNNING
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                                                                  │
+  IMPLEMENTATION · Live                                      Attempt 02 ▾         │  RUN CONTEXT
+                                                                                  │
+   Focused   All   Raw   ↓ Follow live                                            │  Running · Implementation
+                                                                                  │
+                                                                                  │  WORKFLOW
+  │ Agent                                                                         │  ✓ Research
+  │ Running the authentication regression tests.                                  │  ✓ Planning
+                                                                                  │  ● Implementation   2/4 ▸
+                                                                                  │  ○ Verification
+   ▸ ✓ Read  3 files  Done                                                        │  ○ Review
+                                                                                  │
+   ▸ ⠋ Shell  python -m unittest tests.test_auth  Running                         │  ↕ More details
+                                                                                  │
+                                                                                  │
+                                                                                  │
+ ──────────────────────────────────────────────────────────────────────────────── │   Live
+  Command Input                                                                   │   Context
+   › Type / for commands                                                          │   Changes
+  /run /status /actions /config                                                   │   Evidences
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Tab Navigate  F4 Detail  F6 Views  / Command  End Follow

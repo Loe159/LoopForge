@@ -6,8 +6,19 @@ from pathlib import Path
 from typing import Any
 
 from loopforge.cli.evidence import EvidenceIndex
-from loopforge.cli.run_changes import read_artifact, session_reference
+from loopforge.cli.run_changes import read_artifact, safe_artifact, session_reference
 from loopforge.cli.run_artifacts import _clean_text
+
+
+@dataclass(frozen=True)
+class RunEvidenceRecord:
+    """One confined artifact and its bounded, read-only preview."""
+
+    key: str
+    title: str
+    body: str
+    preview: str = ""
+    language: str = "text"
 
 
 @dataclass(frozen=True)
@@ -16,6 +27,7 @@ class RunEvidenceSection:
     title: str
     body: str
     expanded: bool = False
+    records: tuple[RunEvidenceRecord, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -38,7 +50,10 @@ def load_run_evidences(status: Any, session: Any = None, *, stage_id: str | None
     historical = (stage_id or getattr(session, "stage_id", "")) not in ("", run.get("current_stage")) or (
         number is not None and number != latest)
     paths = []
-    for item in EvidenceIndex.build(root).items:
+    records = []
+    index = EvidenceIndex.build(root)
+    preview_budget = 128_000
+    for item in index.items:
         name = item.relative_path
         if ref and not name.startswith(ref + "/"):
             continue
@@ -46,13 +61,29 @@ def load_run_evidences(status: Any, session: Any = None, *, stage_id: str | None
             continue
         if name.endswith((".md", ".json", ".log", ".diff", ".patch", ".stdout")):
             paths.append(f"{_safe(item.kind)} · {_safe(name)} · {item.size} bytes")
+            if len(records) < 100 and safe_artifact(root, name) is not None:
+                preview = ""
+                if preview_budget > 0:
+                    try:
+                        preview = _clean_text(index.preview(item), min(12_000, preview_budget))
+                    except (OSError, ValueError):
+                        pass
+                    preview_budget -= len(preview)
+                language = {".json": "json", ".diff": "diff", ".patch": "diff"}.get(item.path.suffix, "text")
+                records.append(RunEvidenceRecord(
+                    "artifact:" + name, _safe(item.path.name),
+                    f"Artifact retained · {_safe(item.kind)}\nSource: LoopForge artifact store\n"
+                    f"Scope: {_safe(stage_id or getattr(session, 'stage_id', ''))}"
+                    f" · {_safe(ref)}\n{_safe(name)} · {item.size} bytes\n"
+                    "Artifact content is not a verification receipt.", preview, language))
     sections = []
     blockers = getattr(status, "blockers", None) or run.get("blockers") or ()
     if blockers:
         sections.append(RunEvidenceSection("problems", "Problems · engine",
             "Source: LoopForge workflow state\n" + "\n".join(_safe(problem) for problem in tuple(blockers)[:30]), True))
     sections.append(RunEvidenceSection("deliverables", f"Deliverables ({len(paths)})",
-        "\n".join(paths[:100]) if paths else "No retained deliverable for this execution.", True))
+        "\n".join(paths[:100]) if paths else "No retained deliverable for this execution.", True,
+        tuple(records)))
     contract = []
     if number is not None:
         attempt = next((a for a in run.get("attempts", []) if isinstance(a, dict)

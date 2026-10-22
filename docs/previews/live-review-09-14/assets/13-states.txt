@@ -1,0 +1,38 @@
+13 / Navigation · États de lecture et actions
+Bindings existants · Pas de nouvel Alt+1…4 · Slash ouvre la commande, pas une recherche
+MAQUETTE · Données fictives · Sans action moteur
+
+
+  ┌─ Live · modes et suivi ──────────────────────────────────────────────────────────────────────────────────────────┐
+  │                                                                                                                  │
+  │   Focused   All   Raw           ↓ 7 new events · Follow live                                                     │
+  │                                                                                                                  │
+  │  Scroll paused while inspecting a tool.                                                                          │
+  │                                                                                                                  │
+  │  Enter/click Follow live or End restores follow for this selected execution.                                     │
+  │                                                                                                                  │
+  └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+  ┌─ Raw · source retained ─────────────────────────────┐      ┌─ Plain text remains inert ──────────────────────────┐
+  │                                                     │      │                                                     │
+  │  agent-transcript.log · bounded capture             │      │   describe authentication                           │
+  │                                                     │      │                                                     │
+  │  [literal source text, no rendered Markdown]        │      │  Enter does not execute this text.                  │
+  │                                                     │      │                                                     │
+  │  Bounded capture ≠ complete native log.             │      │  Only slash-prefixed commands dispatch.             │
+  │                                                     │      │                                                     │
+  │                                                     │      │                                                     │
+  └─────────────────────────────────────────────────────┘      └─────────────────────────────────────────────────────┘
+
+
+  ┌─ Blocked · no eligible primary action ──────────────┐      ┌─ Session selection · read only ─────────────────────┐
+  │                                                     │      │                                                     │
+  │  BLOCKED — ACTION REQUIRED                          │      │  Attempt 01   Attempt 02   Session 01               │
+  │  Inspect retained evidence.                         │      │                                                     │
+  │                                                     │      │  F6: supervision / views · F4: detail               │
+  │  Ctrl+K Other actions                               │      │  Esc: back · Ctrl+K: existing actions               │
+  │                                                     │      │                                                     │
+  │  No invented Retry or Approve button.               │      │  Selection does not restart the agent.              │
+  │                                                     │      │                                                     │
+  └─────────────────────────────────────────────────────┘      └─────────────────────────────────────────────────────┘

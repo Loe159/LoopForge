@@ -1,5 +1,42 @@
 /* Semantic tokens shared by the initial Textual screens. */
 
+#run-task-summary {
+    height: auto;
+    margin: 1 1;
+    color: #E7E0ED;
+}
+
+ConfirmationScreen.task-confirmation, ConfirmationScreen.task-discard {
+    align: center middle;
+    background: #15121B;
+}
+.task-confirmation #confirmation-dialog, .task-discard #confirmation-dialog {
+    border: solid #808080;
+    background: #15121B;
+    width: 90%;
+    max-width: 80;
+    max-height: 90%;
+}
+.task-confirmation .dialog-title, .task-discard .dialog-title { color: #FFB869; }
+.task-confirmation #confirmation-evidence, .task-discard #confirmation-evidence {
+    color: #CBC3D7;
+    max-height: 12;
+    overflow-y: auto;
+}
+.task-confirmation Button, .task-discard Button {
+    height: 1;
+    width: auto;
+    min-width: 10;
+    border: none;
+    margin-top: 1;
+    background: #1D1A23;
+    color: #CBC3D7;
+}
+.task-confirmation Button:focus, .task-discard Button:focus {
+    background: #D0BCFF !important;
+    color: #0A0A0A !important;
+}
+
 #home-dashboard {
     display: block;
     height: 1fr;
@@ -1359,3 +1396,72 @@ RunDetailScreen {
 .width-60 #run-hotkeys-right {
     min-width: 0;
 }
+
+/* Selected composition: shared document navigator, retained preview, and dock. */
+#run-document-view {
+    layout: horizontal;
+    min-height: 0;
+    padding: 0 2;
+    overflow: hidden;
+}
+#run-document-index {
+    width: 26;
+    min-width: 18;
+    height: 1fr;
+    padding: 0 1 0 0;
+    border: none;
+    border-right: solid #494454;
+    background: #15121B;
+    color: #CBC3D7;
+    scrollbar-size: 1 1;
+}
+#run-document-index > .option-list--option { padding: 0; }
+#run-document-index > .option-list--option-highlighted {
+    background: #2C2832;
+    color: #E7E0ED;
+}
+#run-document-index:focus > .option-list--option-highlighted {
+    background: #D0BCFF;
+    color: #0A0A0A;
+}
+#run-document-preview {
+    width: 1fr;
+    height: 1fr;
+    min-width: 0;
+    padding-left: 1;
+}
+#run-document-scroll {
+    height: 1fr;
+    min-height: 0;
+    overflow-x: hidden;
+    scrollbar-size: 1 1;
+    scrollbar-color: #494454;
+}
+#run-document-content { height: auto; }
+#run-document-open { display: none; width: auto; height: 1; }
+#run-document-view .run-document-entry { margin: 0; }
+#run-document-view .run-document-entry > Contents { padding: 1 0; }
+.width-60 #run-document-view, .width-80 #run-document-view { padding: 0 1; }
+.width-60 #run-document-index { width: 20; min-width: 16; }
+#run-required-action {
+    height: auto;
+    min-height: 5;
+    max-height: 9;
+}
+#run-required-action.next-step { border: solid #D0BCFF; }
+#run-action-title { color: #FFB869; }
+#run-required-action.next-step #run-action-title { color: #D0BCFF; }
+#run-action-controls { height: auto; min-height: 1; }
+.width-60 #run-activity-feed, .width-80 #run-activity-feed {
+    padding: 0 1;
+}
+#run-required-action { width: 1fr; min-width: 0; }
+#run-required-action { margin: 0 2; }
+.width-60 #run-required-action { margin: 0 1; }
+#run-execution-result {
+    border-title-color: #CBC3D7;
+    border-title-background: #15121B;
+}
+/* Reclaim selection chrome, never the existing command input, at low heights. */
+.run-short #run-selection, .run-short #run-selection-stage,
+.run-short #run-session-select { height: 1; min-height: 1; }

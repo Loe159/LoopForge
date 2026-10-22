@@ -536,8 +536,19 @@ def complete_task_definition(
     project_dir: Path,
     *,
     success_check: str,
+    expected_scope: ActionScope | None = None,
 ) -> StageResult:
-    """Add objective proof to the current task contract without replacing its run."""
+    """Add a criterion, optionally binding the edit to the displayed run."""
+    if expected_scope is not None:
+        with _approval_scope_lock(project_dir):
+            return _complete_task_definition(project_dir, success_check=success_check,
+                                              expected_scope=expected_scope)
+    return _complete_task_definition(project_dir, success_check=success_check)
+
+
+def _complete_task_definition(
+    project_dir: Path, *, success_check: str, expected_scope: ActionScope | None = None,
+) -> StageResult:
     from loopforge.engine import (
         DEFAULT_ALLOWED_TOOLS,
         DEFAULT_PACK,
@@ -553,6 +564,16 @@ def complete_task_definition(
     )
 
     status = current_status(project_dir)
+    if expected_scope is not None and (
+        expected_scope.revalidate(None) is not None
+        or expected_scope.project_path.resolve() != status.project_dir
+        or expected_scope.revision != (status.run or {}).get("run_revision", 0)
+    ):
+        return StageResult(
+            project_dir=status.project_dir, run_dir=status.run_dir, run=status.run,
+            stage="task_definition", ok=False, message="Task context changed.",
+            blockers=["Return to the run and open Task again before adding a criterion."],
+        )
     if not status.initialized:
         return StageResult(
             project_dir=status.project_dir,

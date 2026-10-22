@@ -1,0 +1,40 @@
+Commun · Compléter une tâche existante
+120 x 36 cellules · Proposition terminal native
+MAQUETTE · Données fictives · Sans action moteur
+
+  LoopForge    AUTH DEMO                                                                               Run #42
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Task · Live
+  Project  AUTH DEMO · /work/auth-demo
+  Pack  generic-code   Profile  supervised   Adapter  codex
+
+
+   Reject expired tokens in the API.
+
+   Needs input · objective success check missing
+
+
+  ┌─ Success criterion · required ───────────────────────────────────────────┐
+  │ Expired tokens return HTTP 401.                                          │
+  │                                                                          │
+  │                                                                          │
+  │                                                                          │
+  │                                                                          │
+  │                                                                          │
+  └──────────────────────────────────────────────────────────────────────────┘
+
+
+   Adds this criterion to Run #42. Existing criteria are kept.
+
+   Saving a criterion does not run a check.
+
+
+
+
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   Task approval follows after the engine accepts the contract.
+
+    Save criterion         Back
+
+  Tab Fields  Enter New line  Esc Back                                                   Ctrl+Enter Save criterion

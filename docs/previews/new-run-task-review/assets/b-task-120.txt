@@ -1,0 +1,44 @@
+B · Description puis critères
+120 x 40 cellules · Proposition terminal native
+MAQUETTE · Données fictives · Sans action moteur
+
+  LoopForge    AUTH DEMO                                                                               New run
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  New run / 1/2 · Task
+  Project  AUTH DEMO · /work/auth-demo
+  Pack  generic-code   Profile  supervised   Adapter  codex
+
+
+                                                                                 │  PROJECT DEFAULTS
+  ┌─ Task · required ────────────────────────────────────────────────────────┐   │
+  │ Reject expired tokens in the API.                                        │   │  Pack     generic-code
+  │ Keep valid tokens working and cover expiry boundaries.                   │   │  Profile  supervised
+  │                                                                          │   │  Adapter  codex
+  │                                                                          │   │
+  │                                                                          │   │
+  │                                                                          │   │  AFTER CREATION
+  │                                                                          │   │
+  │                                                                          │   │  Review the task and criteria.
+  │                                                                          │   │  Approve the task explicitly.
+  │                                                                          │   │  Research is a later action.
+  │                                                                          │   │
+  └──────────────────────────────────────────────────────────────────────────┘   │
+                                                                                 │  Criteria describe success.
+                                                                                 │  They are not test results.
+   Next: define how to recognize success.                                        │
+                                                                                 │
+                                                                                 │  Draft kept in this session.
+                                                                                 │  Nothing saved yet.
+                                                                                 │
+                                                                                 │
+                                                                                 │
+                                                                                 │
+                                                                                 │
+
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   No run is created at this step.
+
+    Continue               Back
+
+  Tab Fields  Enter New line  Esc Back                                                   Ctrl+Enter Continue

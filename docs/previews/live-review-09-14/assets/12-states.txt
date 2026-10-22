@@ -1,0 +1,33 @@
+12 / Supervision · Sélection, focus et données absentes
+Échantillons indépendants · Les TODO ne deviennent jamais des étapes moteur
+MAQUETTE · Données fictives · Sans action moteur
+
+
+  ┌─ Workflow · keyboard focus ─────────────────────────┐      ┌─ Workflow · active selection, collapsed ────────────┐
+  │                                                     │      │                                                     │
+  │  ✓ Research                                         │      │  ✓ Research                                         │
+  │  ✓ Planning · reading   3/3 ▾                       │      │  ✓ Planning                                         │
+  │    ✓ Inspect requirements                           │      │                                                     │
+  │    ✓ Outline changes                                │      │  ● Implementation   2/4 ▸                           │
+  │    ✓ Define acceptance                              │      │                                                     │
+  │                                                     │      │  ○ Verification                                     │
+  │  ● Implementation · active                          │      │  ○ Review                                           │
+  │                                                     │      │                                                     │
+  │  ○ Verification                                     │      │                                                     │
+  │  ○ Review                                           │      │  No duplicate Plan block in Live.                   │
+  │                                                     │      │                                                     │
+  │                                                     │      │                                                     │
+  └─────────────────────────────────────────────────────┘      └─────────────────────────────────────────────────────┘
+
+
+
+  ┌─ Metrics · known values only ───────────────────────┐      ┌─ Many stages or very low height ────────────────────┐
+  │                                                     │      │                                                     │
+  │  Model codex                                        │      │  Current activity / workflow scroll.                │
+  │  Time 04m 12s                                       │      │                                                     │
+  │                                                     │      │  Live / Context / Changes / Evidences               │
+  │  Tokens and cost absent: rows omitted.              │      │  stay in the fixed bottom region.                   │
+  │                                                     │      │                                                     │
+  │                                                     │      │  No plan source: no counter or fake 0/0.            │
+  │                                                     │      │                                                     │
+  └─────────────────────────────────────────────────────┘      └─────────────────────────────────────────────────────┘

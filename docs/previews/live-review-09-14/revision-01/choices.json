@@ -1,0 +1,29 @@
+{
+  "status": "user-preferences-recorded-no-implementation",
+  "choices": {
+    "09": {
+      "variant": "A",
+      "adjustments": "Reçu sans boutons de navigation ; priorité au déclenchement de la prochaine étape."
+    },
+    "10": {
+      "variant": "B"
+    },
+    "11": {
+      "variant": "B"
+    },
+    "12": {
+      "variant": "A",
+      "adjustments": "Titres des panneaux en capitales."
+    },
+    "13": {
+      "variant": "A",
+      "adjustments": "Approval required en orange ; Command Input actuel conservé."
+    },
+    "14": {
+      "variant": "Composition"
+    }
+  },
+  "implementation_authorized": false,
+  "engine_approval_granted": false,
+  "interaction_proposal": "Single persistent next-action dock; no navigation buttons in Execution Result."
+}

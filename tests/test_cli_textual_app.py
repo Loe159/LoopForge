@@ -362,7 +362,7 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
         from loopforge.cli import main
         from loopforge.cli.interactive import InteractiveShell
         from loopforge.cli.textual_app import LoopForgeApp
-        from loopforge.cli.textual_app.screens import TextEntryScreen
+        from loopforge.cli.textual_app.task_composer import TaskComposer
         from loopforge.engine import current_guidance, current_status
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -408,13 +408,13 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
                     await pilot.press("enter")
                     await wait_for_condition(
                         pilot,
-                        lambda: isinstance(app.screen, TextEntryScreen),
+                        lambda: isinstance(app.screen, TaskComposer) and app.screen.context is not None,
                         "the task-contract modal",
                     )
                     self.assertNotEqual(app.screen.title_text, "Create run")
                     self.assertIn("Complete", app.screen.title_text)
                     await pilot.press(*"objectiveproofexists")
-                    await pilot.press("enter")
+                    await pilot.press("ctrl+enter")
                     await wait_for_condition(
                         pilot,
                         lambda: app._operation is not None and app._operation.finished,

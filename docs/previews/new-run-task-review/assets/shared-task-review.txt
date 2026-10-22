@@ -1,0 +1,44 @@
+Commun · Task dans le run créé
+120 x 40 cellules · Proposition terminal native
+MAQUETTE · Données fictives · Sans action moteur
+
+  LoopForge    AUTH DEMO                                                                               Run #42
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Task · Live
+  Project  AUTH DEMO · /work/auth-demo
+  Pack  generic-code   Profile  supervised   Adapter  codex
+
+                                                                                 │ ┌─ CURRENT ACTIVITY ──────────────┐
+   TASK                                                                          │ │                                 │
+                                                                                 │ │ Task · approval pending         │
+   Reject expired tokens in the API.                                             │ │ Run #42 · AUTH DEMO             │
+   Keep valid tokens working and cover expiry boundaries.                        │ │                                 │
+                                                                                 │ └─────────────────────────────────┘
+                                                                                 │
+                                                                                 │ ┌─ WORKFLOW ──────────────────────┐
+   SUCCESS CRITERIA                                                              │ │                                 │
+                                                                                 │ │ Task · Draft                    │
+   1. Expired tokens return HTTP 401.                                            │ │                                 │
+                                                                                 │ │ Research · Pending              │
+   2. Valid tokens still return HTTP 200.                                        │ │                                 │
+                                                                                 │ │ Planning · Pending              │
+                                                                                 │ │                                 │
+                                                                                 │ │ Implementation · Pending        │
+   Criteria recorded · checks have not run.                                      │ │                                 │
+                                                                                 │ │ Verification · Pending          │
+   task.md · retained run artifact                                               │ │                                 │
+                                                                                 │ │ Review · Pending                │
+                                                                                 │ └─────────────────────────────────┘
+  ┌─ Next step ──────────────────────────────────────────────────────────────┐   │
+  │ Approval required                                                        │   │
+  │                                                                          │   │
+  │ Ctrl+Enter  Review and approve task                                      │   │
+  └──────────────────────────────────────────────────────────────────────────┘   │
+                                                                                 │
+  ┌─ Command Input ──────────────────────────────────────────────────────────┐   │   Live
+  │ › Type / for commands                                                    │   │   Context
+  │ /status  /actions                                                        │   │   Changes
+  └──────────────────────────────────────────────────────────────────────────┘   │   Evidences
+
+  Tab Navigate   Ctrl+Enter Review task   Esc Runs

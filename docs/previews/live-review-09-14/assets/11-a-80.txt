@@ -1,0 +1,44 @@
+11 / A · Evidences compact
+80 colonnes · Registre vertical · Pas de colonnes de tableau écrasées
+MAQUETTE · Données fictives · Sans action moteur
+
+ LoopForge    AUTH DEMO / Run #42                                        READY
+ v0.1.0       git:fix/auth
+────────────────────────────────────────────────────────────────────────────────
+
+  IMPLEMENTATION · Evidences                                     Attempt 02 ▾
+  F6 Supervision
+  Implementation · Attempt 02 · Codex
+
+   ▾ Deliverables · 1
+
+      implementation-result.json · Extracted
+      LoopForge extraction · Implementation · Attempt 02
+      [ Open artifact ]
+
+
+   ▾ Output contracts
+
+      Output extracted · no contract validation receipt
+
+
+   ▾ Tests & verification
+
+      Verification pending · candidate 3
+      Source: LoopForge workflow
+
+
+   ▾ Human decisions
+
+      Review approval pending · LoopForge gate
+
+
+
+
+ ──────────────────────────────────────────────────────────────────────────────
+  Command Input
+   › Type / for commands
+  /run  /status  /actions  /config
+
+────────────────────────────────────────────────────────────────────────────────
+ Tab Navigate  F4 Detail  F6 Views  / Command

@@ -1,0 +1,56 @@
+{
+  "date": "2026-10-22",
+  "design": "A",
+  "command": "PYTHONPATH=src .venv/bin/python -m unittest",
+  "focused_initial_passed": 142,
+  "new_task_tests_passed": 15,
+  "native_captures": 11,
+  "compileall": "passed",
+  "diff_check": "passed",
+  "full_suite": [
+    {
+      "log": "/tmp/loopforge-task-full-final-1.log",
+      "tests": 782,
+      "elapsed_seconds": 265.569,
+      "failures": 0,
+      "errors": 3,
+      "skipped": 3,
+      "error_cases": [
+        "test_readonly_research_retains_invalid_candidates_and_allows_retry (tests.test_cli.CliTests.test_readonly_research_retains_invalid_candidates_and_allows_retry) (candidate='empty stdout')",
+        "test_readonly_research_retains_invalid_candidates_and_allows_retry (tests.test_cli.CliTests.test_readonly_research_retains_invalid_candidates_and_allows_retry) (candidate='invalid Markdown')",
+        "test_readonly_research_retains_invalid_candidates_and_allows_retry (tests.test_cli.CliTests.test_readonly_research_retains_invalid_candidates_and_allows_retry) (candidate='partial headings')"
+      ]
+    },
+    {
+      "log": "/tmp/loopforge-task-full-final-2.log",
+      "tests": 782,
+      "elapsed_seconds": 272.992,
+      "failures": 0,
+      "errors": 3,
+      "skipped": 3,
+      "error_cases": [
+        "test_readonly_research_retains_invalid_candidates_and_allows_retry (tests.test_cli.CliTests.test_readonly_research_retains_invalid_candidates_and_allows_retry) (candidate='empty stdout')",
+        "test_readonly_research_retains_invalid_candidates_and_allows_retry (tests.test_cli.CliTests.test_readonly_research_retains_invalid_candidates_and_allows_retry) (candidate='invalid Markdown')",
+        "test_readonly_research_retains_invalid_candidates_and_allows_retry (tests.test_cli.CliTests.test_readonly_research_retains_invalid_candidates_and_allows_retry) (candidate='partial headings')"
+      ]
+    }
+  ],
+  "source_hashes": {
+    "src/loopforge/cli/task_intake.py": "0143132c2756cd1911d09342eca635c20c4507bc9096e2678cef89c0e7ccbd04",
+    "src/loopforge/cli/interactive.py": "308427ad3016a9ecb6fa87c215dec436abe4ed330dcb62e780cd1b8cce2dad9b",
+    "src/loopforge/cli/models.py": "7a60de8d214ae263146886ed8dfe004f53b16ccb6c356de4f501fff509c1b7f9",
+    "src/loopforge/cli/state_store.py": "79bc2c44ab46a849aa82e76d32fa303a6dfb2360b9592daae546d58e8ce6b4dc",
+    "src/loopforge/cli/textual_app/app.py": "7bca9d2f63037757894c43b749b900e2aed3f641b7a793de87224450f4e3db22",
+    "src/loopforge/cli/textual_app/screens.py": "718043064c35035d024d4537da975144cfb059c6269691e6cb3fb5d3253f6b70",
+    "src/loopforge/cli/textual_app/widgets.py": "b54f5de4603d0b26e93bf28b22d0d86e1ee75e189424fe06713f481235ab4734",
+    "src/loopforge/cli/textual_app/run_presenter.py": "f767993a373310c4a93a266a968b62c153e344717d1386fd56f7d7303eb4eb0c",
+    "src/loopforge/cli/textual_app/styles.tcss": "a1a535add5712ce61a70dbfc3b6ef3fe23dc6c6eb9a9a6519257122c121009ed",
+    "src/loopforge/cli/textual_app/task_composer.py": "b4b90374a217058f6fcb4206acdd0c701be03b496fb53de428acd11fc8791489",
+    "src/loopforge/cli/textual_app/task_composer.tcss": "b07d0bf48714d55ee0bb3eef3a88b6bee01e985950b24efe6ca8591ec9f1dcd6",
+    "src/loopforge/engine/workflow.py": "15d0fa8dc46348b809370d8a8887598f36f8bf76c0949ca8826d8f7a04fae434",
+    "tests/test_task_composer.py": "3b6f848ee3f729dce79c0f5f3792047da3338277670782603df130e855907970",
+    "tests/test_cli_textual_app.py": "4dd9c18e57fd970bd143688adbe72ea51d3200721113c4640930fd5a3f721238",
+    "tools/demo_task_composer.py": "5f25d8885ccee488345a5b6c4e09f470d29c67ec6c136a684a63eb9cd701f9be"
+  },
+  "engine_approval_granted": false
+}

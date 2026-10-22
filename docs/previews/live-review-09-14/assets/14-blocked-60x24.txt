@@ -1,0 +1,28 @@
+14 / Compact · Blocked
+60 colonnes × 24 lignes · ASCII et faible hauteur
+MAQUETTE · Données fictives · Sans action moteur
+
+ LoopForge / Run #42                              BLOCKED
+------------------------------------------------------------
+
+ Implementation - Attempt 02   [F6 Supervision]
+
+  Focused   All  Raw
+
+ | Agent
+ | Implementation output has been retained.
+
+  > x Shell  python -m unittest tests.test_auth
+    Failed
+
+  Execution result: blocked
+  Contract rejected: missing test summary
+
+------------------------------------------------------------
+  BLOCKED - ACTION REQUIRED
+  Inspect evidence.  Ctrl+K Other actions
+
+------------------------------------------------------------
+  > Type / for commands
+
+ Tab  F4 Detail  F6 Views  / Command  Esc Back

@@ -1,0 +1,44 @@
+12 / A · Supervision — Panneaux structurés
+120 colonnes · Planning consulté pendant Implementation · TODO de la sélection uniquement
+MAQUETTE · Données fictives · Sans action moteur
+
+ LoopForge    AUTH DEMO / Run #42 · Fix authentication                                                         RUNNING
+ v0.1.0       git:fix/auth
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                                                                  │
+  PLANNING · Live                                                Session 01 ▾     │  RUN CONTEXT
+                                                                                  │
+   Focused   All   Raw     History · Follow paused                                │ ┌─ Current activity ─────────────┐
+                                                                                  │ │RUNNING                         │
+                                                                                  │ │Implementation · Codex          │
+  │ Agent                                                                         │ │Reading Planning                │
+  │ Plan: validate token expiry before resolving the user.                        │ │                                │
+                                                                                  │ └────────────────────────────────┘
+  │ Add regression coverage for expired and boundary tokens.                      │
+                                                                                  │ ┌─ Workflow ─────────────────────┐
+                                                                                  │ │✓ Research                      │
+  ▸ Reasoning                                                                     │ │✓ Planning  reading  3/3 ▾      │
+                                                                                  │ │  ✓ Inspect requirements        │
+                                                                                  │ │  ✓ Outline changes             │
+  Planning history · Session 01                                                   │ │  ✓ Define acceptance           │
+  Implementation continues in its own execution.                                  │ │● Implementation                │
+                                                                                  │ │○ Verification                  │
+                                                                                  │ │○ Review                        │
+                                                                                  │ │                                │
+                                                                                  │ │                                │
+                                                                                  │ └────────────────────────────────┘
+                                                                                  │
+                                                                                  │
+                                                                                  │ ┌─ Metrics ──────────────────────┐
+                                                                                  │ │Model  codex                    │
+                                                                                  │ │Time   04m 12s                  │
+                                                                                  │ │Tokens 8 420                    │
+                                                                                  │ └────────────────────────────────┘
+                                                                                  │
+ ──────────────────────────────────────────────────────────────────────────────── │
+  Command Input                                                                   │   Live
+   › Type / for commands                                                          │   Context
+  /run  /status  /actions  /config                                                │   Changes
+                                                                                  │   Evidences
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Tab Navigate  F4 Detail  F6 Views  / Command  End Follow                                         Esc Runs  Ctrl+Q Quit

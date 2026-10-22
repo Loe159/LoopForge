@@ -59,6 +59,7 @@ class RunAgentSnapshot:
     first_event_order: int = 0
     has_earlier_events: bool = False
     session_closed: bool = False
+    result_ref: str = ""
 
 
 @dataclass(frozen=True)
@@ -75,6 +76,11 @@ class RunSnapshot:
     changes: Any = None
     evidences: Any = None
     metrics: tuple[tuple[str, str], ...] = ()
+    candidate_revision: int | None = None
+    verification: Mapping[str, Any] | None = None
+    success_checks: tuple[str, ...] = ()
+    task_rubric: str = ""
+    task_missing: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -1,0 +1,44 @@
+9 / D · Résumé dépliable
+120 colonnes · Résultat d’exécution distinct de l’état du run
+MAQUETTE · Données fictives · Sans action moteur
+
+ LoopForge    AUTH DEMO / Run #42 · Fix authentication                                                           READY
+ v0.1.0       git:fix/auth
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                                                                  │
+  IMPLEMENTATION · Live                                            Attempt 02 ▾   │  RUN CONTEXT
+                                                                                  │
+   Focused   All   Raw     ↓ Follow live                                          │  CURRENT ACTIVITY
+                                                                                  │  READY
+   ▸ ✓ Shell  python -m unittest tests.test_auth  Done                            │  Verification · Codex
+                                                                                  │  Reading Implementation
+  │ Agent                                                                         │
+  │ Expired tokens now return HTTP 401.                                           │
+  │ Added regression coverage for token expiration.                               │
+                                                                                  │  WORKFLOW
+                                                                                  │  ✓ Research
+                                                                                  │  ✓ Planning
+   ▸ Execution result · Agent finished                                            │  ✓ Implementation  reading  2/4 ▾
+     Verification pending · Next Verification                                     │    ✓ Inspect token flow
+                                                                                  │    ✓ Add expiry guard
+     [ View changes ]   [ View evidences ]                                        │    ◉ Run regression tests
+                                                                                  │    ○ Review edge cases
+                                                                                  │  ● Verification
+                                                                                  │  ○ Review
+                                                                                  │
+                                                                                  │
+                                                                                  │
+                                                                                  │
+                                                                                  │  METRICS
+                                                                                  │  Model  codex
+                                                                                  │  Time   04m 12s
+                                                                                  │  Tokens 8 420
+                                                                                  │
+                                                                                  │
+ ──────────────────────────────────────────────────────────────────────────────── │
+  Command Input                                                                   │   Live
+   › Type / for commands                                                          │   Context
+  /run  /status  /actions  /config                                                │   Changes
+                                                                                  │   Evidences
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Tab Navigate  F4 Detail  F6 Views  / Command  End Follow                                         Esc Runs  Ctrl+Q Quit

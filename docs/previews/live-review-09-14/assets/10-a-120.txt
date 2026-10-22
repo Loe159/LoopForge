@@ -1,0 +1,44 @@
+10 / A · Context — Sections de lecture
+120 colonnes · Sources enregistrées · Instructions déclarées ≠ mécanismes du runner
+MAQUETTE · Données fictives · Sans action moteur
+
+ LoopForge    AUTH DEMO / Run #42 · Fix authentication                                                         RUNNING
+ v0.1.0       git:fix/auth
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                                                                  │
+  IMPLEMENTATION · Context                                         Attempt 02 ▾   │  RUN CONTEXT
+                                                                                  │
+  Implementation · Attempt 02 · Codex                                             │  CURRENT ACTIVITY
+                                                                                  │  RUNNING
+   ▾ Mission & Role                                                               │  Implementation · Codex
+      Implementation · Implementation agent · Codex                               │
+      Reject expired tokens and add regression coverage.                          │
+      Captured prompt · declared-in-prompt                                        │
+                                                                                  │
+   ▸ System Instructions                                                          │  WORKFLOW
+                                                                                  │  ✓ Research
+   ▸ Injected Documents · 3                                                       │  ✓ Planning
+                                                                                  │  ● Implementation  2/4 ▾
+   ▸ Environment & Git                                                            │    ✓ Inspect token flow
+                                                                                  │    ✓ Add expiry guard
+   ▸ Pack, Skills & Tools                                                         │    ◉ Run regression tests
+                                                                                  │    ○ Review edge cases
+   ▸ Permissions & Security                                                       │  ○ Verification
+      Declared in prompt  Workspace edits                                         │  ○ Review
+      Runner recorded     Timeout requested: 600 seconds                          │
+                                                                                  │
+   ▸ Output Contract                                                              │
+      implementation-result.json · Required JSON fields                           │
+                                                                                  │  METRICS
+   ▸ Validation & Limits                                                          │  Model  codex
+                                                                                  │  Time   04m 12s
+   ▸ Raw Prompt · captured source                                                 │  Tokens 8 420
+                                                                                  │
+                                                                                  │
+ ──────────────────────────────────────────────────────────────────────────────── │
+  Command Input                                                                   │   Live
+   › Type / for commands                                                          │   Context
+  /run  /status  /actions  /config                                                │   Changes
+                                                                                  │   Evidences
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Tab Navigate  F4 Detail  F6 Views  / Command  End Follow                                         Esc Runs  Ctrl+Q Quit

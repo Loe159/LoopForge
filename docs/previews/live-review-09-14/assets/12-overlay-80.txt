@@ -1,0 +1,43 @@
+12 / Supervision compacte
+80 colonnes · Overlay existant · Vues ancrées en bas de la supervision
+MAQUETTE · Données fictives · Sans action moteur
+
+ LoopForge / AUTH DEMO / Run #42                                       RUNNING
+
+────────────────────────────────────────────────────────────────────────────────
+
+        ┌─ Supervision · Esc Back ─────────────────────────────────────┐
+        │                                                              │
+        │  CURRENT ACTIVITY                                            │
+        │  Running · Implementation · Codex                            │
+        │  Reading Planning · Session 01                               │
+        │                                                              │
+        │                                                              │
+        │  WORKFLOW                                                    │
+        │  ✓ Research                                                  │
+        │  ✓ Planning · reading   3/3 ▾                                │
+        │    ✓ Inspect requirements                                    │
+        │    ✓ Outline changes                                         │
+        │    ✓ Define acceptance                                       │
+        │  ● Implementation · active                                   │
+        │  ○ Verification                                              │
+        │  ○ Review                                                    │
+        │                                                              │
+        │                                                              │
+        │  Model codex · Time 04m 12s                                  │
+        │                                                              │
+        │                                                              │
+        │ ──────────────────────────────────────────────────────────── │
+        │   Live                                                       │
+        │   Context                                                    │
+        │   Changes                                                    │
+        │   Evidences                                                  │
+        │                                                              │
+        └──────────────────────────────────────────────────────────────┘
+
+────────────────────────────────────────────────────────────────────────────────
+  Command Input
+   › Type / for commands
+
+
+  Tab Navigate   Enter Select   Esc Back

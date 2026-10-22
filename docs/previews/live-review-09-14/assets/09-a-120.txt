@@ -1,0 +1,41 @@
+
+ Composant 9 / A · Reçu compact — recommandé
+ 120 colonnes · Agent terminé, vérification en attente · Carte dans la chronologie
+ MAQUETTE STATIQUE · Données fictives · Proposition à valider
+ LoopForge    AUTH DEMO / Run #42 · Fix authentication                                                         READY
+ v0.1.0       git:fix/auth
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                                                                  │
+  IMPLEMENTATION · Attempt 02                             Attempt 02 ▾            │  RUN CONTEXT
+                                                                                  │
+   Focused   All   Raw     ↓ Follow live                                          │  Current activity
+                                                                                  │  READY · Verification
+  ── IMPLEMENTATION ──                                                            │  Adapter Codex
+                                                                                  │
+   ▸ ✓ Shell  python -m unittest tests.test_auth  Done                            │
+                                                                                  │
+  │ Agent                                                                         │  Workflow
+  │ Expired tokens now return HTTP 401.                                           │  ✓ Research
+  │ Added regression coverage for token expiration.                               │  ✓ Planning
+                                                                                  │  ✓ Implementation
+                                                                                  │    Verification · Ready
+   ┌─ Execution result ───────────────────────────────────────────────────────┐   │    Review
+   │  ✓ Agent finished                                                        │   │
+   │                                                                          │   │
+   │  Output         Extracted · attempts/attempt-002/result.json             │   │
+   │  Changes        3 files · +42 −7 · Session snapshot                      │   │  Metrics
+   │  Verification   Pending · LoopForge                                      │   │  Model  codex
+   │  Next           Verification · LoopForge                                 │   │  Time   04m 12s
+   │                                                                          │   │
+   │  [ View changes ]   [ View evidences ]                                   │   │
+   │                                                                          │   │
+   └──────────────────────────────────────────────────────────────────────────┘   │
+                                                                                  │
+                                                                                  │
+ ──────────────────────────────────────────────────────────────────────────────── │   Live
+  Command Input                                                                   │   Context
+   / Enter a LoopForge command...                                                 │   Changes
+  run  status  actions  config                                                    │   Evidences
+                                                                                  │
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Tab Navigate   Enter Open   F4 Detail                                                       Esc Runs   Ctrl+Q Quit

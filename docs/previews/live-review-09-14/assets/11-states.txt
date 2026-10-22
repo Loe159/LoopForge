@@ -1,0 +1,38 @@
+11 / Evidences · Confiance et historique
+Exemples fictifs · Un succès agent ne constitue pas une vérification indépendante
+MAQUETTE · Données fictives · Sans action moteur
+
+
+  ┌─ Current candidate 3 ────────────────────────────────────────────────────────────────────────────────────────────┐
+  │                                                                                                                  │
+  │  ✓ Verification passed · candidate 3                                                                             │
+  │  Source: LoopForge validator · verification receipt                                                              │
+  │                                                                                                                  │
+  │  Review approval pending · human gate                                                                            │
+  │                                                                                                                  │
+  │  [ Open verification receipt ]                                                                                   │
+  │                                                                                                                  │
+  └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+  ┌─ Older receipt · candidate 2 ───────────────────────┐      ┌─ Human decision ────────────────────────────────────┐
+  │                                                     │      │                                                     │
+  │  STALE · does not cover candidate 3                 │      │  Approved · plan approval                           │
+  │                                                     │      │  Actor: user · receipt recorded                     │
+  │  Original outcome: passed · candidate 2             │      │                                                     │
+  │                                                     │      │  Artifact: plan.md · approved hash recorded         │
+  │  [ Open original receipt ]                          │      │                                                     │
+  │                                                     │      │  [ Open approval receipt ]                          │
+  │                                                     │      │                                                     │
+  └─────────────────────────────────────────────────────┘      └─────────────────────────────────────────────────────┘
+
+
+  ┌─ No retained evidence ──────────────────────────────┐      ┌─ Contract receipt, when present ────────────────────┐
+  │                                                     │      │                                                     │
+  │  No retained evidence for this selection.           │      │  Contract validated · explicit validator receipt    │
+  │                                                     │      │                                                     │
+  │  No fabricated zero-test success.                   │      │  Does not grant review or publication authority.    │
+  │                                                     │      │                                                     │
+  │                                                     │      │                                                     │
+  │                                                     │      │                                                     │
+  └─────────────────────────────────────────────────────┘      └─────────────────────────────────────────────────────┘

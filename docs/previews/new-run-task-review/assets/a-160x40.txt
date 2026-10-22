@@ -1,0 +1,44 @@
+A · Tâche et critères réunis
+160 x 40 cellules · Proposition terminal native
+MAQUETTE · Données fictives · Sans action moteur
+
+  LoopForge    AUTH DEMO                                                                                                                       New run
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  New run / Task
+  Project  AUTH DEMO · /work/auth-demo
+  Pack  generic-code   Profile  supervised   Adapter  codex
+
+
+  ┌─ Task · required ────────────────────────────────────────────────────────┐   │  PROJECT DEFAULTS
+  │ Reject expired tokens in the API.                                        │   │
+  │ Keep valid tokens working and cover expiry boundaries.                   │   │  Pack     generic-code
+  │                                                                          │   │  Profile  supervised
+  │                                                                          │   │  Adapter  codex
+  │                                                                          │   │
+  │                                                                          │   │
+  └──────────────────────────────────────────────────────────────────────────┘   │  AFTER CREATION
+                                                                                 │
+   SUCCESS CRITERIA                                                              │  Review the task and criteria.
+   What observable result will show that this is done?                           │  Approve the task explicitly.
+                                                                                 │  Research is a later action.
+  ┌─ Criterion 1 ────────────────────────────────────────────────────────────┐   │
+  │ Expired tokens return HTTP 401.                                          │   │
+  │                                                                          │   │  Criteria describe success.
+  └──────────────────────────────────────────────────────────────────────────┘   │  They are not test results.
+                                                                  [ Remove ]     │
+  ┌─ Criterion 2 ────────────────────────────────────────────────────────────┐   │
+  │ Valid tokens still return HTTP 200.                                      │   │  Draft kept in this session.
+  │                                                                          │   │  Nothing saved yet.
+  └──────────────────────────────────────────────────────────────────────────┘   │
+                                                                  [ Remove ]     │
+   [ Add criterion ]                                                             │
+                                                                                 │
+                                                                                 │
+
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   Creates a run. Review and approval follow in Task.
+
+    Create run             Back
+
+  Tab Fields  Enter New line  Esc Back                                                                                           Ctrl+Enter Create run

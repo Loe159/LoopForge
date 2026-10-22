@@ -1,0 +1,44 @@
+B · Description puis critères
+120 x 40 cellules · Proposition terminal native
+MAQUETTE · Données fictives · Sans action moteur
+
+  LoopForge    AUTH DEMO                                                                               New run
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  New run / 2/2 · Criteria
+  Project  AUTH DEMO · /work/auth-demo
+  Pack  generic-code   Profile  supervised   Adapter  codex
+
+   Task  Reject expired tokens in the API.
+                                                                                 │  PROJECT DEFAULTS
+   What observable result will show that this is done?                           │
+                                                                                 │  Pack     generic-code
+                                                                                 │  Profile  supervised
+  ┌─ Criterion 1 ────────────────────────────────────────────────────────────┐   │  Adapter  codex
+  │ Describe one observable result.                                          │   │
+  │                                                                          │   │
+  │                                                                          │   │  AFTER CREATION
+  └──────────────────────────────────────────────────────────────────────────┘   │
+                                                                                 │  Review the task and criteria.
+                                                                                 │  Approve the task explicitly.
+                                                                                 │  Research is a later action.
+                                                                                 │
+                                                                                 │
+                                                                                 │  Criteria describe success.
+                                                                                 │  They are not test results.
+                                                                                 │
+                                                                                 │
+   [ Add criterion ]                                                             │  Draft kept in this session.
+                                                                                 │  Nothing saved yet.
+                                                                                 │
+   No criteria yet? Complete them later in Task.                                 │
+                                                                                 │
+                                                                                 │
+                                                                                 │
+
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   No criteria: Task will need completion.
+
+    Create run             Back to task
+
+  Tab Fields  Enter New line  Esc Back                                                   Ctrl+Enter Create run

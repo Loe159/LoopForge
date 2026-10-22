@@ -1,0 +1,1344 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1228" height="908" viewBox="0 0 1228 908"><title>13 / Navigation · États de lecture et actions — maquette fictive</title><rect width="100%" height="100%" fill="#15121B"/><g font-family="Noto Sans Mono, Noto Sans Symbols 2, monospace" font-size="16">
+<text x="14" y="31" fill="#D0BCFF">13 / Navigation · États de lecture et actions</text>
+<text x="14" y="53" fill="#CBC3D7">Bindings existants · Pas de nouvel Alt+1…4 · Slash ouvre la commande, pas une recherche</text>
+<text x="14" y="75" fill="#958EA0">MAQUETTE · Données fictives · Sans action moteur</text>
+<text x="14" y="97" fill="#958EA0"></text>
+<path d="M39 135 L44 135" stroke="#494454" fill="none"/>
+<path d="M39 135 L39 146" stroke="#494454" fill="none"/>
+<path d="M44 135 L54 135" stroke="#494454" fill="none"/>
+<text x="64" y="141" fill="#CBC3D7">L</text>
+<text x="74" y="141" fill="#CBC3D7">i</text>
+<text x="84" y="141" fill="#CBC3D7">v</text>
+<text x="94" y="141" fill="#CBC3D7">e</text>
+<text x="114" y="141" fill="#CBC3D7">·</text>
+<text x="134" y="141" fill="#CBC3D7">m</text>
+<text x="144" y="141" fill="#CBC3D7">o</text>
+<text x="154" y="141" fill="#CBC3D7">d</text>
+<text x="164" y="141" fill="#CBC3D7">e</text>
+<text x="174" y="141" fill="#CBC3D7">s</text>
+<text x="194" y="141" fill="#CBC3D7">e</text>
+<text x="204" y="141" fill="#CBC3D7">t</text>
+<text x="224" y="141" fill="#CBC3D7">s</text>
+<text x="234" y="141" fill="#CBC3D7">u</text>
+<text x="244" y="141" fill="#CBC3D7">i</text>
+<text x="254" y="141" fill="#CBC3D7">v</text>
+<text x="264" y="141" fill="#CBC3D7">i</text>
+<path d="M284 135 L294 135" stroke="#494454" fill="none"/>
+<path d="M294 135 L304 135" stroke="#494454" fill="none"/>
+<path d="M304 135 L314 135" stroke="#494454" fill="none"/>
+<path d="M314 135 L324 135" stroke="#494454" fill="none"/>
+<path d="M324 135 L334 135" stroke="#494454" fill="none"/>
+<path d="M334 135 L344 135" stroke="#494454" fill="none"/>
+<path d="M344 135 L354 135" stroke="#494454" fill="none"/>
+<path d="M354 135 L364 135" stroke="#494454" fill="none"/>
+<path d="M364 135 L374 135" stroke="#494454" fill="none"/>
+<path d="M374 135 L384 135" stroke="#494454" fill="none"/>
+<path d="M384 135 L394 135" stroke="#494454" fill="none"/>
+<path d="M394 135 L404 135" stroke="#494454" fill="none"/>
+<path d="M404 135 L414 135" stroke="#494454" fill="none"/>
+<path d="M414 135 L424 135" stroke="#494454" fill="none"/>
+<path d="M424 135 L434 135" stroke="#494454" fill="none"/>
+<path d="M434 135 L444 135" stroke="#494454" fill="none"/>
+<path d="M444 135 L454 135" stroke="#494454" fill="none"/>
+<path d="M454 135 L464 135" stroke="#494454" fill="none"/>
+<path d="M464 135 L474 135" stroke="#494454" fill="none"/>
+<path d="M474 135 L484 135" stroke="#494454" fill="none"/>
+<path d="M484 135 L494 135" stroke="#494454" fill="none"/>
+<path d="M494 135 L504 135" stroke="#494454" fill="none"/>
+<path d="M504 135 L514 135" stroke="#494454" fill="none"/>
+<path d="M514 135 L524 135" stroke="#494454" fill="none"/>
+<path d="M524 135 L534 135" stroke="#494454" fill="none"/>
+<path d="M534 135 L544 135" stroke="#494454" fill="none"/>
+<path d="M544 135 L554 135" stroke="#494454" fill="none"/>
+<path d="M554 135 L564 135" stroke="#494454" fill="none"/>
+<path d="M564 135 L574 135" stroke="#494454" fill="none"/>
+<path d="M574 135 L584 135" stroke="#494454" fill="none"/>
+<path d="M584 135 L594 135" stroke="#494454" fill="none"/>
+<path d="M594 135 L604 135" stroke="#494454" fill="none"/>
+<path d="M604 135 L614 135" stroke="#494454" fill="none"/>
+<path d="M614 135 L624 135" stroke="#494454" fill="none"/>
+<path d="M624 135 L634 135" stroke="#494454" fill="none"/>
+<path d="M634 135 L644 135" stroke="#494454" fill="none"/>
+<path d="M644 135 L654 135" stroke="#494454" fill="none"/>
+<path d="M654 135 L664 135" stroke="#494454" fill="none"/>
+<path d="M664 135 L674 135" stroke="#494454" fill="none"/>
+<path d="M674 135 L684 135" stroke="#494454" fill="none"/>
+<path d="M684 135 L694 135" stroke="#494454" fill="none"/>
+<path d="M694 135 L704 135" stroke="#494454" fill="none"/>
+<path d="M704 135 L714 135" stroke="#494454" fill="none"/>
+<path d="M714 135 L724 135" stroke="#494454" fill="none"/>
+<path d="M724 135 L734 135" stroke="#494454" fill="none"/>
+<path d="M734 135 L744 135" stroke="#494454" fill="none"/>
+<path d="M744 135 L754 135" stroke="#494454" fill="none"/>
+<path d="M754 135 L764 135" stroke="#494454" fill="none"/>
+<path d="M764 135 L774 135" stroke="#494454" fill="none"/>
+<path d="M774 135 L784 135" stroke="#494454" fill="none"/>
+<path d="M784 135 L794 135" stroke="#494454" fill="none"/>
+<path d="M794 135 L804 135" stroke="#494454" fill="none"/>
+<path d="M804 135 L814 135" stroke="#494454" fill="none"/>
+<path d="M814 135 L824 135" stroke="#494454" fill="none"/>
+<path d="M824 135 L834 135" stroke="#494454" fill="none"/>
+<path d="M834 135 L844 135" stroke="#494454" fill="none"/>
+<path d="M844 135 L854 135" stroke="#494454" fill="none"/>
+<path d="M854 135 L864 135" stroke="#494454" fill="none"/>
+<path d="M864 135 L874 135" stroke="#494454" fill="none"/>
+<path d="M874 135 L884 135" stroke="#494454" fill="none"/>
+<path d="M884 135 L894 135" stroke="#494454" fill="none"/>
+<path d="M894 135 L904 135" stroke="#494454" fill="none"/>
+<path d="M904 135 L914 135" stroke="#494454" fill="none"/>
+<path d="M914 135 L924 135" stroke="#494454" fill="none"/>
+<path d="M924 135 L934 135" stroke="#494454" fill="none"/>
+<path d="M934 135 L944 135" stroke="#494454" fill="none"/>
+<path d="M944 135 L954 135" stroke="#494454" fill="none"/>
+<path d="M954 135 L964 135" stroke="#494454" fill="none"/>
+<path d="M964 135 L974 135" stroke="#494454" fill="none"/>
+<path d="M974 135 L984 135" stroke="#494454" fill="none"/>
+<path d="M984 135 L994 135" stroke="#494454" fill="none"/>
+<path d="M994 135 L1004 135" stroke="#494454" fill="none"/>
+<path d="M1004 135 L1014 135" stroke="#494454" fill="none"/>
+<path d="M1014 135 L1024 135" stroke="#494454" fill="none"/>
+<path d="M1024 135 L1034 135" stroke="#494454" fill="none"/>
+<path d="M1034 135 L1044 135" stroke="#494454" fill="none"/>
+<path d="M1044 135 L1054 135" stroke="#494454" fill="none"/>
+<path d="M1054 135 L1064 135" stroke="#494454" fill="none"/>
+<path d="M1064 135 L1074 135" stroke="#494454" fill="none"/>
+<path d="M1074 135 L1084 135" stroke="#494454" fill="none"/>
+<path d="M1084 135 L1094 135" stroke="#494454" fill="none"/>
+<path d="M1094 135 L1104 135" stroke="#494454" fill="none"/>
+<path d="M1104 135 L1114 135" stroke="#494454" fill="none"/>
+<path d="M1114 135 L1124 135" stroke="#494454" fill="none"/>
+<path d="M1124 135 L1134 135" stroke="#494454" fill="none"/>
+<path d="M1134 135 L1144 135" stroke="#494454" fill="none"/>
+<path d="M1144 135 L1154 135" stroke="#494454" fill="none"/>
+<path d="M1154 135 L1164 135" stroke="#494454" fill="none"/>
+<path d="M1164 135 L1174 135" stroke="#494454" fill="none"/>
+<path d="M1174 135 L1184 135" stroke="#494454" fill="none"/>
+<path d="M1184 135 L1189 135" stroke="#494454" fill="none"/>
+<path d="M1189 135 L1189 146" stroke="#494454" fill="none"/>
+<path d="M39 146 L39 168" stroke="#494454" fill="none"/>
+<path d="M1189 146 L1189 168" stroke="#494454" fill="none"/>
+<path d="M39 168 L39 190" stroke="#494454" fill="none"/>
+<rect x="64" y="168" width="10" height="22" fill="#D0BCFF"/>
+<rect x="74" y="168" width="10" height="22" fill="#D0BCFF"/>
+<text x="74" y="185" fill="#0A0A0A">F</text>
+<rect x="84" y="168" width="10" height="22" fill="#D0BCFF"/>
+<text x="84" y="185" fill="#0A0A0A">o</text>
+<rect x="94" y="168" width="10" height="22" fill="#D0BCFF"/>
+<text x="94" y="185" fill="#0A0A0A">c</text>
+<rect x="104" y="168" width="10" height="22" fill="#D0BCFF"/>
+<text x="104" y="185" fill="#0A0A0A">u</text>
+<rect x="114" y="168" width="10" height="22" fill="#D0BCFF"/>
+<text x="114" y="185" fill="#0A0A0A">s</text>
+<rect x="124" y="168" width="10" height="22" fill="#D0BCFF"/>
+<text x="124" y="185" fill="#0A0A0A">e</text>
+<rect x="134" y="168" width="10" height="22" fill="#D0BCFF"/>
+<text x="134" y="185" fill="#0A0A0A">d</text>
+<rect x="144" y="168" width="10" height="22" fill="#D0BCFF"/>
+<text x="174" y="185" fill="#CBC3D7">A</text>
+<text x="184" y="185" fill="#CBC3D7">l</text>
+<text x="194" y="185" fill="#CBC3D7">l</text>
+<text x="234" y="185" fill="#CBC3D7">R</text>
+<text x="244" y="185" fill="#CBC3D7">a</text>
+<text x="254" y="185" fill="#CBC3D7">w</text>
+<text x="374" y="185" fill="#D0BCFF">↓</text>
+<text x="394" y="185" fill="#D0BCFF">7</text>
+<text x="414" y="185" fill="#D0BCFF">n</text>
+<text x="424" y="185" fill="#D0BCFF">e</text>
+<text x="434" y="185" fill="#D0BCFF">w</text>
+<text x="454" y="185" fill="#D0BCFF">e</text>
+<text x="464" y="185" fill="#D0BCFF">v</text>
+<text x="474" y="185" fill="#D0BCFF">e</text>
+<text x="484" y="185" fill="#D0BCFF">n</text>
+<text x="494" y="185" fill="#D0BCFF">t</text>
+<text x="504" y="185" fill="#D0BCFF">s</text>
+<text x="524" y="185" fill="#D0BCFF">·</text>
+<text x="544" y="185" fill="#D0BCFF">F</text>
+<text x="554" y="185" fill="#D0BCFF">o</text>
+<text x="564" y="185" fill="#D0BCFF">l</text>
+<text x="574" y="185" fill="#D0BCFF">l</text>
+<text x="584" y="185" fill="#D0BCFF">o</text>
+<text x="594" y="185" fill="#D0BCFF">w</text>
+<text x="614" y="185" fill="#D0BCFF">l</text>
+<text x="624" y="185" fill="#D0BCFF">i</text>
+<text x="634" y="185" fill="#D0BCFF">v</text>
+<text x="644" y="185" fill="#D0BCFF">e</text>
+<path d="M1189 168 L1189 190" stroke="#494454" fill="none"/>
+<path d="M39 190 L39 212" stroke="#494454" fill="none"/>
+<path d="M1189 190 L1189 212" stroke="#494454" fill="none"/>
+<path d="M39 212 L39 234" stroke="#494454" fill="none"/>
+<text x="64" y="229" fill="#CBC3D7">S</text>
+<text x="74" y="229" fill="#CBC3D7">c</text>
+<text x="84" y="229" fill="#CBC3D7">r</text>
+<text x="94" y="229" fill="#CBC3D7">o</text>
+<text x="104" y="229" fill="#CBC3D7">l</text>
+<text x="114" y="229" fill="#CBC3D7">l</text>
+<text x="134" y="229" fill="#CBC3D7">p</text>
+<text x="144" y="229" fill="#CBC3D7">a</text>
+<text x="154" y="229" fill="#CBC3D7">u</text>
+<text x="164" y="229" fill="#CBC3D7">s</text>
+<text x="174" y="229" fill="#CBC3D7">e</text>
+<text x="184" y="229" fill="#CBC3D7">d</text>
+<text x="204" y="229" fill="#CBC3D7">w</text>
+<text x="214" y="229" fill="#CBC3D7">h</text>
+<text x="224" y="229" fill="#CBC3D7">i</text>
+<text x="234" y="229" fill="#CBC3D7">l</text>
+<text x="244" y="229" fill="#CBC3D7">e</text>
+<text x="264" y="229" fill="#CBC3D7">i</text>
+<text x="274" y="229" fill="#CBC3D7">n</text>
+<text x="284" y="229" fill="#CBC3D7">s</text>
+<text x="294" y="229" fill="#CBC3D7">p</text>
+<text x="304" y="229" fill="#CBC3D7">e</text>
+<text x="314" y="229" fill="#CBC3D7">c</text>
+<text x="324" y="229" fill="#CBC3D7">t</text>
+<text x="334" y="229" fill="#CBC3D7">i</text>
+<text x="344" y="229" fill="#CBC3D7">n</text>
+<text x="354" y="229" fill="#CBC3D7">g</text>
+<text x="374" y="229" fill="#CBC3D7">a</text>
+<text x="394" y="229" fill="#CBC3D7">t</text>
+<text x="404" y="229" fill="#CBC3D7">o</text>
+<text x="414" y="229" fill="#CBC3D7">o</text>
+<text x="424" y="229" fill="#CBC3D7">l</text>
+<text x="434" y="229" fill="#CBC3D7">.</text>
+<path d="M1189 212 L1189 234" stroke="#494454" fill="none"/>
+<path d="M39 234 L39 256" stroke="#494454" fill="none"/>
+<path d="M1189 234 L1189 256" stroke="#494454" fill="none"/>
+<path d="M39 256 L39 278" stroke="#494454" fill="none"/>
+<text x="64" y="273" fill="#958EA0">E</text>
+<text x="74" y="273" fill="#958EA0">n</text>
+<text x="84" y="273" fill="#958EA0">t</text>
+<text x="94" y="273" fill="#958EA0">e</text>
+<text x="104" y="273" fill="#958EA0">r</text>
+<text x="114" y="273" fill="#958EA0">/</text>
+<text x="124" y="273" fill="#958EA0">c</text>
+<text x="134" y="273" fill="#958EA0">l</text>
+<text x="144" y="273" fill="#958EA0">i</text>
+<text x="154" y="273" fill="#958EA0">c</text>
+<text x="164" y="273" fill="#958EA0">k</text>
+<text x="184" y="273" fill="#958EA0">F</text>
+<text x="194" y="273" fill="#958EA0">o</text>
+<text x="204" y="273" fill="#958EA0">l</text>
+<text x="214" y="273" fill="#958EA0">l</text>
+<text x="224" y="273" fill="#958EA0">o</text>
+<text x="234" y="273" fill="#958EA0">w</text>
+<text x="254" y="273" fill="#958EA0">l</text>
+<text x="264" y="273" fill="#958EA0">i</text>
+<text x="274" y="273" fill="#958EA0">v</text>
+<text x="284" y="273" fill="#958EA0">e</text>
+<text x="304" y="273" fill="#958EA0">o</text>
+<text x="314" y="273" fill="#958EA0">r</text>
+<text x="334" y="273" fill="#958EA0">E</text>
+<text x="344" y="273" fill="#958EA0">n</text>
+<text x="354" y="273" fill="#958EA0">d</text>
+<text x="374" y="273" fill="#958EA0">r</text>
+<text x="384" y="273" fill="#958EA0">e</text>
+<text x="394" y="273" fill="#958EA0">s</text>
+<text x="404" y="273" fill="#958EA0">t</text>
+<text x="414" y="273" fill="#958EA0">o</text>
+<text x="424" y="273" fill="#958EA0">r</text>
+<text x="434" y="273" fill="#958EA0">e</text>
+<text x="444" y="273" fill="#958EA0">s</text>
+<text x="464" y="273" fill="#958EA0">f</text>
+<text x="474" y="273" fill="#958EA0">o</text>
+<text x="484" y="273" fill="#958EA0">l</text>
+<text x="494" y="273" fill="#958EA0">l</text>
+<text x="504" y="273" fill="#958EA0">o</text>
+<text x="514" y="273" fill="#958EA0">w</text>
+<text x="534" y="273" fill="#958EA0">f</text>
+<text x="544" y="273" fill="#958EA0">o</text>
+<text x="554" y="273" fill="#958EA0">r</text>
+<text x="574" y="273" fill="#958EA0">t</text>
+<text x="584" y="273" fill="#958EA0">h</text>
+<text x="594" y="273" fill="#958EA0">i</text>
+<text x="604" y="273" fill="#958EA0">s</text>
+<text x="624" y="273" fill="#958EA0">s</text>
+<text x="634" y="273" fill="#958EA0">e</text>
+<text x="644" y="273" fill="#958EA0">l</text>
+<text x="654" y="273" fill="#958EA0">e</text>
+<text x="664" y="273" fill="#958EA0">c</text>
+<text x="674" y="273" fill="#958EA0">t</text>
+<text x="684" y="273" fill="#958EA0">e</text>
+<text x="694" y="273" fill="#958EA0">d</text>
+<text x="714" y="273" fill="#958EA0">e</text>
+<text x="724" y="273" fill="#958EA0">x</text>
+<text x="734" y="273" fill="#958EA0">e</text>
+<text x="744" y="273" fill="#958EA0">c</text>
+<text x="754" y="273" fill="#958EA0">u</text>
+<text x="764" y="273" fill="#958EA0">t</text>
+<text x="774" y="273" fill="#958EA0">i</text>
+<text x="784" y="273" fill="#958EA0">o</text>
+<text x="794" y="273" fill="#958EA0">n</text>
+<text x="804" y="273" fill="#958EA0">.</text>
+<path d="M1189 256 L1189 278" stroke="#494454" fill="none"/>
+<path d="M39 278 L39 300" stroke="#494454" fill="none"/>
+<path d="M1189 278 L1189 300" stroke="#494454" fill="none"/>
+<path d="M39 300 L39 311" stroke="#494454" fill="none"/>
+<path d="M39 311 L44 311" stroke="#494454" fill="none"/>
+<path d="M44 311 L54 311" stroke="#494454" fill="none"/>
+<path d="M54 311 L64 311" stroke="#494454" fill="none"/>
+<path d="M64 311 L74 311" stroke="#494454" fill="none"/>
+<path d="M74 311 L84 311" stroke="#494454" fill="none"/>
+<path d="M84 311 L94 311" stroke="#494454" fill="none"/>
+<path d="M94 311 L104 311" stroke="#494454" fill="none"/>
+<path d="M104 311 L114 311" stroke="#494454" fill="none"/>
+<path d="M114 311 L124 311" stroke="#494454" fill="none"/>
+<path d="M124 311 L134 311" stroke="#494454" fill="none"/>
+<path d="M134 311 L144 311" stroke="#494454" fill="none"/>
+<path d="M144 311 L154 311" stroke="#494454" fill="none"/>
+<path d="M154 311 L164 311" stroke="#494454" fill="none"/>
+<path d="M164 311 L174 311" stroke="#494454" fill="none"/>
+<path d="M174 311 L184 311" stroke="#494454" fill="none"/>
+<path d="M184 311 L194 311" stroke="#494454" fill="none"/>
+<path d="M194 311 L204 311" stroke="#494454" fill="none"/>
+<path d="M204 311 L214 311" stroke="#494454" fill="none"/>
+<path d="M214 311 L224 311" stroke="#494454" fill="none"/>
+<path d="M224 311 L234 311" stroke="#494454" fill="none"/>
+<path d="M234 311 L244 311" stroke="#494454" fill="none"/>
+<path d="M244 311 L254 311" stroke="#494454" fill="none"/>
+<path d="M254 311 L264 311" stroke="#494454" fill="none"/>
+<path d="M264 311 L274 311" stroke="#494454" fill="none"/>
+<path d="M274 311 L284 311" stroke="#494454" fill="none"/>
+<path d="M284 311 L294 311" stroke="#494454" fill="none"/>
+<path d="M294 311 L304 311" stroke="#494454" fill="none"/>
+<path d="M304 311 L314 311" stroke="#494454" fill="none"/>
+<path d="M314 311 L324 311" stroke="#494454" fill="none"/>
+<path d="M324 311 L334 311" stroke="#494454" fill="none"/>
+<path d="M334 311 L344 311" stroke="#494454" fill="none"/>
+<path d="M344 311 L354 311" stroke="#494454" fill="none"/>
+<path d="M354 311 L364 311" stroke="#494454" fill="none"/>
+<path d="M364 311 L374 311" stroke="#494454" fill="none"/>
+<path d="M374 311 L384 311" stroke="#494454" fill="none"/>
+<path d="M384 311 L394 311" stroke="#494454" fill="none"/>
+<path d="M394 311 L404 311" stroke="#494454" fill="none"/>
+<path d="M404 311 L414 311" stroke="#494454" fill="none"/>
+<path d="M414 311 L424 311" stroke="#494454" fill="none"/>
+<path d="M424 311 L434 311" stroke="#494454" fill="none"/>
+<path d="M434 311 L444 311" stroke="#494454" fill="none"/>
+<path d="M444 311 L454 311" stroke="#494454" fill="none"/>
+<path d="M454 311 L464 311" stroke="#494454" fill="none"/>
+<path d="M464 311 L474 311" stroke="#494454" fill="none"/>
+<path d="M474 311 L484 311" stroke="#494454" fill="none"/>
+<path d="M484 311 L494 311" stroke="#494454" fill="none"/>
+<path d="M494 311 L504 311" stroke="#494454" fill="none"/>
+<path d="M504 311 L514 311" stroke="#494454" fill="none"/>
+<path d="M514 311 L524 311" stroke="#494454" fill="none"/>
+<path d="M524 311 L534 311" stroke="#494454" fill="none"/>
+<path d="M534 311 L544 311" stroke="#494454" fill="none"/>
+<path d="M544 311 L554 311" stroke="#494454" fill="none"/>
+<path d="M554 311 L564 311" stroke="#494454" fill="none"/>
+<path d="M564 311 L574 311" stroke="#494454" fill="none"/>
+<path d="M574 311 L584 311" stroke="#494454" fill="none"/>
+<path d="M584 311 L594 311" stroke="#494454" fill="none"/>
+<path d="M594 311 L604 311" stroke="#494454" fill="none"/>
+<path d="M604 311 L614 311" stroke="#494454" fill="none"/>
+<path d="M614 311 L624 311" stroke="#494454" fill="none"/>
+<path d="M624 311 L634 311" stroke="#494454" fill="none"/>
+<path d="M634 311 L644 311" stroke="#494454" fill="none"/>
+<path d="M644 311 L654 311" stroke="#494454" fill="none"/>
+<path d="M654 311 L664 311" stroke="#494454" fill="none"/>
+<path d="M664 311 L674 311" stroke="#494454" fill="none"/>
+<path d="M674 311 L684 311" stroke="#494454" fill="none"/>
+<path d="M684 311 L694 311" stroke="#494454" fill="none"/>
+<path d="M694 311 L704 311" stroke="#494454" fill="none"/>
+<path d="M704 311 L714 311" stroke="#494454" fill="none"/>
+<path d="M714 311 L724 311" stroke="#494454" fill="none"/>
+<path d="M724 311 L734 311" stroke="#494454" fill="none"/>
+<path d="M734 311 L744 311" stroke="#494454" fill="none"/>
+<path d="M744 311 L754 311" stroke="#494454" fill="none"/>
+<path d="M754 311 L764 311" stroke="#494454" fill="none"/>
+<path d="M764 311 L774 311" stroke="#494454" fill="none"/>
+<path d="M774 311 L784 311" stroke="#494454" fill="none"/>
+<path d="M784 311 L794 311" stroke="#494454" fill="none"/>
+<path d="M794 311 L804 311" stroke="#494454" fill="none"/>
+<path d="M804 311 L814 311" stroke="#494454" fill="none"/>
+<path d="M814 311 L824 311" stroke="#494454" fill="none"/>
+<path d="M824 311 L834 311" stroke="#494454" fill="none"/>
+<path d="M834 311 L844 311" stroke="#494454" fill="none"/>
+<path d="M844 311 L854 311" stroke="#494454" fill="none"/>
+<path d="M854 311 L864 311" stroke="#494454" fill="none"/>
+<path d="M864 311 L874 311" stroke="#494454" fill="none"/>
+<path d="M874 311 L884 311" stroke="#494454" fill="none"/>
+<path d="M884 311 L894 311" stroke="#494454" fill="none"/>
+<path d="M894 311 L904 311" stroke="#494454" fill="none"/>
+<path d="M904 311 L914 311" stroke="#494454" fill="none"/>
+<path d="M914 311 L924 311" stroke="#494454" fill="none"/>
+<path d="M924 311 L934 311" stroke="#494454" fill="none"/>
+<path d="M934 311 L944 311" stroke="#494454" fill="none"/>
+<path d="M944 311 L954 311" stroke="#494454" fill="none"/>
+<path d="M954 311 L964 311" stroke="#494454" fill="none"/>
+<path d="M964 311 L974 311" stroke="#494454" fill="none"/>
+<path d="M974 311 L984 311" stroke="#494454" fill="none"/>
+<path d="M984 311 L994 311" stroke="#494454" fill="none"/>
+<path d="M994 311 L1004 311" stroke="#494454" fill="none"/>
+<path d="M1004 311 L1014 311" stroke="#494454" fill="none"/>
+<path d="M1014 311 L1024 311" stroke="#494454" fill="none"/>
+<path d="M1024 311 L1034 311" stroke="#494454" fill="none"/>
+<path d="M1034 311 L1044 311" stroke="#494454" fill="none"/>
+<path d="M1044 311 L1054 311" stroke="#494454" fill="none"/>
+<path d="M1054 311 L1064 311" stroke="#494454" fill="none"/>
+<path d="M1064 311 L1074 311" stroke="#494454" fill="none"/>
+<path d="M1074 311 L1084 311" stroke="#494454" fill="none"/>
+<path d="M1084 311 L1094 311" stroke="#494454" fill="none"/>
+<path d="M1094 311 L1104 311" stroke="#494454" fill="none"/>
+<path d="M1104 311 L1114 311" stroke="#494454" fill="none"/>
+<path d="M1114 311 L1124 311" stroke="#494454" fill="none"/>
+<path d="M1124 311 L1134 311" stroke="#494454" fill="none"/>
+<path d="M1134 311 L1144 311" stroke="#494454" fill="none"/>
+<path d="M1144 311 L1154 311" stroke="#494454" fill="none"/>
+<path d="M1154 311 L1164 311" stroke="#494454" fill="none"/>
+<path d="M1164 311 L1174 311" stroke="#494454" fill="none"/>
+<path d="M1174 311 L1184 311" stroke="#494454" fill="none"/>
+<path d="M1189 300 L1189 311" stroke="#494454" fill="none"/>
+<path d="M1184 311 L1189 311" stroke="#494454" fill="none"/>
+<path d="M39 377 L44 377" stroke="#494454" fill="none"/>
+<path d="M39 377 L39 388" stroke="#494454" fill="none"/>
+<path d="M44 377 L54 377" stroke="#494454" fill="none"/>
+<text x="64" y="383" fill="#CBC3D7">R</text>
+<text x="74" y="383" fill="#CBC3D7">a</text>
+<text x="84" y="383" fill="#CBC3D7">w</text>
+<text x="104" y="383" fill="#CBC3D7">·</text>
+<text x="124" y="383" fill="#CBC3D7">s</text>
+<text x="134" y="383" fill="#CBC3D7">o</text>
+<text x="144" y="383" fill="#CBC3D7">u</text>
+<text x="154" y="383" fill="#CBC3D7">r</text>
+<text x="164" y="383" fill="#CBC3D7">c</text>
+<text x="174" y="383" fill="#CBC3D7">e</text>
+<text x="194" y="383" fill="#CBC3D7">r</text>
+<text x="204" y="383" fill="#CBC3D7">e</text>
+<text x="214" y="383" fill="#CBC3D7">t</text>
+<text x="224" y="383" fill="#CBC3D7">a</text>
+<text x="234" y="383" fill="#CBC3D7">i</text>
+<text x="244" y="383" fill="#CBC3D7">n</text>
+<text x="254" y="383" fill="#CBC3D7">e</text>
+<text x="264" y="383" fill="#CBC3D7">d</text>
+<path d="M284 377 L294 377" stroke="#494454" fill="none"/>
+<path d="M294 377 L304 377" stroke="#494454" fill="none"/>
+<path d="M304 377 L314 377" stroke="#494454" fill="none"/>
+<path d="M314 377 L324 377" stroke="#494454" fill="none"/>
+<path d="M324 377 L334 377" stroke="#494454" fill="none"/>
+<path d="M334 377 L344 377" stroke="#494454" fill="none"/>
+<path d="M344 377 L354 377" stroke="#494454" fill="none"/>
+<path d="M354 377 L364 377" stroke="#494454" fill="none"/>
+<path d="M364 377 L374 377" stroke="#494454" fill="none"/>
+<path d="M374 377 L384 377" stroke="#494454" fill="none"/>
+<path d="M384 377 L394 377" stroke="#494454" fill="none"/>
+<path d="M394 377 L404 377" stroke="#494454" fill="none"/>
+<path d="M404 377 L414 377" stroke="#494454" fill="none"/>
+<path d="M414 377 L424 377" stroke="#494454" fill="none"/>
+<path d="M424 377 L434 377" stroke="#494454" fill="none"/>
+<path d="M434 377 L444 377" stroke="#494454" fill="none"/>
+<path d="M444 377 L454 377" stroke="#494454" fill="none"/>
+<path d="M454 377 L464 377" stroke="#494454" fill="none"/>
+<path d="M464 377 L474 377" stroke="#494454" fill="none"/>
+<path d="M474 377 L484 377" stroke="#494454" fill="none"/>
+<path d="M484 377 L494 377" stroke="#494454" fill="none"/>
+<path d="M494 377 L504 377" stroke="#494454" fill="none"/>
+<path d="M504 377 L514 377" stroke="#494454" fill="none"/>
+<path d="M514 377 L524 377" stroke="#494454" fill="none"/>
+<path d="M524 377 L534 377" stroke="#494454" fill="none"/>
+<path d="M534 377 L544 377" stroke="#494454" fill="none"/>
+<path d="M544 377 L554 377" stroke="#494454" fill="none"/>
+<path d="M554 377 L564 377" stroke="#494454" fill="none"/>
+<path d="M564 377 L574 377" stroke="#494454" fill="none"/>
+<path d="M574 377 L579 377" stroke="#494454" fill="none"/>
+<path d="M579 377 L579 388" stroke="#494454" fill="none"/>
+<path d="M649 377 L654 377" stroke="#494454" fill="none"/>
+<path d="M649 377 L649 388" stroke="#494454" fill="none"/>
+<path d="M654 377 L664 377" stroke="#494454" fill="none"/>
+<text x="674" y="383" fill="#CBC3D7">P</text>
+<text x="684" y="383" fill="#CBC3D7">l</text>
+<text x="694" y="383" fill="#CBC3D7">a</text>
+<text x="704" y="383" fill="#CBC3D7">i</text>
+<text x="714" y="383" fill="#CBC3D7">n</text>
+<text x="734" y="383" fill="#CBC3D7">t</text>
+<text x="744" y="383" fill="#CBC3D7">e</text>
+<text x="754" y="383" fill="#CBC3D7">x</text>
+<text x="764" y="383" fill="#CBC3D7">t</text>
+<text x="784" y="383" fill="#CBC3D7">r</text>
+<text x="794" y="383" fill="#CBC3D7">e</text>
+<text x="804" y="383" fill="#CBC3D7">m</text>
+<text x="814" y="383" fill="#CBC3D7">a</text>
+<text x="824" y="383" fill="#CBC3D7">i</text>
+<text x="834" y="383" fill="#CBC3D7">n</text>
+<text x="844" y="383" fill="#CBC3D7">s</text>
+<text x="864" y="383" fill="#CBC3D7">i</text>
+<text x="874" y="383" fill="#CBC3D7">n</text>
+<text x="884" y="383" fill="#CBC3D7">e</text>
+<text x="894" y="383" fill="#CBC3D7">r</text>
+<text x="904" y="383" fill="#CBC3D7">t</text>
+<path d="M924 377 L934 377" stroke="#494454" fill="none"/>
+<path d="M934 377 L944 377" stroke="#494454" fill="none"/>
+<path d="M944 377 L954 377" stroke="#494454" fill="none"/>
+<path d="M954 377 L964 377" stroke="#494454" fill="none"/>
+<path d="M964 377 L974 377" stroke="#494454" fill="none"/>
+<path d="M974 377 L984 377" stroke="#494454" fill="none"/>
+<path d="M984 377 L994 377" stroke="#494454" fill="none"/>
+<path d="M994 377 L1004 377" stroke="#494454" fill="none"/>
+<path d="M1004 377 L1014 377" stroke="#494454" fill="none"/>
+<path d="M1014 377 L1024 377" stroke="#494454" fill="none"/>
+<path d="M1024 377 L1034 377" stroke="#494454" fill="none"/>
+<path d="M1034 377 L1044 377" stroke="#494454" fill="none"/>
+<path d="M1044 377 L1054 377" stroke="#494454" fill="none"/>
+<path d="M1054 377 L1064 377" stroke="#494454" fill="none"/>
+<path d="M1064 377 L1074 377" stroke="#494454" fill="none"/>
+<path d="M1074 377 L1084 377" stroke="#494454" fill="none"/>
+<path d="M1084 377 L1094 377" stroke="#494454" fill="none"/>
+<path d="M1094 377 L1104 377" stroke="#494454" fill="none"/>
+<path d="M1104 377 L1114 377" stroke="#494454" fill="none"/>
+<path d="M1114 377 L1124 377" stroke="#494454" fill="none"/>
+<path d="M1124 377 L1134 377" stroke="#494454" fill="none"/>
+<path d="M1134 377 L1144 377" stroke="#494454" fill="none"/>
+<path d="M1144 377 L1154 377" stroke="#494454" fill="none"/>
+<path d="M1154 377 L1164 377" stroke="#494454" fill="none"/>
+<path d="M1164 377 L1174 377" stroke="#494454" fill="none"/>
+<path d="M1174 377 L1184 377" stroke="#494454" fill="none"/>
+<path d="M1184 377 L1189 377" stroke="#494454" fill="none"/>
+<path d="M1189 377 L1189 388" stroke="#494454" fill="none"/>
+<path d="M39 388 L39 410" stroke="#494454" fill="none"/>
+<path d="M579 388 L579 410" stroke="#494454" fill="none"/>
+<path d="M649 388 L649 410" stroke="#494454" fill="none"/>
+<path d="M1189 388 L1189 410" stroke="#494454" fill="none"/>
+<path d="M39 410 L39 432" stroke="#494454" fill="none"/>
+<text x="64" y="427" fill="#CBC3D7">a</text>
+<text x="74" y="427" fill="#CBC3D7">g</text>
+<text x="84" y="427" fill="#CBC3D7">e</text>
+<text x="94" y="427" fill="#CBC3D7">n</text>
+<text x="104" y="427" fill="#CBC3D7">t</text>
+<text x="114" y="427" fill="#CBC3D7">-</text>
+<text x="124" y="427" fill="#CBC3D7">t</text>
+<text x="134" y="427" fill="#CBC3D7">r</text>
+<text x="144" y="427" fill="#CBC3D7">a</text>
+<text x="154" y="427" fill="#CBC3D7">n</text>
+<text x="164" y="427" fill="#CBC3D7">s</text>
+<text x="174" y="427" fill="#CBC3D7">c</text>
+<text x="184" y="427" fill="#CBC3D7">r</text>
+<text x="194" y="427" fill="#CBC3D7">i</text>
+<text x="204" y="427" fill="#CBC3D7">p</text>
+<text x="214" y="427" fill="#CBC3D7">t</text>
+<text x="224" y="427" fill="#CBC3D7">.</text>
+<text x="234" y="427" fill="#CBC3D7">l</text>
+<text x="244" y="427" fill="#CBC3D7">o</text>
+<text x="254" y="427" fill="#CBC3D7">g</text>
+<text x="274" y="427" fill="#CBC3D7">·</text>
+<text x="294" y="427" fill="#CBC3D7">b</text>
+<text x="304" y="427" fill="#CBC3D7">o</text>
+<text x="314" y="427" fill="#CBC3D7">u</text>
+<text x="324" y="427" fill="#CBC3D7">n</text>
+<text x="334" y="427" fill="#CBC3D7">d</text>
+<text x="344" y="427" fill="#CBC3D7">e</text>
+<text x="354" y="427" fill="#CBC3D7">d</text>
+<text x="374" y="427" fill="#CBC3D7">c</text>
+<text x="384" y="427" fill="#CBC3D7">a</text>
+<text x="394" y="427" fill="#CBC3D7">p</text>
+<text x="404" y="427" fill="#CBC3D7">t</text>
+<text x="414" y="427" fill="#CBC3D7">u</text>
+<text x="424" y="427" fill="#CBC3D7">r</text>
+<text x="434" y="427" fill="#CBC3D7">e</text>
+<path d="M579 410 L579 432" stroke="#494454" fill="none"/>
+<path d="M649 410 L649 432" stroke="#494454" fill="none"/>
+<rect x="674" y="410" width="10" height="22" fill="#1D1A23"/>
+<rect x="684" y="410" width="10" height="22" fill="#1D1A23"/>
+<text x="684" y="427" fill="#E7E0ED">d</text>
+<rect x="694" y="410" width="10" height="22" fill="#1D1A23"/>
+<text x="694" y="427" fill="#E7E0ED">e</text>
+<rect x="704" y="410" width="10" height="22" fill="#1D1A23"/>
+<text x="704" y="427" fill="#E7E0ED">s</text>
+<rect x="714" y="410" width="10" height="22" fill="#1D1A23"/>
+<text x="714" y="427" fill="#E7E0ED">c</text>
+<rect x="724" y="410" width="10" height="22" fill="#1D1A23"/>
+<text x="724" y="427" fill="#E7E0ED">r</text>
+<rect x="734" y="410" width="10" height="22" fill="#1D1A23"/>
+<text x="734" y="427" fill="#E7E0ED">i</text>
+<rect x="744" y="410" width="10" height="22" fill="#1D1A23"/>
+<text x="744" y="427" fill="#E7E0ED">b</text>
+<rect x="754" y="410" width="10" height="22" fill="#1D1A23"/>
+<text x="754" y="427" fill="#E7E0ED">e</text>
+<rect x="764" y="410" width="10" height="22" fill="#1D1A23"/>
+<rect x="774" y="410" width="10" height="22" fill="#1D1A23"/>
+<text x="774" y="427" fill="#E7E0ED">a</text>
+<rect x="784" y="410" width="10" height="22" fill="#1D1A23"/>
+<text x="784" y="427" fill="#E7E0ED">u</text>
+<rect x="794" y="410" width="10" height="22" fill="#1D1A23"/>
+<text x="794" y="427" fill="#E7E0ED">t</text>
+<rect x="804" y="410" width="10" height="22" fill="#1D1A23"/>
+<text x="804" y="427" fill="#E7E0ED">h</text>
+<rect x="814" y="410" width="10" height="22" fill="#1D1A23"/>
+<text x="814" y="427" fill="#E7E0ED">e</text>
+<rect x="824" y="410" width="10" height="22" fill="#1D1A23"/>
+<text x="824" y="427" fill="#E7E0ED">n</text>
+<rect x="834" y="410" width="10" height="22" fill="#1D1A23"/>
+<text x="834" y="427" fill="#E7E0ED">t</text>
+<rect x="844" y="410" width="10" height="22" fill="#1D1A23"/>
+<text x="844" y="427" fill="#E7E0ED">i</text>
+<rect x="854" y="410" width="10" height="22" fill="#1D1A23"/>
+<text x="854" y="427" fill="#E7E0ED">c</text>
+<rect x="864" y="410" width="10" height="22" fill="#1D1A23"/>
+<text x="864" y="427" fill="#E7E0ED">a</text>
+<rect x="874" y="410" width="10" height="22" fill="#1D1A23"/>
+<text x="874" y="427" fill="#E7E0ED">t</text>
+<rect x="884" y="410" width="10" height="22" fill="#1D1A23"/>
+<text x="884" y="427" fill="#E7E0ED">i</text>
+<rect x="894" y="410" width="10" height="22" fill="#1D1A23"/>
+<text x="894" y="427" fill="#E7E0ED">o</text>
+<rect x="904" y="410" width="10" height="22" fill="#1D1A23"/>
+<text x="904" y="427" fill="#E7E0ED">n</text>
+<rect x="914" y="410" width="10" height="22" fill="#1D1A23"/>
+<rect x="924" y="410" width="10" height="22" fill="#1D1A23"/>
+<rect x="934" y="410" width="10" height="22" fill="#1D1A23"/>
+<rect x="944" y="410" width="10" height="22" fill="#1D1A23"/>
+<rect x="954" y="410" width="10" height="22" fill="#1D1A23"/>
+<rect x="964" y="410" width="10" height="22" fill="#1D1A23"/>
+<rect x="974" y="410" width="10" height="22" fill="#1D1A23"/>
+<rect x="984" y="410" width="10" height="22" fill="#1D1A23"/>
+<rect x="994" y="410" width="10" height="22" fill="#1D1A23"/>
+<rect x="1004" y="410" width="10" height="22" fill="#1D1A23"/>
+<rect x="1014" y="410" width="10" height="22" fill="#1D1A23"/>
+<rect x="1024" y="410" width="10" height="22" fill="#1D1A23"/>
+<rect x="1034" y="410" width="10" height="22" fill="#1D1A23"/>
+<rect x="1044" y="410" width="10" height="22" fill="#1D1A23"/>
+<rect x="1054" y="410" width="10" height="22" fill="#1D1A23"/>
+<rect x="1064" y="410" width="10" height="22" fill="#1D1A23"/>
+<rect x="1074" y="410" width="10" height="22" fill="#1D1A23"/>
+<rect x="1084" y="410" width="10" height="22" fill="#1D1A23"/>
+<rect x="1094" y="410" width="10" height="22" fill="#1D1A23"/>
+<rect x="1104" y="410" width="10" height="22" fill="#1D1A23"/>
+<rect x="1114" y="410" width="10" height="22" fill="#1D1A23"/>
+<rect x="1124" y="410" width="10" height="22" fill="#1D1A23"/>
+<rect x="1134" y="410" width="10" height="22" fill="#1D1A23"/>
+<rect x="1144" y="410" width="10" height="22" fill="#1D1A23"/>
+<rect x="1154" y="410" width="10" height="22" fill="#1D1A23"/>
+<path d="M1189 410 L1189 432" stroke="#494454" fill="none"/>
+<path d="M39 432 L39 454" stroke="#494454" fill="none"/>
+<path d="M579 432 L579 454" stroke="#494454" fill="none"/>
+<path d="M649 432 L649 454" stroke="#494454" fill="none"/>
+<path d="M1189 432 L1189 454" stroke="#494454" fill="none"/>
+<path d="M39 454 L39 476" stroke="#494454" fill="none"/>
+<text x="64" y="471" fill="#CBC3D7">[</text>
+<text x="74" y="471" fill="#CBC3D7">l</text>
+<text x="84" y="471" fill="#CBC3D7">i</text>
+<text x="94" y="471" fill="#CBC3D7">t</text>
+<text x="104" y="471" fill="#CBC3D7">e</text>
+<text x="114" y="471" fill="#CBC3D7">r</text>
+<text x="124" y="471" fill="#CBC3D7">a</text>
+<text x="134" y="471" fill="#CBC3D7">l</text>
+<text x="154" y="471" fill="#CBC3D7">s</text>
+<text x="164" y="471" fill="#CBC3D7">o</text>
+<text x="174" y="471" fill="#CBC3D7">u</text>
+<text x="184" y="471" fill="#CBC3D7">r</text>
+<text x="194" y="471" fill="#CBC3D7">c</text>
+<text x="204" y="471" fill="#CBC3D7">e</text>
+<text x="224" y="471" fill="#CBC3D7">t</text>
+<text x="234" y="471" fill="#CBC3D7">e</text>
+<text x="244" y="471" fill="#CBC3D7">x</text>
+<text x="254" y="471" fill="#CBC3D7">t</text>
+<text x="264" y="471" fill="#CBC3D7">,</text>
+<text x="284" y="471" fill="#CBC3D7">n</text>
+<text x="294" y="471" fill="#CBC3D7">o</text>
+<text x="314" y="471" fill="#CBC3D7">r</text>
+<text x="324" y="471" fill="#CBC3D7">e</text>
+<text x="334" y="471" fill="#CBC3D7">n</text>
+<text x="344" y="471" fill="#CBC3D7">d</text>
+<text x="354" y="471" fill="#CBC3D7">e</text>
+<text x="364" y="471" fill="#CBC3D7">r</text>
+<text x="374" y="471" fill="#CBC3D7">e</text>
+<text x="384" y="471" fill="#CBC3D7">d</text>
+<text x="404" y="471" fill="#CBC3D7">M</text>
+<text x="414" y="471" fill="#CBC3D7">a</text>
+<text x="424" y="471" fill="#CBC3D7">r</text>
+<text x="434" y="471" fill="#CBC3D7">k</text>
+<text x="444" y="471" fill="#CBC3D7">d</text>
+<text x="454" y="471" fill="#CBC3D7">o</text>
+<text x="464" y="471" fill="#CBC3D7">w</text>
+<text x="474" y="471" fill="#CBC3D7">n</text>
+<text x="484" y="471" fill="#CBC3D7">]</text>
+<path d="M579 454 L579 476" stroke="#494454" fill="none"/>
+<path d="M649 454 L649 476" stroke="#494454" fill="none"/>
+<text x="674" y="471" fill="#CBC3D7">E</text>
+<text x="684" y="471" fill="#CBC3D7">n</text>
+<text x="694" y="471" fill="#CBC3D7">t</text>
+<text x="704" y="471" fill="#CBC3D7">e</text>
+<text x="714" y="471" fill="#CBC3D7">r</text>
+<text x="734" y="471" fill="#CBC3D7">d</text>
+<text x="744" y="471" fill="#CBC3D7">o</text>
+<text x="754" y="471" fill="#CBC3D7">e</text>
+<text x="764" y="471" fill="#CBC3D7">s</text>
+<text x="784" y="471" fill="#CBC3D7">n</text>
+<text x="794" y="471" fill="#CBC3D7">o</text>
+<text x="804" y="471" fill="#CBC3D7">t</text>
+<text x="824" y="471" fill="#CBC3D7">e</text>
+<text x="834" y="471" fill="#CBC3D7">x</text>
+<text x="844" y="471" fill="#CBC3D7">e</text>
+<text x="854" y="471" fill="#CBC3D7">c</text>
+<text x="864" y="471" fill="#CBC3D7">u</text>
+<text x="874" y="471" fill="#CBC3D7">t</text>
+<text x="884" y="471" fill="#CBC3D7">e</text>
+<text x="904" y="471" fill="#CBC3D7">t</text>
+<text x="914" y="471" fill="#CBC3D7">h</text>
+<text x="924" y="471" fill="#CBC3D7">i</text>
+<text x="934" y="471" fill="#CBC3D7">s</text>
+<text x="954" y="471" fill="#CBC3D7">t</text>
+<text x="964" y="471" fill="#CBC3D7">e</text>
+<text x="974" y="471" fill="#CBC3D7">x</text>
+<text x="984" y="471" fill="#CBC3D7">t</text>
+<text x="994" y="471" fill="#CBC3D7">.</text>
+<path d="M1189 454 L1189 476" stroke="#494454" fill="none"/>
+<path d="M39 476 L39 498" stroke="#494454" fill="none"/>
+<path d="M579 476 L579 498" stroke="#494454" fill="none"/>
+<path d="M649 476 L649 498" stroke="#494454" fill="none"/>
+<path d="M1189 476 L1189 498" stroke="#494454" fill="none"/>
+<path d="M39 498 L39 520" stroke="#494454" fill="none"/>
+<text x="64" y="515" fill="#958EA0">B</text>
+<text x="74" y="515" fill="#958EA0">o</text>
+<text x="84" y="515" fill="#958EA0">u</text>
+<text x="94" y="515" fill="#958EA0">n</text>
+<text x="104" y="515" fill="#958EA0">d</text>
+<text x="114" y="515" fill="#958EA0">e</text>
+<text x="124" y="515" fill="#958EA0">d</text>
+<text x="144" y="515" fill="#958EA0">c</text>
+<text x="154" y="515" fill="#958EA0">a</text>
+<text x="164" y="515" fill="#958EA0">p</text>
+<text x="174" y="515" fill="#958EA0">t</text>
+<text x="184" y="515" fill="#958EA0">u</text>
+<text x="194" y="515" fill="#958EA0">r</text>
+<text x="204" y="515" fill="#958EA0">e</text>
+<text x="224" y="515" fill="#958EA0">≠</text>
+<text x="244" y="515" fill="#958EA0">c</text>
+<text x="254" y="515" fill="#958EA0">o</text>
+<text x="264" y="515" fill="#958EA0">m</text>
+<text x="274" y="515" fill="#958EA0">p</text>
+<text x="284" y="515" fill="#958EA0">l</text>
+<text x="294" y="515" fill="#958EA0">e</text>
+<text x="304" y="515" fill="#958EA0">t</text>
+<text x="314" y="515" fill="#958EA0">e</text>
+<text x="334" y="515" fill="#958EA0">n</text>
+<text x="344" y="515" fill="#958EA0">a</text>
+<text x="354" y="515" fill="#958EA0">t</text>
+<text x="364" y="515" fill="#958EA0">i</text>
+<text x="374" y="515" fill="#958EA0">v</text>
+<text x="384" y="515" fill="#958EA0">e</text>
+<text x="404" y="515" fill="#958EA0">l</text>
+<text x="414" y="515" fill="#958EA0">o</text>
+<text x="424" y="515" fill="#958EA0">g</text>
+<text x="434" y="515" fill="#958EA0">.</text>
+<path d="M579 498 L579 520" stroke="#494454" fill="none"/>
+<path d="M649 498 L649 520" stroke="#494454" fill="none"/>
+<text x="674" y="515" fill="#958EA0">O</text>
+<text x="684" y="515" fill="#958EA0">n</text>
+<text x="694" y="515" fill="#958EA0">l</text>
+<text x="704" y="515" fill="#958EA0">y</text>
+<text x="724" y="515" fill="#958EA0">s</text>
+<text x="734" y="515" fill="#958EA0">l</text>
+<text x="744" y="515" fill="#958EA0">a</text>
+<text x="754" y="515" fill="#958EA0">s</text>
+<text x="764" y="515" fill="#958EA0">h</text>
+<text x="774" y="515" fill="#958EA0">-</text>
+<text x="784" y="515" fill="#958EA0">p</text>
+<text x="794" y="515" fill="#958EA0">r</text>
+<text x="804" y="515" fill="#958EA0">e</text>
+<text x="814" y="515" fill="#958EA0">f</text>
+<text x="824" y="515" fill="#958EA0">i</text>
+<text x="834" y="515" fill="#958EA0">x</text>
+<text x="844" y="515" fill="#958EA0">e</text>
+<text x="854" y="515" fill="#958EA0">d</text>
+<text x="874" y="515" fill="#958EA0">c</text>
+<text x="884" y="515" fill="#958EA0">o</text>
+<text x="894" y="515" fill="#958EA0">m</text>
+<text x="904" y="515" fill="#958EA0">m</text>
+<text x="914" y="515" fill="#958EA0">a</text>
+<text x="924" y="515" fill="#958EA0">n</text>
+<text x="934" y="515" fill="#958EA0">d</text>
+<text x="944" y="515" fill="#958EA0">s</text>
+<text x="964" y="515" fill="#958EA0">d</text>
+<text x="974" y="515" fill="#958EA0">i</text>
+<text x="984" y="515" fill="#958EA0">s</text>
+<text x="994" y="515" fill="#958EA0">p</text>
+<text x="1004" y="515" fill="#958EA0">a</text>
+<text x="1014" y="515" fill="#958EA0">t</text>
+<text x="1024" y="515" fill="#958EA0">c</text>
+<text x="1034" y="515" fill="#958EA0">h</text>
+<text x="1044" y="515" fill="#958EA0">.</text>
+<path d="M1189 498 L1189 520" stroke="#494454" fill="none"/>
+<path d="M39 520 L39 542" stroke="#494454" fill="none"/>
+<path d="M579 520 L579 542" stroke="#494454" fill="none"/>
+<path d="M649 520 L649 542" stroke="#494454" fill="none"/>
+<path d="M1189 520 L1189 542" stroke="#494454" fill="none"/>
+<path d="M39 542 L39 564" stroke="#494454" fill="none"/>
+<path d="M579 542 L579 564" stroke="#494454" fill="none"/>
+<path d="M649 542 L649 564" stroke="#494454" fill="none"/>
+<path d="M1189 542 L1189 564" stroke="#494454" fill="none"/>
+<path d="M39 564 L39 575" stroke="#494454" fill="none"/>
+<path d="M39 575 L44 575" stroke="#494454" fill="none"/>
+<path d="M44 575 L54 575" stroke="#494454" fill="none"/>
+<path d="M54 575 L64 575" stroke="#494454" fill="none"/>
+<path d="M64 575 L74 575" stroke="#494454" fill="none"/>
+<path d="M74 575 L84 575" stroke="#494454" fill="none"/>
+<path d="M84 575 L94 575" stroke="#494454" fill="none"/>
+<path d="M94 575 L104 575" stroke="#494454" fill="none"/>
+<path d="M104 575 L114 575" stroke="#494454" fill="none"/>
+<path d="M114 575 L124 575" stroke="#494454" fill="none"/>
+<path d="M124 575 L134 575" stroke="#494454" fill="none"/>
+<path d="M134 575 L144 575" stroke="#494454" fill="none"/>
+<path d="M144 575 L154 575" stroke="#494454" fill="none"/>
+<path d="M154 575 L164 575" stroke="#494454" fill="none"/>
+<path d="M164 575 L174 575" stroke="#494454" fill="none"/>
+<path d="M174 575 L184 575" stroke="#494454" fill="none"/>
+<path d="M184 575 L194 575" stroke="#494454" fill="none"/>
+<path d="M194 575 L204 575" stroke="#494454" fill="none"/>
+<path d="M204 575 L214 575" stroke="#494454" fill="none"/>
+<path d="M214 575 L224 575" stroke="#494454" fill="none"/>
+<path d="M224 575 L234 575" stroke="#494454" fill="none"/>
+<path d="M234 575 L244 575" stroke="#494454" fill="none"/>
+<path d="M244 575 L254 575" stroke="#494454" fill="none"/>
+<path d="M254 575 L264 575" stroke="#494454" fill="none"/>
+<path d="M264 575 L274 575" stroke="#494454" fill="none"/>
+<path d="M274 575 L284 575" stroke="#494454" fill="none"/>
+<path d="M284 575 L294 575" stroke="#494454" fill="none"/>
+<path d="M294 575 L304 575" stroke="#494454" fill="none"/>
+<path d="M304 575 L314 575" stroke="#494454" fill="none"/>
+<path d="M314 575 L324 575" stroke="#494454" fill="none"/>
+<path d="M324 575 L334 575" stroke="#494454" fill="none"/>
+<path d="M334 575 L344 575" stroke="#494454" fill="none"/>
+<path d="M344 575 L354 575" stroke="#494454" fill="none"/>
+<path d="M354 575 L364 575" stroke="#494454" fill="none"/>
+<path d="M364 575 L374 575" stroke="#494454" fill="none"/>
+<path d="M374 575 L384 575" stroke="#494454" fill="none"/>
+<path d="M384 575 L394 575" stroke="#494454" fill="none"/>
+<path d="M394 575 L404 575" stroke="#494454" fill="none"/>
+<path d="M404 575 L414 575" stroke="#494454" fill="none"/>
+<path d="M414 575 L424 575" stroke="#494454" fill="none"/>
+<path d="M424 575 L434 575" stroke="#494454" fill="none"/>
+<path d="M434 575 L444 575" stroke="#494454" fill="none"/>
+<path d="M444 575 L454 575" stroke="#494454" fill="none"/>
+<path d="M454 575 L464 575" stroke="#494454" fill="none"/>
+<path d="M464 575 L474 575" stroke="#494454" fill="none"/>
+<path d="M474 575 L484 575" stroke="#494454" fill="none"/>
+<path d="M484 575 L494 575" stroke="#494454" fill="none"/>
+<path d="M494 575 L504 575" stroke="#494454" fill="none"/>
+<path d="M504 575 L514 575" stroke="#494454" fill="none"/>
+<path d="M514 575 L524 575" stroke="#494454" fill="none"/>
+<path d="M524 575 L534 575" stroke="#494454" fill="none"/>
+<path d="M534 575 L544 575" stroke="#494454" fill="none"/>
+<path d="M544 575 L554 575" stroke="#494454" fill="none"/>
+<path d="M554 575 L564 575" stroke="#494454" fill="none"/>
+<path d="M564 575 L574 575" stroke="#494454" fill="none"/>
+<path d="M579 564 L579 575" stroke="#494454" fill="none"/>
+<path d="M574 575 L579 575" stroke="#494454" fill="none"/>
+<path d="M649 564 L649 575" stroke="#494454" fill="none"/>
+<path d="M649 575 L654 575" stroke="#494454" fill="none"/>
+<path d="M654 575 L664 575" stroke="#494454" fill="none"/>
+<path d="M664 575 L674 575" stroke="#494454" fill="none"/>
+<path d="M674 575 L684 575" stroke="#494454" fill="none"/>
+<path d="M684 575 L694 575" stroke="#494454" fill="none"/>
+<path d="M694 575 L704 575" stroke="#494454" fill="none"/>
+<path d="M704 575 L714 575" stroke="#494454" fill="none"/>
+<path d="M714 575 L724 575" stroke="#494454" fill="none"/>
+<path d="M724 575 L734 575" stroke="#494454" fill="none"/>
+<path d="M734 575 L744 575" stroke="#494454" fill="none"/>
+<path d="M744 575 L754 575" stroke="#494454" fill="none"/>
+<path d="M754 575 L764 575" stroke="#494454" fill="none"/>
+<path d="M764 575 L774 575" stroke="#494454" fill="none"/>
+<path d="M774 575 L784 575" stroke="#494454" fill="none"/>
+<path d="M784 575 L794 575" stroke="#494454" fill="none"/>
+<path d="M794 575 L804 575" stroke="#494454" fill="none"/>
+<path d="M804 575 L814 575" stroke="#494454" fill="none"/>
+<path d="M814 575 L824 575" stroke="#494454" fill="none"/>
+<path d="M824 575 L834 575" stroke="#494454" fill="none"/>
+<path d="M834 575 L844 575" stroke="#494454" fill="none"/>
+<path d="M844 575 L854 575" stroke="#494454" fill="none"/>
+<path d="M854 575 L864 575" stroke="#494454" fill="none"/>
+<path d="M864 575 L874 575" stroke="#494454" fill="none"/>
+<path d="M874 575 L884 575" stroke="#494454" fill="none"/>
+<path d="M884 575 L894 575" stroke="#494454" fill="none"/>
+<path d="M894 575 L904 575" stroke="#494454" fill="none"/>
+<path d="M904 575 L914 575" stroke="#494454" fill="none"/>
+<path d="M914 575 L924 575" stroke="#494454" fill="none"/>
+<path d="M924 575 L934 575" stroke="#494454" fill="none"/>
+<path d="M934 575 L944 575" stroke="#494454" fill="none"/>
+<path d="M944 575 L954 575" stroke="#494454" fill="none"/>
+<path d="M954 575 L964 575" stroke="#494454" fill="none"/>
+<path d="M964 575 L974 575" stroke="#494454" fill="none"/>
+<path d="M974 575 L984 575" stroke="#494454" fill="none"/>
+<path d="M984 575 L994 575" stroke="#494454" fill="none"/>
+<path d="M994 575 L1004 575" stroke="#494454" fill="none"/>
+<path d="M1004 575 L1014 575" stroke="#494454" fill="none"/>
+<path d="M1014 575 L1024 575" stroke="#494454" fill="none"/>
+<path d="M1024 575 L1034 575" stroke="#494454" fill="none"/>
+<path d="M1034 575 L1044 575" stroke="#494454" fill="none"/>
+<path d="M1044 575 L1054 575" stroke="#494454" fill="none"/>
+<path d="M1054 575 L1064 575" stroke="#494454" fill="none"/>
+<path d="M1064 575 L1074 575" stroke="#494454" fill="none"/>
+<path d="M1074 575 L1084 575" stroke="#494454" fill="none"/>
+<path d="M1084 575 L1094 575" stroke="#494454" fill="none"/>
+<path d="M1094 575 L1104 575" stroke="#494454" fill="none"/>
+<path d="M1104 575 L1114 575" stroke="#494454" fill="none"/>
+<path d="M1114 575 L1124 575" stroke="#494454" fill="none"/>
+<path d="M1124 575 L1134 575" stroke="#494454" fill="none"/>
+<path d="M1134 575 L1144 575" stroke="#494454" fill="none"/>
+<path d="M1144 575 L1154 575" stroke="#494454" fill="none"/>
+<path d="M1154 575 L1164 575" stroke="#494454" fill="none"/>
+<path d="M1164 575 L1174 575" stroke="#494454" fill="none"/>
+<path d="M1174 575 L1184 575" stroke="#494454" fill="none"/>
+<path d="M1189 564 L1189 575" stroke="#494454" fill="none"/>
+<path d="M1184 575 L1189 575" stroke="#494454" fill="none"/>
+<path d="M39 641 L44 641" stroke="#494454" fill="none"/>
+<path d="M39 641 L39 652" stroke="#494454" fill="none"/>
+<path d="M44 641 L54 641" stroke="#494454" fill="none"/>
+<text x="64" y="647" fill="#CBC3D7">B</text>
+<text x="74" y="647" fill="#CBC3D7">l</text>
+<text x="84" y="647" fill="#CBC3D7">o</text>
+<text x="94" y="647" fill="#CBC3D7">c</text>
+<text x="104" y="647" fill="#CBC3D7">k</text>
+<text x="114" y="647" fill="#CBC3D7">e</text>
+<text x="124" y="647" fill="#CBC3D7">d</text>
+<text x="144" y="647" fill="#CBC3D7">·</text>
+<text x="164" y="647" fill="#CBC3D7">n</text>
+<text x="174" y="647" fill="#CBC3D7">o</text>
+<text x="194" y="647" fill="#CBC3D7">e</text>
+<text x="204" y="647" fill="#CBC3D7">l</text>
+<text x="214" y="647" fill="#CBC3D7">i</text>
+<text x="224" y="647" fill="#CBC3D7">g</text>
+<text x="234" y="647" fill="#CBC3D7">i</text>
+<text x="244" y="647" fill="#CBC3D7">b</text>
+<text x="254" y="647" fill="#CBC3D7">l</text>
+<text x="264" y="647" fill="#CBC3D7">e</text>
+<text x="284" y="647" fill="#CBC3D7">p</text>
+<text x="294" y="647" fill="#CBC3D7">r</text>
+<text x="304" y="647" fill="#CBC3D7">i</text>
+<text x="314" y="647" fill="#CBC3D7">m</text>
+<text x="324" y="647" fill="#CBC3D7">a</text>
+<text x="334" y="647" fill="#CBC3D7">r</text>
+<text x="344" y="647" fill="#CBC3D7">y</text>
+<text x="364" y="647" fill="#CBC3D7">a</text>
+<text x="374" y="647" fill="#CBC3D7">c</text>
+<text x="384" y="647" fill="#CBC3D7">t</text>
+<text x="394" y="647" fill="#CBC3D7">i</text>
+<text x="404" y="647" fill="#CBC3D7">o</text>
+<text x="414" y="647" fill="#CBC3D7">n</text>
+<path d="M434 641 L444 641" stroke="#494454" fill="none"/>
+<path d="M444 641 L454 641" stroke="#494454" fill="none"/>
+<path d="M454 641 L464 641" stroke="#494454" fill="none"/>
+<path d="M464 641 L474 641" stroke="#494454" fill="none"/>
+<path d="M474 641 L484 641" stroke="#494454" fill="none"/>
+<path d="M484 641 L494 641" stroke="#494454" fill="none"/>
+<path d="M494 641 L504 641" stroke="#494454" fill="none"/>
+<path d="M504 641 L514 641" stroke="#494454" fill="none"/>
+<path d="M514 641 L524 641" stroke="#494454" fill="none"/>
+<path d="M524 641 L534 641" stroke="#494454" fill="none"/>
+<path d="M534 641 L544 641" stroke="#494454" fill="none"/>
+<path d="M544 641 L554 641" stroke="#494454" fill="none"/>
+<path d="M554 641 L564 641" stroke="#494454" fill="none"/>
+<path d="M564 641 L574 641" stroke="#494454" fill="none"/>
+<path d="M574 641 L579 641" stroke="#494454" fill="none"/>
+<path d="M579 641 L579 652" stroke="#494454" fill="none"/>
+<path d="M649 641 L654 641" stroke="#494454" fill="none"/>
+<path d="M649 641 L649 652" stroke="#494454" fill="none"/>
+<path d="M654 641 L664 641" stroke="#494454" fill="none"/>
+<text x="674" y="647" fill="#CBC3D7">S</text>
+<text x="684" y="647" fill="#CBC3D7">e</text>
+<text x="694" y="647" fill="#CBC3D7">s</text>
+<text x="704" y="647" fill="#CBC3D7">s</text>
+<text x="714" y="647" fill="#CBC3D7">i</text>
+<text x="724" y="647" fill="#CBC3D7">o</text>
+<text x="734" y="647" fill="#CBC3D7">n</text>
+<text x="754" y="647" fill="#CBC3D7">s</text>
+<text x="764" y="647" fill="#CBC3D7">e</text>
+<text x="774" y="647" fill="#CBC3D7">l</text>
+<text x="784" y="647" fill="#CBC3D7">e</text>
+<text x="794" y="647" fill="#CBC3D7">c</text>
+<text x="804" y="647" fill="#CBC3D7">t</text>
+<text x="814" y="647" fill="#CBC3D7">i</text>
+<text x="824" y="647" fill="#CBC3D7">o</text>
+<text x="834" y="647" fill="#CBC3D7">n</text>
+<text x="854" y="647" fill="#CBC3D7">·</text>
+<text x="874" y="647" fill="#CBC3D7">r</text>
+<text x="884" y="647" fill="#CBC3D7">e</text>
+<text x="894" y="647" fill="#CBC3D7">a</text>
+<text x="904" y="647" fill="#CBC3D7">d</text>
+<text x="924" y="647" fill="#CBC3D7">o</text>
+<text x="934" y="647" fill="#CBC3D7">n</text>
+<text x="944" y="647" fill="#CBC3D7">l</text>
+<text x="954" y="647" fill="#CBC3D7">y</text>
+<path d="M974 641 L984 641" stroke="#494454" fill="none"/>
+<path d="M984 641 L994 641" stroke="#494454" fill="none"/>
+<path d="M994 641 L1004 641" stroke="#494454" fill="none"/>
+<path d="M1004 641 L1014 641" stroke="#494454" fill="none"/>
+<path d="M1014 641 L1024 641" stroke="#494454" fill="none"/>
+<path d="M1024 641 L1034 641" stroke="#494454" fill="none"/>
+<path d="M1034 641 L1044 641" stroke="#494454" fill="none"/>
+<path d="M1044 641 L1054 641" stroke="#494454" fill="none"/>
+<path d="M1054 641 L1064 641" stroke="#494454" fill="none"/>
+<path d="M1064 641 L1074 641" stroke="#494454" fill="none"/>
+<path d="M1074 641 L1084 641" stroke="#494454" fill="none"/>
+<path d="M1084 641 L1094 641" stroke="#494454" fill="none"/>
+<path d="M1094 641 L1104 641" stroke="#494454" fill="none"/>
+<path d="M1104 641 L1114 641" stroke="#494454" fill="none"/>
+<path d="M1114 641 L1124 641" stroke="#494454" fill="none"/>
+<path d="M1124 641 L1134 641" stroke="#494454" fill="none"/>
+<path d="M1134 641 L1144 641" stroke="#494454" fill="none"/>
+<path d="M1144 641 L1154 641" stroke="#494454" fill="none"/>
+<path d="M1154 641 L1164 641" stroke="#494454" fill="none"/>
+<path d="M1164 641 L1174 641" stroke="#494454" fill="none"/>
+<path d="M1174 641 L1184 641" stroke="#494454" fill="none"/>
+<path d="M1184 641 L1189 641" stroke="#494454" fill="none"/>
+<path d="M1189 641 L1189 652" stroke="#494454" fill="none"/>
+<path d="M39 652 L39 674" stroke="#494454" fill="none"/>
+<path d="M579 652 L579 674" stroke="#494454" fill="none"/>
+<path d="M649 652 L649 674" stroke="#494454" fill="none"/>
+<path d="M1189 652 L1189 674" stroke="#494454" fill="none"/>
+<path d="M39 674 L39 696" stroke="#494454" fill="none"/>
+<text x="64" y="691" fill="#FFB4AB">B</text>
+<text x="74" y="691" fill="#FFB4AB">L</text>
+<text x="84" y="691" fill="#FFB4AB">O</text>
+<text x="94" y="691" fill="#FFB4AB">C</text>
+<text x="104" y="691" fill="#FFB4AB">K</text>
+<text x="114" y="691" fill="#FFB4AB">E</text>
+<text x="124" y="691" fill="#FFB4AB">D</text>
+<text x="144" y="691" fill="#FFB4AB">—</text>
+<text x="164" y="691" fill="#FFB4AB">A</text>
+<text x="174" y="691" fill="#FFB4AB">C</text>
+<text x="184" y="691" fill="#FFB4AB">T</text>
+<text x="194" y="691" fill="#FFB4AB">I</text>
+<text x="204" y="691" fill="#FFB4AB">O</text>
+<text x="214" y="691" fill="#FFB4AB">N</text>
+<text x="234" y="691" fill="#FFB4AB">R</text>
+<text x="244" y="691" fill="#FFB4AB">E</text>
+<text x="254" y="691" fill="#FFB4AB">Q</text>
+<text x="264" y="691" fill="#FFB4AB">U</text>
+<text x="274" y="691" fill="#FFB4AB">I</text>
+<text x="284" y="691" fill="#FFB4AB">R</text>
+<text x="294" y="691" fill="#FFB4AB">E</text>
+<text x="304" y="691" fill="#FFB4AB">D</text>
+<path d="M579 674 L579 696" stroke="#494454" fill="none"/>
+<path d="M649 674 L649 696" stroke="#494454" fill="none"/>
+<text x="674" y="691" fill="#CBC3D7">A</text>
+<text x="684" y="691" fill="#CBC3D7">t</text>
+<text x="694" y="691" fill="#CBC3D7">t</text>
+<text x="704" y="691" fill="#CBC3D7">e</text>
+<text x="714" y="691" fill="#CBC3D7">m</text>
+<text x="724" y="691" fill="#CBC3D7">p</text>
+<text x="734" y="691" fill="#CBC3D7">t</text>
+<text x="754" y="691" fill="#CBC3D7">0</text>
+<text x="764" y="691" fill="#CBC3D7">1</text>
+<text x="804" y="691" fill="#CBC3D7">A</text>
+<text x="814" y="691" fill="#CBC3D7">t</text>
+<text x="824" y="691" fill="#CBC3D7">t</text>
+<text x="834" y="691" fill="#CBC3D7">e</text>
+<text x="844" y="691" fill="#CBC3D7">m</text>
+<text x="854" y="691" fill="#CBC3D7">p</text>
+<text x="864" y="691" fill="#CBC3D7">t</text>
+<text x="884" y="691" fill="#CBC3D7">0</text>
+<text x="894" y="691" fill="#CBC3D7">2</text>
+<text x="934" y="691" fill="#CBC3D7">S</text>
+<text x="944" y="691" fill="#CBC3D7">e</text>
+<text x="954" y="691" fill="#CBC3D7">s</text>
+<text x="964" y="691" fill="#CBC3D7">s</text>
+<text x="974" y="691" fill="#CBC3D7">i</text>
+<text x="984" y="691" fill="#CBC3D7">o</text>
+<text x="994" y="691" fill="#CBC3D7">n</text>
+<text x="1014" y="691" fill="#CBC3D7">0</text>
+<text x="1024" y="691" fill="#CBC3D7">1</text>
+<path d="M1189 674 L1189 696" stroke="#494454" fill="none"/>
+<path d="M39 696 L39 718" stroke="#494454" fill="none"/>
+<text x="64" y="713" fill="#CBC3D7">I</text>
+<text x="74" y="713" fill="#CBC3D7">n</text>
+<text x="84" y="713" fill="#CBC3D7">s</text>
+<text x="94" y="713" fill="#CBC3D7">p</text>
+<text x="104" y="713" fill="#CBC3D7">e</text>
+<text x="114" y="713" fill="#CBC3D7">c</text>
+<text x="124" y="713" fill="#CBC3D7">t</text>
+<text x="144" y="713" fill="#CBC3D7">r</text>
+<text x="154" y="713" fill="#CBC3D7">e</text>
+<text x="164" y="713" fill="#CBC3D7">t</text>
+<text x="174" y="713" fill="#CBC3D7">a</text>
+<text x="184" y="713" fill="#CBC3D7">i</text>
+<text x="194" y="713" fill="#CBC3D7">n</text>
+<text x="204" y="713" fill="#CBC3D7">e</text>
+<text x="214" y="713" fill="#CBC3D7">d</text>
+<text x="234" y="713" fill="#CBC3D7">e</text>
+<text x="244" y="713" fill="#CBC3D7">v</text>
+<text x="254" y="713" fill="#CBC3D7">i</text>
+<text x="264" y="713" fill="#CBC3D7">d</text>
+<text x="274" y="713" fill="#CBC3D7">e</text>
+<text x="284" y="713" fill="#CBC3D7">n</text>
+<text x="294" y="713" fill="#CBC3D7">c</text>
+<text x="304" y="713" fill="#CBC3D7">e</text>
+<text x="314" y="713" fill="#CBC3D7">.</text>
+<path d="M579 696 L579 718" stroke="#494454" fill="none"/>
+<path d="M649 696 L649 718" stroke="#494454" fill="none"/>
+<path d="M1189 696 L1189 718" stroke="#494454" fill="none"/>
+<path d="M39 718 L39 740" stroke="#494454" fill="none"/>
+<path d="M579 718 L579 740" stroke="#494454" fill="none"/>
+<path d="M649 718 L649 740" stroke="#494454" fill="none"/>
+<text x="674" y="735" fill="#CBC3D7">F</text>
+<text x="684" y="735" fill="#CBC3D7">6</text>
+<text x="694" y="735" fill="#CBC3D7">:</text>
+<text x="714" y="735" fill="#CBC3D7">s</text>
+<text x="724" y="735" fill="#CBC3D7">u</text>
+<text x="734" y="735" fill="#CBC3D7">p</text>
+<text x="744" y="735" fill="#CBC3D7">e</text>
+<text x="754" y="735" fill="#CBC3D7">r</text>
+<text x="764" y="735" fill="#CBC3D7">v</text>
+<text x="774" y="735" fill="#CBC3D7">i</text>
+<text x="784" y="735" fill="#CBC3D7">s</text>
+<text x="794" y="735" fill="#CBC3D7">i</text>
+<text x="804" y="735" fill="#CBC3D7">o</text>
+<text x="814" y="735" fill="#CBC3D7">n</text>
+<text x="834" y="735" fill="#CBC3D7">/</text>
+<text x="854" y="735" fill="#CBC3D7">v</text>
+<text x="864" y="735" fill="#CBC3D7">i</text>
+<text x="874" y="735" fill="#CBC3D7">e</text>
+<text x="884" y="735" fill="#CBC3D7">w</text>
+<text x="894" y="735" fill="#CBC3D7">s</text>
+<text x="914" y="735" fill="#CBC3D7">·</text>
+<text x="934" y="735" fill="#CBC3D7">F</text>
+<text x="944" y="735" fill="#CBC3D7">4</text>
+<text x="954" y="735" fill="#CBC3D7">:</text>
+<text x="974" y="735" fill="#CBC3D7">d</text>
+<text x="984" y="735" fill="#CBC3D7">e</text>
+<text x="994" y="735" fill="#CBC3D7">t</text>
+<text x="1004" y="735" fill="#CBC3D7">a</text>
+<text x="1014" y="735" fill="#CBC3D7">i</text>
+<text x="1024" y="735" fill="#CBC3D7">l</text>
+<path d="M1189 718 L1189 740" stroke="#494454" fill="none"/>
+<path d="M39 740 L39 762" stroke="#494454" fill="none"/>
+<text x="64" y="757" fill="#D0BCFF">C</text>
+<text x="74" y="757" fill="#D0BCFF">t</text>
+<text x="84" y="757" fill="#D0BCFF">r</text>
+<text x="94" y="757" fill="#D0BCFF">l</text>
+<text x="104" y="757" fill="#D0BCFF">+</text>
+<text x="114" y="757" fill="#D0BCFF">K</text>
+<text x="134" y="757" fill="#D0BCFF">O</text>
+<text x="144" y="757" fill="#D0BCFF">t</text>
+<text x="154" y="757" fill="#D0BCFF">h</text>
+<text x="164" y="757" fill="#D0BCFF">e</text>
+<text x="174" y="757" fill="#D0BCFF">r</text>
+<text x="194" y="757" fill="#D0BCFF">a</text>
+<text x="204" y="757" fill="#D0BCFF">c</text>
+<text x="214" y="757" fill="#D0BCFF">t</text>
+<text x="224" y="757" fill="#D0BCFF">i</text>
+<text x="234" y="757" fill="#D0BCFF">o</text>
+<text x="244" y="757" fill="#D0BCFF">n</text>
+<text x="254" y="757" fill="#D0BCFF">s</text>
+<path d="M579 740 L579 762" stroke="#494454" fill="none"/>
+<path d="M649 740 L649 762" stroke="#494454" fill="none"/>
+<text x="674" y="757" fill="#CBC3D7">E</text>
+<text x="684" y="757" fill="#CBC3D7">s</text>
+<text x="694" y="757" fill="#CBC3D7">c</text>
+<text x="704" y="757" fill="#CBC3D7">:</text>
+<text x="724" y="757" fill="#CBC3D7">b</text>
+<text x="734" y="757" fill="#CBC3D7">a</text>
+<text x="744" y="757" fill="#CBC3D7">c</text>
+<text x="754" y="757" fill="#CBC3D7">k</text>
+<text x="774" y="757" fill="#CBC3D7">·</text>
+<text x="794" y="757" fill="#CBC3D7">C</text>
+<text x="804" y="757" fill="#CBC3D7">t</text>
+<text x="814" y="757" fill="#CBC3D7">r</text>
+<text x="824" y="757" fill="#CBC3D7">l</text>
+<text x="834" y="757" fill="#CBC3D7">+</text>
+<text x="844" y="757" fill="#CBC3D7">K</text>
+<text x="854" y="757" fill="#CBC3D7">:</text>
+<text x="874" y="757" fill="#CBC3D7">e</text>
+<text x="884" y="757" fill="#CBC3D7">x</text>
+<text x="894" y="757" fill="#CBC3D7">i</text>
+<text x="904" y="757" fill="#CBC3D7">s</text>
+<text x="914" y="757" fill="#CBC3D7">t</text>
+<text x="924" y="757" fill="#CBC3D7">i</text>
+<text x="934" y="757" fill="#CBC3D7">n</text>
+<text x="944" y="757" fill="#CBC3D7">g</text>
+<text x="964" y="757" fill="#CBC3D7">a</text>
+<text x="974" y="757" fill="#CBC3D7">c</text>
+<text x="984" y="757" fill="#CBC3D7">t</text>
+<text x="994" y="757" fill="#CBC3D7">i</text>
+<text x="1004" y="757" fill="#CBC3D7">o</text>
+<text x="1014" y="757" fill="#CBC3D7">n</text>
+<text x="1024" y="757" fill="#CBC3D7">s</text>
+<path d="M1189 740 L1189 762" stroke="#494454" fill="none"/>
+<path d="M39 762 L39 784" stroke="#494454" fill="none"/>
+<path d="M579 762 L579 784" stroke="#494454" fill="none"/>
+<path d="M649 762 L649 784" stroke="#494454" fill="none"/>
+<path d="M1189 762 L1189 784" stroke="#494454" fill="none"/>
+<path d="M39 784 L39 806" stroke="#494454" fill="none"/>
+<text x="64" y="801" fill="#958EA0">N</text>
+<text x="74" y="801" fill="#958EA0">o</text>
+<text x="94" y="801" fill="#958EA0">i</text>
+<text x="104" y="801" fill="#958EA0">n</text>
+<text x="114" y="801" fill="#958EA0">v</text>
+<text x="124" y="801" fill="#958EA0">e</text>
+<text x="134" y="801" fill="#958EA0">n</text>
+<text x="144" y="801" fill="#958EA0">t</text>
+<text x="154" y="801" fill="#958EA0">e</text>
+<text x="164" y="801" fill="#958EA0">d</text>
+<text x="184" y="801" fill="#958EA0">R</text>
+<text x="194" y="801" fill="#958EA0">e</text>
+<text x="204" y="801" fill="#958EA0">t</text>
+<text x="214" y="801" fill="#958EA0">r</text>
+<text x="224" y="801" fill="#958EA0">y</text>
+<text x="244" y="801" fill="#958EA0">o</text>
+<text x="254" y="801" fill="#958EA0">r</text>
+<text x="274" y="801" fill="#958EA0">A</text>
+<text x="284" y="801" fill="#958EA0">p</text>
+<text x="294" y="801" fill="#958EA0">p</text>
+<text x="304" y="801" fill="#958EA0">r</text>
+<text x="314" y="801" fill="#958EA0">o</text>
+<text x="324" y="801" fill="#958EA0">v</text>
+<text x="334" y="801" fill="#958EA0">e</text>
+<text x="354" y="801" fill="#958EA0">b</text>
+<text x="364" y="801" fill="#958EA0">u</text>
+<text x="374" y="801" fill="#958EA0">t</text>
+<text x="384" y="801" fill="#958EA0">t</text>
+<text x="394" y="801" fill="#958EA0">o</text>
+<text x="404" y="801" fill="#958EA0">n</text>
+<text x="414" y="801" fill="#958EA0">.</text>
+<path d="M579 784 L579 806" stroke="#494454" fill="none"/>
+<path d="M649 784 L649 806" stroke="#494454" fill="none"/>
+<text x="674" y="801" fill="#958EA0">S</text>
+<text x="684" y="801" fill="#958EA0">e</text>
+<text x="694" y="801" fill="#958EA0">l</text>
+<text x="704" y="801" fill="#958EA0">e</text>
+<text x="714" y="801" fill="#958EA0">c</text>
+<text x="724" y="801" fill="#958EA0">t</text>
+<text x="734" y="801" fill="#958EA0">i</text>
+<text x="744" y="801" fill="#958EA0">o</text>
+<text x="754" y="801" fill="#958EA0">n</text>
+<text x="774" y="801" fill="#958EA0">d</text>
+<text x="784" y="801" fill="#958EA0">o</text>
+<text x="794" y="801" fill="#958EA0">e</text>
+<text x="804" y="801" fill="#958EA0">s</text>
+<text x="824" y="801" fill="#958EA0">n</text>
+<text x="834" y="801" fill="#958EA0">o</text>
+<text x="844" y="801" fill="#958EA0">t</text>
+<text x="864" y="801" fill="#958EA0">r</text>
+<text x="874" y="801" fill="#958EA0">e</text>
+<text x="884" y="801" fill="#958EA0">s</text>
+<text x="894" y="801" fill="#958EA0">t</text>
+<text x="904" y="801" fill="#958EA0">a</text>
+<text x="914" y="801" fill="#958EA0">r</text>
+<text x="924" y="801" fill="#958EA0">t</text>
+<text x="944" y="801" fill="#958EA0">t</text>
+<text x="954" y="801" fill="#958EA0">h</text>
+<text x="964" y="801" fill="#958EA0">e</text>
+<text x="984" y="801" fill="#958EA0">a</text>
+<text x="994" y="801" fill="#958EA0">g</text>
+<text x="1004" y="801" fill="#958EA0">e</text>
+<text x="1014" y="801" fill="#958EA0">n</text>
+<text x="1024" y="801" fill="#958EA0">t</text>
+<text x="1034" y="801" fill="#958EA0">.</text>
+<path d="M1189 784 L1189 806" stroke="#494454" fill="none"/>
+<path d="M39 806 L39 828" stroke="#494454" fill="none"/>
+<path d="M579 806 L579 828" stroke="#494454" fill="none"/>
+<path d="M649 806 L649 828" stroke="#494454" fill="none"/>
+<path d="M1189 806 L1189 828" stroke="#494454" fill="none"/>
+<path d="M39 828 L39 839" stroke="#494454" fill="none"/>
+<path d="M39 839 L44 839" stroke="#494454" fill="none"/>
+<path d="M44 839 L54 839" stroke="#494454" fill="none"/>
+<path d="M54 839 L64 839" stroke="#494454" fill="none"/>
+<path d="M64 839 L74 839" stroke="#494454" fill="none"/>
+<path d="M74 839 L84 839" stroke="#494454" fill="none"/>
+<path d="M84 839 L94 839" stroke="#494454" fill="none"/>
+<path d="M94 839 L104 839" stroke="#494454" fill="none"/>
+<path d="M104 839 L114 839" stroke="#494454" fill="none"/>
+<path d="M114 839 L124 839" stroke="#494454" fill="none"/>
+<path d="M124 839 L134 839" stroke="#494454" fill="none"/>
+<path d="M134 839 L144 839" stroke="#494454" fill="none"/>
+<path d="M144 839 L154 839" stroke="#494454" fill="none"/>
+<path d="M154 839 L164 839" stroke="#494454" fill="none"/>
+<path d="M164 839 L174 839" stroke="#494454" fill="none"/>
+<path d="M174 839 L184 839" stroke="#494454" fill="none"/>
+<path d="M184 839 L194 839" stroke="#494454" fill="none"/>
+<path d="M194 839 L204 839" stroke="#494454" fill="none"/>
+<path d="M204 839 L214 839" stroke="#494454" fill="none"/>
+<path d="M214 839 L224 839" stroke="#494454" fill="none"/>
+<path d="M224 839 L234 839" stroke="#494454" fill="none"/>
+<path d="M234 839 L244 839" stroke="#494454" fill="none"/>
+<path d="M244 839 L254 839" stroke="#494454" fill="none"/>
+<path d="M254 839 L264 839" stroke="#494454" fill="none"/>
+<path d="M264 839 L274 839" stroke="#494454" fill="none"/>
+<path d="M274 839 L284 839" stroke="#494454" fill="none"/>
+<path d="M284 839 L294 839" stroke="#494454" fill="none"/>
+<path d="M294 839 L304 839" stroke="#494454" fill="none"/>
+<path d="M304 839 L314 839" stroke="#494454" fill="none"/>
+<path d="M314 839 L324 839" stroke="#494454" fill="none"/>
+<path d="M324 839 L334 839" stroke="#494454" fill="none"/>
+<path d="M334 839 L344 839" stroke="#494454" fill="none"/>
+<path d="M344 839 L354 839" stroke="#494454" fill="none"/>
+<path d="M354 839 L364 839" stroke="#494454" fill="none"/>
+<path d="M364 839 L374 839" stroke="#494454" fill="none"/>
+<path d="M374 839 L384 839" stroke="#494454" fill="none"/>
+<path d="M384 839 L394 839" stroke="#494454" fill="none"/>
+<path d="M394 839 L404 839" stroke="#494454" fill="none"/>
+<path d="M404 839 L414 839" stroke="#494454" fill="none"/>
+<path d="M414 839 L424 839" stroke="#494454" fill="none"/>
+<path d="M424 839 L434 839" stroke="#494454" fill="none"/>
+<path d="M434 839 L444 839" stroke="#494454" fill="none"/>
+<path d="M444 839 L454 839" stroke="#494454" fill="none"/>
+<path d="M454 839 L464 839" stroke="#494454" fill="none"/>
+<path d="M464 839 L474 839" stroke="#494454" fill="none"/>
+<path d="M474 839 L484 839" stroke="#494454" fill="none"/>
+<path d="M484 839 L494 839" stroke="#494454" fill="none"/>
+<path d="M494 839 L504 839" stroke="#494454" fill="none"/>
+<path d="M504 839 L514 839" stroke="#494454" fill="none"/>
+<path d="M514 839 L524 839" stroke="#494454" fill="none"/>
+<path d="M524 839 L534 839" stroke="#494454" fill="none"/>
+<path d="M534 839 L544 839" stroke="#494454" fill="none"/>
+<path d="M544 839 L554 839" stroke="#494454" fill="none"/>
+<path d="M554 839 L564 839" stroke="#494454" fill="none"/>
+<path d="M564 839 L574 839" stroke="#494454" fill="none"/>
+<path d="M579 828 L579 839" stroke="#494454" fill="none"/>
+<path d="M574 839 L579 839" stroke="#494454" fill="none"/>
+<path d="M649 828 L649 839" stroke="#494454" fill="none"/>
+<path d="M649 839 L654 839" stroke="#494454" fill="none"/>
+<path d="M654 839 L664 839" stroke="#494454" fill="none"/>
+<path d="M664 839 L674 839" stroke="#494454" fill="none"/>
+<path d="M674 839 L684 839" stroke="#494454" fill="none"/>
+<path d="M684 839 L694 839" stroke="#494454" fill="none"/>
+<path d="M694 839 L704 839" stroke="#494454" fill="none"/>
+<path d="M704 839 L714 839" stroke="#494454" fill="none"/>
+<path d="M714 839 L724 839" stroke="#494454" fill="none"/>
+<path d="M724 839 L734 839" stroke="#494454" fill="none"/>
+<path d="M734 839 L744 839" stroke="#494454" fill="none"/>
+<path d="M744 839 L754 839" stroke="#494454" fill="none"/>
+<path d="M754 839 L764 839" stroke="#494454" fill="none"/>
+<path d="M764 839 L774 839" stroke="#494454" fill="none"/>
+<path d="M774 839 L784 839" stroke="#494454" fill="none"/>
+<path d="M784 839 L794 839" stroke="#494454" fill="none"/>
+<path d="M794 839 L804 839" stroke="#494454" fill="none"/>
+<path d="M804 839 L814 839" stroke="#494454" fill="none"/>
+<path d="M814 839 L824 839" stroke="#494454" fill="none"/>
+<path d="M824 839 L834 839" stroke="#494454" fill="none"/>
+<path d="M834 839 L844 839" stroke="#494454" fill="none"/>
+<path d="M844 839 L854 839" stroke="#494454" fill="none"/>
+<path d="M854 839 L864 839" stroke="#494454" fill="none"/>
+<path d="M864 839 L874 839" stroke="#494454" fill="none"/>
+<path d="M874 839 L884 839" stroke="#494454" fill="none"/>
+<path d="M884 839 L894 839" stroke="#494454" fill="none"/>
+<path d="M894 839 L904 839" stroke="#494454" fill="none"/>
+<path d="M904 839 L914 839" stroke="#494454" fill="none"/>
+<path d="M914 839 L924 839" stroke="#494454" fill="none"/>
+<path d="M924 839 L934 839" stroke="#494454" fill="none"/>
+<path d="M934 839 L944 839" stroke="#494454" fill="none"/>
+<path d="M944 839 L954 839" stroke="#494454" fill="none"/>
+<path d="M954 839 L964 839" stroke="#494454" fill="none"/>
+<path d="M964 839 L974 839" stroke="#494454" fill="none"/>
+<path d="M974 839 L984 839" stroke="#494454" fill="none"/>
+<path d="M984 839 L994 839" stroke="#494454" fill="none"/>
+<path d="M994 839 L1004 839" stroke="#494454" fill="none"/>
+<path d="M1004 839 L1014 839" stroke="#494454" fill="none"/>
+<path d="M1014 839 L1024 839" stroke="#494454" fill="none"/>
+<path d="M1024 839 L1034 839" stroke="#494454" fill="none"/>
+<path d="M1034 839 L1044 839" stroke="#494454" fill="none"/>
+<path d="M1044 839 L1054 839" stroke="#494454" fill="none"/>
+<path d="M1054 839 L1064 839" stroke="#494454" fill="none"/>
+<path d="M1064 839 L1074 839" stroke="#494454" fill="none"/>
+<path d="M1074 839 L1084 839" stroke="#494454" fill="none"/>
+<path d="M1084 839 L1094 839" stroke="#494454" fill="none"/>
+<path d="M1094 839 L1104 839" stroke="#494454" fill="none"/>
+<path d="M1104 839 L1114 839" stroke="#494454" fill="none"/>
+<path d="M1114 839 L1124 839" stroke="#494454" fill="none"/>
+<path d="M1124 839 L1134 839" stroke="#494454" fill="none"/>
+<path d="M1134 839 L1144 839" stroke="#494454" fill="none"/>
+<path d="M1144 839 L1154 839" stroke="#494454" fill="none"/>
+<path d="M1154 839 L1164 839" stroke="#494454" fill="none"/>
+<path d="M1164 839 L1174 839" stroke="#494454" fill="none"/>
+<path d="M1174 839 L1184 839" stroke="#494454" fill="none"/>
+<path d="M1189 828 L1189 839" stroke="#494454" fill="none"/>
+<path d="M1184 839 L1189 839" stroke="#494454" fill="none"/>
+</g></svg>

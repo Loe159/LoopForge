@@ -28,6 +28,7 @@ from loopforge.engine.locking import LockTimeoutError
 from loopforge.engine.repositories import RevisionConflictError
 from loopforge.cli.evidence import EvidenceIndex, EvidenceItem, approval_summary
 from loopforge.cli.models import UiSnapshot
+from loopforge.cli.task_intake import TaskDraft, load_task_context
 from loopforge.cli.operations import OperationController
 from loopforge.cli.presentation import FAMILY_PRESENTATION
 from loopforge.cli.state_store import StateStore
@@ -42,6 +43,8 @@ from loopforge.cli.textual_app.run_presenter import (
     run_activity_text as _run_activity_text,
     run_attempt_heading as _run_attempt_heading,
     run_glyph,
+    execution_result,
+    task_summary,
     run_progress as _run_progress,
     run_uptime as _run_uptime,
 )
@@ -76,6 +79,7 @@ from loopforge.cli.textual_app.screens import (
     TextEntryScreen,
 )
 from loopforge.cli.textual_app.workers import load_project_snapshot, _identity_stale
+from loopforge.cli.textual_app.task_composer import TaskComposer
 from loopforge.cli.ui import TerminalRenderer
 from loopforge.engine import (
     AGENT_COMMANDS,
@@ -246,7 +250,7 @@ class LoopForgeApp(App[None]):
         self._syncing_session_select = False
         self._screen = "home"
         self._home_focus = "projects"
-        self._home_new_run_project: Path | None = None
+        self._task_operation_screen: TaskComposer | None = None
         self._home_details_timer: Timer | None = None
         self._filter = ""
         self._evidence_index: EvidenceIndex | None = None
@@ -272,6 +276,17 @@ class LoopForgeApp(App[None]):
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         """Enable the dashboard's priority bindings only on its own surface."""
 
+        if any(isinstance(screen, TaskComposer) for screen in self.screen_stack):
+            return False  # The composer and its confirmation own their native keys.
+        if action in {"root_open_selected", "open_selected"} and self._screen == "run":
+            if (len(self.screen_stack) == 1 and isinstance(self.focused, Button)
+                    and (self.focused.id or "").startswith("run-")):
+                return False  # A focused run control owns Enter, never the next stage.
+            element = self.focused
+            while element is not None:
+                if isinstance(element, RunDocumentView):
+                    return False
+                element = element.parent
         if action in {"root_open_selected", "open_selected"} and (
             isinstance(self.focused, (Select, OptionList)) or
             isinstance(getattr(self.focused, "parent", None), (RunToolEntry, RunDetailEntry, RunDelegationEntry))
@@ -330,6 +345,10 @@ class LoopForgeApp(App[None]):
 
     def on_resize(self, event: Resize) -> None:
         self._set_width_class(event.size.width)
+        short = event.size.height <= 26
+        self.set_class(short, "run-short")
+        for picker in self.query("#run-session-select").results(Select):
+            picker.compact = short
         self._render_operation_panel(self._snapshot)
 
     def on_unmount(self) -> None:
@@ -391,6 +410,7 @@ class LoopForgeApp(App[None]):
         self._run_scope = None
         self._reset_list_cursor()
         self._render_snapshot(self._snapshot)
+        self.call_after_refresh(self.set_focus, None)
         self._open_run_worker(run_id)
 
     @work(thread=True, exclusive=True, group="run-load", exit_on_error=False)
@@ -687,6 +707,7 @@ class LoopForgeApp(App[None]):
                     self._run_follow_tail = True
                     self._reset_list_cursor()
                     self._render_snapshot(self._snapshot)
+                    self.call_after_refresh(self.set_focus, None)
                     self._open_run_worker(run_id)
             return
         if self._screen == "run":
@@ -696,7 +717,7 @@ class LoopForgeApp(App[None]):
                         isinstance(parent, Collapsible) and parent.has_class("run-file-change-row")):
                     parent.collapsed = not parent.collapsed
                     return
-            action = self._snapshot.run.shell.run.next_action if self._snapshot.run.shell and self._snapshot.run.shell.run else None
+            action = self._available_run_action(self._snapshot)
             if action is not None:
                 self.request_action(action)
             return
@@ -715,15 +736,16 @@ class LoopForgeApp(App[None]):
         self.action_open_selected()
 
     def action_new_run(self) -> None:
+        if self._run_operation_busy(self._snapshot) or len(self.screen_stack) > 1:
+            return
+        target = self.shell.project_dir
         if self._screen == "home":
             project = self._home_selected_project()
             if project is None:
                 return
-            self._home_new_run_project = Path(str(project.get("path") or self.shell.project_dir))
-        self.push_screen(
-            TextEntryScreen("Create run", "Describe the task for this supervised workflow.", submit_label="Create"),
-            self._create_run,
-        )
+            target = Path(str(project.get("path") or target))
+        self._select_project_context(target)
+        self.push_screen(TaskComposer(target), self._task_form_closed)
 
     def action_home_new_run(self) -> None:
         self.action_new_run()
@@ -731,38 +753,60 @@ class LoopForgeApp(App[None]):
     def action_root_new_run(self) -> None:
         self.action_new_run()
 
-    def _create_run(self, task: str | None) -> None:
-        project = self._home_new_run_project
-        self._home_new_run_project = None
-        if task is None or not task.strip():
-            return
-        if project is not None:
-            self._select_project_context(project)
-        self._run_shell_operation(
-            "Create run",
-            lambda _emit, _cancelled: self._capture_shell_result(
-                lambda: self.shell.cmd_run(task.strip())
-            ),
-        )
-
     def action_complete_task(self) -> None:
+        if self._run_operation_busy(self._snapshot) or len(self.screen_stack) > 1:
+            return
+        run_id = self._snapshot.selected_run_id
+        if not run_id:
+            return
         self.push_screen(
-            TextEntryScreen(
-                "Complete task contract",
-                "Add an objective success check for the current run.",
-                submit_label="Save proof",
-            ),
-            self._complete_task,
+            TaskComposer(self.shell.project_dir, complete=True, run_id=run_id),
+            self._task_form_closed,
         )
 
-    def _complete_task(self, success_check: str | None) -> None:
-        if success_check is None or not success_check.strip():
+    def _task_form_closed(self, run_id: str | None) -> None:
+        self._task_operation_screen = None
+        if run_id:
+            self._screen = "run"
+            self._run_follow_tail = True
+            self._run_scope = None
+            # Never publish the completed operation beside pre-operation guidance.
+            self.store.select_project(self.shell.project_dir)
+            self.store.select_run(run_id)
+            self._snapshot = self.store.snapshot
+            self._open_run_worker(run_id)
+        self._render_snapshot(self._snapshot)
+        if run_id:
+            self.call_after_refresh(self.set_focus, None)
+
+    def submit_task_draft(self, screen: TaskComposer, draft: TaskDraft) -> None:
+        context = screen.context
+        if context is None or self._run_operation_busy(self._snapshot):
+            screen.show_failure("Another operation is in progress. Wait, then retry.")
             return
+        self._task_operation_screen = screen
+
+        def run(_emit, _cancelled):
+            fresh = load_task_context(context.scope.project_path)
+            if (fresh.scope != context.scope
+                    or self.shell.project_dir.resolve() != context.scope.project_path
+                    or self.store.begin_load().project != context.scope.project_path):
+                return SimpleNamespace(exit_code=1, should_exit=False, context_changed=True,
+                                       message="The project or current run changed. Recheck the project before submitting.")
+            self._operation.commit_started = True
+            result = self._capture_shell_result(
+                (lambda: self.shell.complete_current_task_definition(
+                    draft.success_checks[0], expected_scope=context.scope))
+                if screen.complete else
+                (lambda: self.shell.create_run_from_intake(
+                    draft.task, success_checks=list(draft.success_checks), rubric=draft.rubric))
+            )
+            if screen.complete and result.exit_code == 0:
+                result.run_id = context.scope.run_id
+            return result
+
         self._run_shell_operation(
-            "Complete task contract",
-            lambda _emit, _cancelled: self._capture_shell_result(
-                lambda: self.shell.complete_current_task_definition(success_check.strip())
-            ),
+            "Save criterion" if screen.complete else "Create run", run,
         )
 
     def action_command(self) -> None:
@@ -928,6 +972,7 @@ class LoopForgeApp(App[None]):
         return SimpleNamespace(
             exit_code=result.exit_code,
             should_exit=result.should_exit,
+            run_id=getattr(result, "run_id", None),
             message=output or ("Command completed." if result.exit_code == 0 else "Command was blocked."),
         )
 
@@ -1085,8 +1130,14 @@ class LoopForgeApp(App[None]):
     def _show_confirmation(self, action: ActionDescriptor, title: str, lines: tuple[str, ...], scope: ActionScope, identity) -> None:
         if not self.store.accepts(identity):
             return
+        confirmation = ConfirmationScreen(
+            title, lines, approve_label="Approve task" if action.id == "approve-task" else "Approve",
+            cancel_label="Back" if action.id == "approve-task" else "Cancel",
+        )
+        if action.id == "approve-task":
+            confirmation.add_class("task-confirmation")
         self.push_screen(
-            ConfirmationScreen(title, lines),
+            confirmation,
             lambda approved: self._execute_action(action, expected_scope=scope) if approved else None,
         )
 
@@ -1167,6 +1218,21 @@ class LoopForgeApp(App[None]):
             # completed operation with the stale pre-action guidance.
             self.store.record_operation_events(operation)
             self._operation_completion_handled = True
+            if self._task_operation_screen is not None:
+                form = self._task_operation_screen
+                self._task_operation_screen = None
+                result = operation.result
+                run_id = getattr(result, "run_id", None)
+                if getattr(result, "ok", False) and run_id:
+                    form.dismiss(run_id)
+                else:
+                    self.store.flush()
+                    message = str(operation.error or getattr(result, "message", "Could not save this task."))
+                    # An exception may happen after persistence. Recheck before a retry.
+                    form.show_failure(message, changed=bool(operation.error or
+                                      getattr(result, "context_changed", False) or
+                                      (getattr(result, "ok", False) and not run_id)))
+                return
             self._notice = (
                 "Operation completed."
                 if bool(getattr(operation.result, "ok", False))
@@ -1517,6 +1583,8 @@ class LoopForgeApp(App[None]):
         self._snapshot = snapshot
         if not self.screen_stack:
             return
+        if any(isinstance(screen, TaskComposer) for screen in self.screen_stack):
+            return  # Keep the form, draft and focus stable through background refreshes.
         try:
             self._sync_screen_surface()
         except NoMatches:
@@ -1640,16 +1708,26 @@ class LoopForgeApp(App[None]):
         )
         self._render_run_activity(snapshot)
 
-        required_action = (
-            shell.run.next_action
-            if shell.family in {"needs_human", "blocked"}
-            else None
-        )
-        action_dock.update_action(required_action, blocked=shell.family == "blocked")
-        command_bar.display = True  # The action banner never hides command entry.
-        command_input = self.query_one("#run-command-input", HomeCommandInput)
-        if required_action is not None and command_input.has_focus:
-            command_input.set_command_active(False)
+        required_action = self._available_run_action(snapshot)
+        busy = self._run_operation_busy(snapshot)
+        stage_title = next((stage.title for stage in shell.stages
+                            if stage.id == shell.run.current_stage), shell.run.current_stage)
+        action_dock.update_action(required_action, blocked=shell.family == "blocked" and not busy,
+                                  approval=shell.family == "needs_human", stage=stage_title)
+        command_bar.display = True
+
+    def _run_operation_busy(self, snapshot: UiSnapshot) -> bool:
+        return bool(self._refreshing_after_operation
+                    or (self._operation is not None and not self._operation.finished)
+                    or (snapshot.operation.state == "loading" and not snapshot.operation.finished))
+
+    def _available_run_action(self, snapshot: UiSnapshot) -> ActionDescriptor | None:
+        shell = snapshot.run.shell
+        if (not shell or not shell.run or self._run_operation_busy(snapshot)
+                or shell.family not in {"ready", "needs_human", "blocked"}):
+            return None
+        action = shell.run.next_action
+        return action if action and getattr(action, "available", True) else None
 
     def _render_run_reading_controls(self, snapshot: UiSnapshot) -> None:
         reading = snapshot.run.reading
@@ -1711,10 +1789,13 @@ class LoopForgeApp(App[None]):
             )
             return
         sections: list[tuple[str, str, str, bool]] = []
+        markdown_keys: set[str] = set()
+        previews: dict[str, tuple[str, str]] = {}
         if view == "Context":
             context = snapshot.run.context
             if context is not None:
                 for part in context.sections:
+                    markdown_keys.add(part.id)
                     sections.append((part.id, part.title,
                                     (f"Source: {part.source} · {part.authority}\n" if part.source else "") + part.content,
                                     part.expanded))
@@ -1728,14 +1809,30 @@ class LoopForgeApp(App[None]):
         else:
             evidence = snapshot.run.evidences
             if evidence is not None:
-                sections = [(s.key, s.title, s.body, s.expanded) for s in evidence.sections]
+                for section in evidence.sections:
+                    sections.append((section.key, section.title, section.body, section.expanded))
+                    for record in section.records:
+                        sections.append((record.key, "  " + record.title, record.body, False))
+                        if record.preview:
+                            previews[record.key] = (record.preview, record.language)
             if not sections:
                 sections.append(("no-evidence", "Evidences", "No retained evidence for this selection.", True))
         documents.update_sections((snapshot.selected_run_id, stage, agent.session_id, view,
-                                   reading.cumulative), tuple(sections))
+                                   reading.cumulative), tuple(sections),
+                                  markdown_keys=frozenset(markdown_keys), previews=previews)
 
     def _render_run_activity(self, snapshot: UiSnapshot) -> None:
         activity = self.query_one("#run-activity-feed", RunActivityFeed)
+        task = task_summary(snapshot)
+        self.query_one("#run-task-summary", Static).display = task is not None
+        self.query_one("#run-agent-output-panel").display = task is None
+        self.query_one("#run-attempt-heading").display = task is None
+        if task is not None:
+            self.query_one("#run-task-summary", Static).update(task)
+            self.query_one("#run-reading-controls").display = False
+            self.query_one("#run-selection").display = False
+        else:
+            self.query_one("#run-selection").display = True
         reading = snapshot.run.reading
         agent = snapshot.run.agent
         scope = (_snapshot_run_identity(snapshot), agent.stage_id, agent.session_id, reading.mode)
@@ -1771,20 +1868,10 @@ class LoopForgeApp(App[None]):
             active=live and not agent.session_closed, scope=scope, entries=entries)
         result = self.query_one("#run-execution-result")
         receipt = self.query_one("#run-result-text", Static)
-        finished = agent.session_closed or (agent.attempt_number is not None and
-                    any(a.get("number") == agent.attempt_number and
-                        a.get("status") in {"completed", "blocked", "failed", "cancelled"}
-                        for a in snapshot.run.attempts))
-        result.display = finished and bool(agent.session_id)
-        if result.display:
-            attempt = next((a for a in snapshot.run.attempts if
-                            a.get("number") == agent.attempt_number), {})
-            message = "Execution result · " + (str(attempt.get("status") or "Agent session finished"))
-            if attempt.get("contract_validation_error"):
-                message += "\nContract rejected: " + str(attempt["contract_validation_error"])[:200]
-            if attempt.get("result_origin"):
-                message += "\nResult source: " + str(attempt["result_origin"])
-            receipt.update(Text(message))
+        facts = execution_result(snapshot, active=live)
+        result.display = facts is not None
+        if facts is not None:
+            receipt.update(facts)
         event_count = agent.event_count
         if reading.following:
             self._seen_events[scope] = event_count
@@ -1826,9 +1913,12 @@ class LoopForgeApp(App[None]):
             return
         focus = self.focused
         element = focus
-        while element is not None and not isinstance(element, (RunToolEntry, RunDetailEntry, RunDelegationEntry)):
+        while element is not None and not isinstance(element, (RunToolEntry, RunDetailEntry, RunDelegationEntry, RunDocumentView)):
             element = element.parent
         if element is None:
+            return
+        if isinstance(element, (RunDetailEntry, RunDocumentView)):
+            self.query_one("#run-document-view", RunDocumentView).open_selected()
             return
         self._suspend_run_follow()
         if isinstance(element, (RunToolEntry, RunDelegationEntry)):
@@ -1845,9 +1935,10 @@ class LoopForgeApp(App[None]):
             self._change_run_reading(**{choice[0]: choice[1]})
 
     def action_run_required_action(self) -> None:
-        shell = self._snapshot.run.shell
-        if self._screen == "run" and shell and shell.run and shell.run.next_action:
-            self.request_action(shell.run.next_action)
+        if self._screen == "run" and len(self.screen_stack) == 1:
+            action = self._available_run_action(self._snapshot)
+            if action is not None:
+                self.request_action(action)
 
     def _change_run_reading(self, **changes: object) -> None:
         if self._screen != "run":
@@ -1872,16 +1963,16 @@ class LoopForgeApp(App[None]):
             self.action_run_follow()
         elif name == "run-compact-tabs":
             self.action_run_supervision()
-        elif name == "run-result-changes":
-            self._change_run_reading(view="Changes")
-        elif name == "run-result-evidences":
-            self._change_run_reading(view="Evidences")
         elif name == "run-diff-attempt":
             self._change_run_reading(cumulative=False)
         elif name == "run-diff-cumulative":
             self._change_run_reading(cumulative=True)
         elif name == "run-problems":
             self._change_run_reading(view="Evidences")
+
+    def on_run_document_view_open_requested(self, event: RunDocumentView.OpenRequested) -> None:
+        event.stop()
+        self.push_screen(RunDetailScreen(event.title, event.body))
 
     def on_select_changed(self, event: Select.Changed) -> None:
         if (self._screen == "run" and event.select.id == "run-session-select"
@@ -2179,6 +2270,8 @@ def _operation_result(operation: OperationController, value: object, cancelled: 
     ok = not show_cancelled and exit_code == 0
     return SimpleNamespace(
         ok=ok,
+        run_id=getattr(value, "run_id", None),
+        context_changed=bool(getattr(value, "context_changed", False)),
         should_exit=bool(getattr(value, "should_exit", False)),
         message=(
             "Operation cancelled."

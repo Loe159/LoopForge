@@ -1,0 +1,44 @@
+10 / A · Context compact
+80 colonnes · Sections de même niveau · Sources à la demande
+MAQUETTE · Données fictives · Sans action moteur
+
+ LoopForge    AUTH DEMO / Run #42                                      RUNNING
+ v0.1.0       git:fix/auth
+────────────────────────────────────────────────────────────────────────────────
+
+  IMPLEMENTATION · Context                                       Attempt 02 ▾
+  F6 Supervision
+  Implementation · Attempt 02 · Codex
+
+   ▾ Mission & Role
+      Implementation · Codex
+      Reject expired tokens and add regression coverage.
+
+   ▸ System Instructions
+
+   ▸ Injected Documents · 3
+
+   ▸ Environment & Git
+
+   ▸ Pack, Skills & Tools
+
+   ▸ Permissions & Security
+      Declared: workspace edits
+      Runner recorded: timeout requested 600 seconds
+
+   ▸ Output Contract
+      implementation-result.json · Required JSON fields
+
+   ▸ Validation & Limits
+
+   ▸ Raw Prompt · captured source
+
+
+
+ ──────────────────────────────────────────────────────────────────────────────
+  Command Input
+   › Type / for commands
+  /run  /status  /actions  /config
+
+────────────────────────────────────────────────────────────────────────────────
+ Tab Navigate  F4 Detail  F6 Views  / Command

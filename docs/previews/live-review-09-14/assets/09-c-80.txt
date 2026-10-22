@@ -1,0 +1,44 @@
+9 / C · Compact
+80 colonnes · Reçu dans le flux · Supervision accessible par F6
+MAQUETTE · Données fictives · Sans action moteur
+
+ LoopForge    AUTH DEMO / Run #42                                        READY
+ v0.1.0       git:fix/auth
+────────────────────────────────────────────────────────────────────────────────
+
+  IMPLEMENTATION · Live                                          Attempt 02 ▾
+  F6 Supervision
+   Focused   All   Raw     ↓ Follow live
+
+   ▸ ✓ Shell  python -m unittest tests.test_auth  Done
+
+  │ Agent
+  │ Expired tokens now return HTTP 401.
+  │ Added regression coverage for token expiration.
+
+
+
+   ── Execution result ─────────────────────────────────────────────────────
+     ✓ Agent finished
+
+     Output        result.json · extracted
+     Changes       3 files · +42 −7 · Session snapshot
+     Verification  Pending · LoopForge
+     Next          Verification · LoopForge
+
+     [ View changes ]   [ View evidences ]
+   ─────────────────────────────────────────────────────────────────────────
+
+
+
+
+
+
+
+ ──────────────────────────────────────────────────────────────────────────────
+  Command Input
+   › Type / for commands
+  /run  /status  /actions  /config
+
+────────────────────────────────────────────────────────────────────────────────
+ Tab Navigate  F4 Detail  F6 Views  / Command

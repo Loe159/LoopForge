@@ -1,0 +1,50 @@
+Live ajusté · Approval required en orange
+120 colonnes · Dock A · Bloc Command Input actuel conservé
+MAQUETTE · Données fictives · Sans action moteur
+
+ LoopForge    AUTH DEMO / Run #42 · Fix authentication                                                  NEEDS APPROVAL
+ v0.1.0       git:fix/auth
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                                                                  │
+  PLANNING · Live                                                  Session 01 ▾   │  RUN CONTEXT
+                                                                                  │
+   Focused   All   Raw     ↓ Follow live                                          │ ┌─ CURRENT ACTIVITY ─────────────┐
+                                                                                  │ │NEEDS APPROVAL                  │
+                                                                                  │ │Planning · Codex                │
+  │ Agent                                                                         │ │                                │
+  │ The implementation plan is ready for your review.                             │ │                                │
+                                                                                  │ └────────────────────────────────┘
+                                                                                  │
+                                                                                  │ ┌─ WORKFLOW ─────────────────────┐
+   ▸ plan.md · Planning · Session 01                                              │ │✓ Research                      │
+                                                                                  │ │◆ Planning  3/3 ▾               │
+                                                                                  │ │  ✓ Inspect requirements        │
+                                                                                  │ │  ✓ Outline changes             │
+   ┌─ Execution result ──────────────────────────────────────────────────────┐    │ │  ✓ Define acceptance           │
+   │  Agent finished                                                         │    │ │○ Implementation                │
+   │                                                                         │    │ │○ Verification                  │
+   │  Output  plan.md · extracted                                            │    │ │○ Review                        │
+   │                                                                         │    │ │                                │
+   │  Next    Plan approval · action below                                   │    │ │                                │
+   └─────────────────────────────────────────────────────────────────────────┘    │ └────────────────────────────────┘
+                                                                                  │
+                                                                                  │
+                                                                                  │ ┌─ METRICS ──────────────────────┐
+                                                                                  │ │Model  codex                    │
+                                                                                  │ │Time   04m 12s                  │
+                                                                                  │ │Tokens 8 420                    │
+                                                                                  │ └────────────────────────────────┘
+  ┌────────────────────────────────────────────────────────────────────────────┐  │
+  │ Approval required                                                          │  │
+  │ Review plan.md before implementation.                                      │  │
+  │  Ctrl+Enter  Review and approve the implementation plan                    │  │
+  │ Ctrl+K Other actions                                                       │  │
+  └────────────────────────────────────────────────────────────────────────────┘  │
+                                                                                  │
+  ┌─ Command Input ────────────────────────────────────────────────────────────┐  │
+  │ › Type / for commands                                                      │  │   Live
+  │ /run   /status   /actions   /config                                        │  │   Context
+  └────────────────────────────────────────────────────────────────────────────┘  │   Changes
+                                                                                  │   Evidences
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Tab Navigate  F4 Detail  F6 Views  / Command  End Follow                                         Esc Runs  Ctrl+Q Quit

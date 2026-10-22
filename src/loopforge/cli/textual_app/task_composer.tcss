@@ -1,0 +1,60 @@
+TaskComposer {
+    background: #15121B;
+    color: #E7E0ED;
+    padding: 0 2;
+}
+TaskComposer Static { height: auto; }
+TaskComposer VerticalScroll, TaskComposer TextArea {
+    scrollbar-color: #494454;
+    scrollbar-color-hover: #808080;
+    scrollbar-color-active: #D0BCFF;
+    scrollbar-background: #15121B;
+    scrollbar-background-hover: #15121B;
+    scrollbar-background-active: #15121B;
+    scrollbar-size-vertical: 1;
+}
+#task-brand { height: 3; padding-top: 1; border-bottom: solid #494454; color: #D0BCFF; text-style: bold; }
+#task-title { height: 2; padding-top: 1; }
+#task-project { max-height: 2; color: #CBC3D7; }
+#task-defaults { height: 1; color: #958EA0; }
+#task-workspace { height: 1fr; margin-top: 1; }
+#task-form-scroll { width: 1fr; max-width: 78; height: 1fr; padding-right: 1; overflow-x: hidden; }
+#task-description { height: 8; margin-bottom: 1; }
+#task-criteria-title { margin-top: 1; color: #CBC3D7; }
+#task-criteria-help { margin-bottom: 1; color: #958EA0; }
+#task-criteria { height: auto; }
+.task-criterion { height: auto; margin-bottom: 1; }
+.criterion-actions { height: 1; align-horizontal: right; }
+.criterion-value { height: 4; }
+TaskComposer TextArea { background: #1D1A23; color: #E7E0ED; border: solid #808080; border-title-color: #CBC3D7; padding: 0 1; }
+TaskComposer TextArea:focus { border: solid #D0BCFF; border-title-color: #D0BCFF; }
+TaskComposer TextArea .text-area--placeholder { color: #958EA0; }
+TaskComposer TextArea .text-area--cursor { background: #D0BCFF; color: #0A0A0A; }
+TaskComposer TextArea .text-area--selection { background: #2C2832; }
+TaskComposer Button { height: 1; min-width: 8; width: auto; border: none; padding: 0 1; background: #1D1A23; color: #CBC3D7; text-style: none; }
+TaskComposer Button:hover { background: #2C2832; }
+TaskComposer Button:focus { background: #D0BCFF !important; color: #0A0A0A !important; text-style: bold; }
+TaskComposer Button:disabled { color: #958EA0 !important; opacity: 1; background: #1D1A23 !important; border: none !important; text-style: none; }
+TaskComposer .criterion-remove { margin-top: 0; dock: none; }
+#task-add-criterion { margin-bottom: 1; }
+#task-rubric-group { display: none; height: auto; margin: 1 0; }
+#task-rubric-help { color: #FFB869; margin-bottom: 1; }
+#task-rubric { height: 6; }
+#task-context-details { width: 35; height: 1fr; margin-left: 2; border-left: solid #494454; padding-left: 2; color: #CBC3D7; overflow-y: auto; }
+#task-feedback { max-height: 4; overflow-y: auto; color: #FFB4AB; margin-top: 1; }
+#task-actions { height: auto; border-top: solid #494454; padding-top: 0; margin-top: 1; }
+#task-status { max-height: 3; overflow-y: auto; color: #CBC3D7; }
+#task-buttons { height: 1; margin: 1 0 0 0; }
+#task-buttons Button { margin-right: 2; }
+#task-submit { background: #D0BCFF; color: #0A0A0A; }
+#task-hotkeys { color: #958EA0; max-height: 2; }
+TaskComposer.compact #task-context-details { display: none; }
+TaskComposer.compact { padding: 0 1; }
+TaskComposer.short #task-brand { height: 2; padding-top: 0; }
+TaskComposer.short #task-title { height: 1; padding-top: 0; }
+TaskComposer.short #task-workspace { margin-top: 1; }
+TaskComposer.short #task-description { height: 5; }
+TaskComposer.short #task-actions { margin-top: 0; padding-top: 0; }
+TaskComposer.short #task-status { max-height: 2; }
+TaskComposer.short #task-buttons { margin: 1 0 0 0; }
+.task-discard #confirmation-dialog { border: solid #808080; background: #15121B; }

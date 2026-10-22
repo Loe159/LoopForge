@@ -112,18 +112,24 @@ class ConfirmationScreen(ModalScreen[bool]):
 
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
 
-    def __init__(self, title: str, lines: tuple[str, ...], *, approve_label: str = "Approve") -> None:
+    def __init__(self, title: str, lines: tuple[str, ...], *, approve_label: str = "Approve",
+                 cancel_label: str = "Cancel", focus_cancel: bool = False) -> None:
         super().__init__()
         self.title_text = title
         self.lines = lines
         self.approve_label = approve_label
+        self.cancel_label, self.focus_cancel = cancel_label, focus_cancel
 
     def compose(self) -> ComposeResult:
         with Container(id="confirmation-dialog"):
             yield Static(self.title_text, classes="dialog-title")
-            yield Static("\n".join(self.lines), id="confirmation-evidence")
+            yield Static(Text("\n".join(self.lines)), id="confirmation-evidence")
             yield Button(self.approve_label, variant="primary", id="confirm-approve")
-            yield Button("Cancel", id="confirm-cancel")
+            yield Button(self.cancel_label, id="confirm-cancel")
+
+    def on_mount(self) -> None:
+        if self.focus_cancel:
+            self.query_one("#confirm-cancel").focus()
 
     def action_cancel(self) -> None:
         self.dismiss(False)

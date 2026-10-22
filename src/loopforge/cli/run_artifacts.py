@@ -147,16 +147,22 @@ def load_run_agent_snapshot(
                 for record in normalize_event(event):
                     projected.append({**record, "event_id": f"legacy-{len(projected)}", "order": len(projected)})
         structured = tuple(projected[-500:])
+    result_path = _artifact_path(run_dir, attempt.get("result_path") if attempt else None, session_dir / "result.json")
+    from loopforge.cli.run_changes import safe_artifact
+    result_ref = str(result_path.relative_to(run_dir)) if result_path is not None else ""
+    if not result_ref or safe_artifact(run_dir, result_ref) is None or not result_path.is_file():
+        result_ref = ""
     return RunAgentSnapshot(
         attempt_number=number,
         adapter=adapter,
         system_prompt=_clean_text(_read_bounded(prompt_path, 131_072)),
         agent_output=_agent_output(raw),
         implementation_contract=_implementation_contract(
-            _artifact_path(run_dir, attempt.get("result_path") if attempt else None, session_dir / "result.json"),
+            result_path,
             attempt, adapter=adapter, attempt_number=number),
         has_live_transcript=has_transcript,
         stage_id=stage, session_id=selected["session_id"], session_dir=selected["session_id"],
+        result_ref=result_ref,
         structured_events=structured, raw_output=raw_output,
         raw_source=str(raw_path.relative_to(run_dir)) if raw_path else "",
         capture_state="bounded" if raw or index else "",

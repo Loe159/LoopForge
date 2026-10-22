@@ -1,0 +1,46 @@
+14 / Live intégré · Approval
+120 colonnes · Approbation plan requise · Aucun démarrage implicite
+MAQUETTE · Données fictives · Sans action moteur
+
+ LoopForge    AUTH DEMO / Run #42 · Fix authentication                                                  NEEDS APPROVAL
+ v0.1.0       git:fix/auth
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                                                                  │
+  PLANNING · Live                                                  Session 01 ▾   │  RUN CONTEXT
+                                                                                  │
+   Focused   All   Raw     ↓ Follow live                                          │  CURRENT ACTIVITY
+                                                                                  │  NEEDS APPROVAL
+                                                                                  │  Planning · Codex
+  │ Agent                                                                         │
+  │ The implementation plan is ready for your review.                             │
+                                                                                  │
+                                                                                  │
+                                                                                  │  WORKFLOW
+   ▸ plan.md · Planning · Session 01                                              │  ✓ Research
+                                                                                  │  ◆ Planning  3/3 ▾
+                                                                                  │    ✓ Inspect requirements
+                                                                                  │    ✓ Outline changes
+   Execution result · Agent finished                                              │    ✓ Define acceptance
+                                                                                  │  ○ Implementation
+   Next: plan approval · LoopForge                                                │  ○ Verification
+                                                                                  │  ○ Review
+   [ View evidences ]                                                             │
+                                                                                  │
+                                                                                  │
+                                                                                  │
+                                                                                  │
+                                                                                  │  METRICS
+                                                                                  │  Model  codex
+                                                                                  │  Time   04m 12s
+                                                                                  │  Tokens 8 420
+  ──────────────────────────────────────────────────────────────────────────────  │
+   Approval required · Review plan.md                                             │
+    Ctrl+Enter  Approve plan   Ctrl+K Other actions                               │
+                                                                                  │
+ ──────────────────────────────────────────────────────────────────────────────── │
+   › Type / for commands                                                          │   Live
+  /run  /status  /actions  /config                                                │   Context
+                                                                                  │   Changes
+                                                                                  │   Evidences
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Tab Navigate  F4 Detail  F6 Views  / Command  End Follow                                         Esc Runs  Ctrl+Q Quit

@@ -1,0 +1,44 @@
+13 / A · Commande — Dock encadré
+120 colonnes · Approbation moteur explicite · Commande et navigation restent accessibles
+MAQUETTE · Données fictives · Sans action moteur
+
+ LoopForge    AUTH DEMO / Run #42 · Fix authentication                                                  NEEDS APPROVAL
+ v0.1.0       git:fix/auth
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                                                                  │
+  PLANNING · Live                                                  Session 01 ▾   │  RUN CONTEXT
+                                                                                  │
+   Focused   All   Raw     ↓ Follow live                                          │  CURRENT ACTIVITY
+                                                                                  │  NEEDS APPROVAL
+                                                                                  │  Planning · Codex
+  │ Agent                                                                         │
+  │ The implementation plan is ready for your review.                             │
+                                                                                  │
+                                                                                  │
+   ▸ Plan artifact · plan.md                                                      │  WORKFLOW
+                                                                                  │  ✓ Research
+                                                                                  │  ◆ Planning  3/3 ▾
+                                                                                  │    ✓ Inspect requirements
+  Read the plan, inspect Context or switch to Evidences.                          │    ✓ Outline changes
+                                                                                  │    ✓ Define acceptance
+                                                                                  │  ○ Implementation
+                                                                                  │  ○ Verification
+                                                                                  │  ○ Review
+                                                                                  │
+                                                                                  │
+                                                                                  │
+                                                                                  │
+                                                                                  │
+                                                                                  │  METRICS
+  ┌─ Approval required ────────────────────────────────────────────────────────┐  │  Model  codex
+  │  Review plan.md before implementation.                                     │  │  Time   04m 12s
+  │                                                                            │  │  Tokens 8 420
+  │   Ctrl+Enter  Approve plan   Ctrl+K Other actions                          │  │
+  └────────────────────────────────────────────────────────────────────────────┘  │
+  ┌─ Command Input ────────────────────────────────────────────────────────────┐  │
+  │ › Type / for commands                                                      │  │   Live
+  │ /run  /status  /actions  /config                                           │  │   Context
+  └────────────────────────────────────────────────────────────────────────────┘  │   Changes
+                                                                                  │   Evidences
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Tab Navigate  F4 Detail  F6 Views  / Command  End Follow                                         Esc Runs  Ctrl+Q Quit

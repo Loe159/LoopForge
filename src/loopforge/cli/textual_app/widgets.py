@@ -12,6 +12,7 @@ from typing import Any, Callable
 from dataclasses import replace
 
 from rich.console import Group
+from rich.syntax import Syntax, PygmentsSyntaxTheme
 from rich.text import Text
 from textual.binding import Binding
 from textual.app import ComposeResult
@@ -38,6 +39,7 @@ from loopforge.cli.textual_app.run_presenter import (
     tool_display,
     tool_output_renderable,
     transcript_entries,
+    LoopForgeSyntaxStyle,
 )
 
 
@@ -769,6 +771,7 @@ class RunActivityFeed(VerticalScroll):
         self._adapter_title: str | None = None
 
     def compose(self) -> ComposeResult:
+        yield Static("", id="run-task-summary", markup=False)
         yield Static("", id="run-attempt-heading")
         yield RunTranscriptPanel(
             "Agent Output",
@@ -780,11 +783,9 @@ class RunActivityFeed(VerticalScroll):
             panel_id="run-implementation-panel",
             body_id="run-implementation-contract",
         )
-        with Vertical(id="run-execution-result"):
+        with Vertical(id="run-execution-result") as result:
+            result.border_title = "Execution result"
             yield Static("", id="run-result-text", markup=False)
-            with Horizontal(classes="run-result-links"):
-                yield Button("View changes", id="run-result-changes", classes="run-link")
-                yield Button("View evidences", id="run-result-evidences", classes="run-link")
 
     def update_content(
         self,
@@ -822,44 +823,134 @@ class RunActivityFeed(VerticalScroll):
 
 
 class RunDetailEntry(Collapsible):
-    """Inspectable context, diff or evidence; content is always literal."""
+    """Retained document content; Raw and metadata always remain literal."""
 
     def __init__(self, key: str, title: str, body: str, *, expanded: bool = False) -> None:
         self.key = key
         self.body = body
+        self.preview = ""
         self.detail = Static(Text(body), markup=False)
         super().__init__(self.detail, title=Text(title), collapsed=not expanded,
-                         collapsed_symbol=run_glyph("▸", ">"), expanded_symbol=run_glyph("▾", "v"),
-                         classes="run-document-entry")
+                         collapsed_symbol=run_glyph("▸", ">"),
+                         expanded_symbol=run_glyph("▾", "v"), classes="run-document-entry")
+
+    def update_document(self, body: str, *, markdown: bool = False,
+                        preview: str = "", language: str = "text") -> None:
+        self.body, self.preview = body, preview
+        content = agent_message_renderable(body) if markdown else Text(body)
+        if preview:
+            rendered = (Syntax(preview, language, theme=PygmentsSyntaxTheme(LoopForgeSyntaxStyle),
+                               background_color="#1D1A23", word_wrap=True)
+                        if language != "text" else Text(preview))
+            content = Group(content, Text(""), rendered)
+        self.detail.update(content)
 
 
-class RunDocumentView(VerticalScroll):
-    """Lazily loaded sections whose stable identities preserve disclosures."""
+class RunDocumentView(Horizontal):
+    """One read-only navigator and preview for Context and Evidences alike."""
+
+    class OpenRequested(Message):
+        def __init__(self, title: str, body: str) -> None:
+            self.title, self.body = title, body
+            super().__init__()
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._scope: object = None
         self._items: dict[str, RunDetailEntry] = {}
+        self._selected_key = ""
+        self._selections: dict[object, str] = {}
+        self._labels: tuple[tuple[str, str], ...] = ()
 
-    def update_sections(self, scope: object, sections: tuple[tuple[str, str, str, bool], ...]) -> None:
-        if scope != self._scope:
-            self.remove_children()
+    def compose(self) -> ComposeResult:
+        yield OptionList(id="run-document-index")
+        with Vertical(id="run-document-preview"):
+            with VerticalScroll(id="run-document-scroll"):
+                yield Vertical(id="run-document-content")
+            yield Button("Open artifact", id="run-document-open", classes="run-link")
+
+    def update_sections(self, scope: object, sections: tuple[tuple[str, str, str, bool], ...], *,
+                        markdown_keys: frozenset[str] = frozenset(),
+                        previews: dict[str, tuple[str, str]] | None = None) -> None:
+        previews = previews or {}
+        changed_scope = scope != self._scope
+        if changed_scope:
+            self.query_one("#run-document-content").remove_children()
             self._items.clear()
             self._scope = scope
+            self._selected_key = self._selections.get(scope, "")
+            self._labels = ()
         keys = {s[0] for s in sections}
         for key in tuple(self._items):
             if key not in keys:
                 self._items.pop(key).remove()
+        content = self.query_one("#run-document-content")
         for key, title, body, expanded in sections:
             item = self._items.get(key)
             if item is None:
-                item = RunDetailEntry(key, title, body, expanded=expanded)
+                item = RunDetailEntry(key, title, body, expanded=True)
                 self._items[key] = item
-                self.mount(item)
-            elif item.body != body or item.title != Text(title):
-                item.body = body
-                item.title = Text(title)
-                item.detail.update(Text(body))
+                content.mount(item)
+            preview, language = previews.get(key, ("", "text"))
+            signature = body, key in markdown_keys, preview, language
+            if signature != getattr(item, "_document_signature", None):
+                item._document_signature = signature
+                item.update_document(body, markdown=key in markdown_keys,
+                                     preview=preview, language=language)
+            item.title = Text(title.strip())
+        if self._selected_key not in keys:
+            self._selected_key = next((s[0] for s in sections if s[3]), sections[0][0] if sections else "")
+        labels = tuple((key, title) for key, title, _, _ in sections)
+        navigator = self.query_one("#run-document-index", OptionList)
+        if labels != self._labels:
+            self._labels = labels
+            navigator.clear_options()
+            navigator.add_options(Option(Text(title), id=key) for key, title in labels)
+        if self._selected_key:
+            navigator.highlighted = navigator.get_option_index(self._selected_key)
+        self.select_document(self._selected_key, reset_scroll=changed_scope)
+
+    def select_document(self, key: str, *, reset_scroll: bool = True) -> None:
+        if key not in self._items:
+            return
+        changed = key != self._selected_key
+        self._selected_key = key
+        self._selections[self._scope] = key
+        if len(self._selections) > 64:
+            del self._selections[next(iter(self._selections))]
+        for item_key, item in self._items.items():
+            item.display = item_key == key
+        selected = self._items[key]
+        self.query_one("#run-document-open").display = bool(selected.preview)
+        if changed or reset_scroll:
+            self.query_one("#run-document-scroll", VerticalScroll).scroll_home(animate=False)
+
+    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        if event.option_list.id == "run-document-index":
+            event.stop()
+            index = event.option_list.highlighted
+            if index is not None and event.option_list.get_option_at_index(index).id == event.option.id:
+                self.select_document(event.option.id or "", reset_scroll=False)
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if event.option_list.id == "run-document-index":
+            event.stop()
+            self.select_document(event.option.id or "", reset_scroll=False)
+            self.query_one("#run-document-scroll", VerticalScroll).focus()
+
+    def scroll_relative(self, **kwargs: Any) -> None:
+        self.query_one("#run-document-scroll", VerticalScroll).scroll_relative(**kwargs)
+
+    def open_selected(self) -> None:
+        selected = self._items.get(self._selected_key)
+        if selected:
+            self.post_message(self.OpenRequested(str(selected.title),
+                selected.body + (("\n\n" + selected.preview) if selected.preview else "")))
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "run-document-open":
+            event.stop()
+            self.open_selected()
 
 
 class RunChangesExplorer(Vertical):
@@ -1203,15 +1294,16 @@ class RunRequiredAction(Container):
         yield Static("", id="run-action-controls")
 
     def update_action(self, action: Any | None, *, blocked: bool = False,
-                      reason: str = "") -> None:
+                      approval: bool = True, stage: str = "", reason: str = "") -> None:
         self.display = action is not None or blocked
         if not self.display:
             return
         title = (
             f"BLOCKED {run_glyph('—', '-')} ACTION REQUIRED"
             if blocked
-            else "Approval required"
+            else "Approval required" if approval else "Next step" + (run_glyph(" · ", " - ") + stage if stage else "")
         )
+        self.set_class(not approval and not blocked, "next-step")
         self.query_one("#run-action-title", Static).update(title)
         self.query_one("#run-action-description", Static).update(
             Text(str(getattr(action, "description", reason or "Inspect the retained evidence.")))
@@ -1220,7 +1312,7 @@ class RunRequiredAction(Container):
         if action is not None:
             controls.append(" Ctrl+Enter ", style="bold #0A0A0A on #D0BCFF")
             controls.append(f"  {action.label}")
-        controls.append("    Ctrl+K ", style="#D0BCFF")
+        controls.append("\nCtrl+K ", style="#D0BCFF")
         controls.append("Other actions", style="#CBC3D7")
         self.query_one("#run-action-controls", Static).update(controls)
 
@@ -1283,12 +1375,12 @@ class RunContextSidebar(Vertical):
     def compose(self) -> ComposeResult:
         yield Static("RUN CONTEXT", id="run-context-title")
         with VerticalScroll(id="run-context-details"):
-            with RunContextPanel("Current activity", panel_id="run-context-configuration-panel"):
+            with RunContextPanel("CURRENT ACTIVITY", panel_id="run-context-configuration-panel"):
                 yield Static("", id="run-context-configuration", markup=False)
                 yield Button("", id="run-problems", classes="run-link")
-            with RunContextPanel("Workflow", panel_id="run-context-steps-panel"):
+            with RunContextPanel("WORKFLOW", panel_id="run-context-steps-panel"):
                 yield RunWorkflowList(id="run-context-steps")
-            with RunContextPanel("Metrics", panel_id="run-context-metrics-panel"):
+            with RunContextPanel("METRICS", panel_id="run-context-metrics-panel"):
                 yield Static("", id="run-context-metrics", markup=False)
         with Vertical(id="run-view-tabs"):
             for view in ("Live", "Context", "Changes", "Evidences"):
@@ -1318,7 +1410,11 @@ class RunContextSidebar(Vertical):
             selected_stage=selected_stage, view=view, metrics=metrics, problems=problems,
             todo=todo, agent_plan=agent_plan, plan_stage=plan_stage, plan_scope=plan_scope)
         activity = Text(status, style=status_color)
-        activity.append(f"\n{current_stage}\nAdapter: {adapter}\n{project}")
+        stage_title = next((stage.title for stage in steps if stage.id == current_stage), current_stage)
+        activity.append(f"\n{stage_title}\nAdapter: {adapter}\n{project}")
+        if selected_stage and selected_stage != current_stage:
+            selected_title = next((stage.title for stage in steps if stage.id == selected_stage), selected_stage)
+            activity.append("\nReading: " + selected_title, style="#958EA0")
         if todo:
             activity.append("\n" + todo)
         self.query_one("#run-context-configuration", Static).update(activity)

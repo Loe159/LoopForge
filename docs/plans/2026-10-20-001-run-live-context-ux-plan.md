@@ -240,7 +240,7 @@ Aucun scroll forcé au retour d'une vue historique, et focus/état de dépliage 
 
 **Running** : conversation avec outils compacts en mouvement, état principal `Running`, progression de plan facultative ; sidebar non défilante pour le menu en bas.
 
-**Completed (fin d'une exécution, pas nécessairement du run)** : montrer la réponse finale native, puis une carte `Execution result` avec (si connus) artefact, nombre de fichiers réellement modifiés, validation de contrat, état des contrôles et prochaine étape calculée par le moteur. Les liens `View changes` et `View evidences` changent uniquement de vue en préservant étape/tentative. Ne jamais afficher « Verification passed » seulement parce que l'agent le dit. Ne jamais ouvrir une synthèse qui remplace la conversation.
+**Completed (fin d'une exécution, pas nécessairement du run)** : montrer la réponse finale native, puis une carte `Execution result` avec (si connus) artefact, nombre de fichiers réellement modifiés, validation de contrat, état des contrôles et prochaine étape calculée par le moteur. **Retour UX du 21/10/2026 : variante A retenue comme préférence, sans les boutons `View changes` / `View evidences` dans le reçu.** Les vues restent accessibles par le menu fixe, avec le même périmètre. Le déclenchement de la suite est prioritaire ; une action Next step persistante au-dessus du Command Input actuel est proposée dans la [composition ajustée](2026-10-21-004-live-selected-composition.md). Ce retour ne déclenche aucune implémentation ni approbation moteur. Ne jamais afficher « Verification passed » seulement parce que l'agent le dit. Ne jamais ouvrir une synthèse qui remplace la conversation.
 
 **Blocked** : le flux garde l'erreur et les derniers éléments ; la sidebar montre le blocage ; un bandeau `ACTION REQUIRED` **fixe juste au-dessus de la barre de commandes** présente la description et **les seules actions officiellement disponibles**. La TUI n'invente pas de `Retry` ou `Approve` si le moteur ne les propose pas.
 
@@ -527,6 +527,8 @@ Les maquettes suivantes sont des **états d'un seul layout**, pas des interfaces
 
 ### 11.2 Completed — carte terminale
 
+Le dessin initial ci-dessous illustre la séparation fin d'exécution / fin du run. Pour les choix visuels actuels, voir la [composition ajustée après retour utilisateur](2026-10-21-004-live-selected-composition.md) : reçu A informatif sans boutons de navigation et déclenchement de la suite proposé dans le bandeau commun.
+
 ```text
 Implementation                   [Attempt 02 v]  | RIGHT SIDEBAR ... |
 Agent: Authentication endpoints updated.
@@ -538,7 +540,6 @@ Agent: Authentication endpoints updated.
   │ Files changed: 3 (Git proven)         │
   │ Verification: Passed (if validated)   │
   │ Next: Review (from engine)            │
-  │ View Changes  |  View Evidences       │
   └───────────────────────────────────────┘
 
 / Enter a LoopForge command...

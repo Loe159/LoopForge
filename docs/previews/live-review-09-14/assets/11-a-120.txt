@@ -1,0 +1,44 @@
+11 / A · Evidences — Registre par niveau
+120 colonnes · Artefact, contrat, vérification et décision restent distincts
+MAQUETTE · Données fictives · Sans action moteur
+
+ LoopForge    AUTH DEMO / Run #42 · Fix authentication                                                           READY
+ v0.1.0       git:fix/auth
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                                                                  │
+  IMPLEMENTATION · Evidences                                       Attempt 02 ▾   │  RUN CONTEXT
+                                                                                  │
+  Implementation · Attempt 02 · Codex                                             │  CURRENT ACTIVITY
+                                                                                  │  READY
+   ▾ Deliverables · 1                                                             │  Verification · Codex
+                                                                                  │  Reading Implementation
+      implementation-result.json   Extracted                                      │
+      LoopForge extraction · Implementation · Attempt 02                          │
+      [ Open artifact ]                                                           │
+                                                                                  │  WORKFLOW
+   ▾ Output contracts                                                             │  ✓ Research
+                                                                                  │  ✓ Planning
+      Output extracted · no contract validation receipt                           │  ✓ Implementation  reading  2/4 ▾
+      Extraction is distinct from contract validation.                            │    ✓ Inspect token flow
+                                                                                  │    ✓ Add expiry guard
+                                                                                  │    ◉ Run regression tests
+   ▾ Tests & verification                                                         │    ○ Review edge cases
+                                                                                  │  ● Verification
+      Verification   Pending · candidate 3                                        │  ○ Review
+      LoopForge workflow · current candidate                                      │
+                                                                                  │
+                                                                                  │
+   ▾ Human decisions                                                              │
+                                                                                  │  METRICS
+      Review approval   Pending                                                   │  Model  codex
+      LoopForge gate · review_approval                                            │  Time   04m 12s
+                                                                                  │  Tokens 8 420
+                                                                                  │
+                                                                                  │
+ ──────────────────────────────────────────────────────────────────────────────── │
+  Command Input                                                                   │   Live
+   › Type / for commands                                                          │   Context
+  /run  /status  /actions  /config                                                │   Changes
+                                                                                  │   Evidences
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Tab Navigate  F4 Detail  F6 Views  / Command  End Follow                                         Esc Runs  Ctrl+Q Quit

@@ -1,0 +1,50 @@
+Live ajusté · Execution Result A
+120 colonnes · Reçu sans boutons · Action moteur visible au-dessus de la commande
+MAQUETTE · Données fictives · Sans action moteur
+
+ LoopForge    AUTH DEMO / Run #42 · Fix authentication                                                           READY
+ v0.1.0       git:fix/auth
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                                                                  │
+  IMPLEMENTATION · Live                                            Attempt 02 ▾   │  RUN CONTEXT
+                                                                                  │
+   Focused   All   Raw     ↓ Follow live                                          │ ┌─ CURRENT ACTIVITY ─────────────┐
+                                                                                  │ │READY                           │
+   ▸ ✓ Shell  python -m unittest tests.test_auth  Done                            │ │Verification · Codex            │
+                                                                                  │ │Reading Implementation          │
+  │ Agent                                                                         │ │                                │
+  │ Expired tokens now return HTTP 401.                                           │ └────────────────────────────────┘
+  │ Added regression coverage for token expiration.                               │
+                                                                                  │ ┌─ WORKFLOW ─────────────────────┐
+                                                                                  │ │✓ Research                      │
+                                                                                  │ │✓ Planning                      │
+   ┌─ Execution result ──────────────────────────────────────────────────────┐    │ │✓ Implementation  4/4 ▾         │
+   │  ✓ Agent finished                                                       │    │ │  ✓ Inspect token flow          │
+   │                                                                         │    │ │  ✓ Add expiry guard            │
+   │  Output         result.json · extracted                                 │    │ │  ✓ Run regression tests        │
+   │  Changes        3 files · +42 −7 · Session snapshot                     │    │ │  ✓ Review edge cases           │
+   │  Verification   Pending · LoopForge                                     │    │ │● Verification                  │
+   │                                                                         │    │ │○ Review                        │
+   │  Next           Verification · action below                             │    │ │                                │
+   │                                                                         │    │ └────────────────────────────────┘
+   └─────────────────────────────────────────────────────────────────────────┘    │
+                                                                                  │
+                                                                                  │ ┌─ METRICS ──────────────────────┐
+                                                                                  │ │Model  codex                    │
+                                                                                  │ │Time   04m 12s                  │
+                                                                                  │ │Tokens 8 420                    │
+                                                                                  │ └────────────────────────────────┘
+  ┌────────────────────────────────────────────────────────────────────────────┐  │
+  │ Next step · Verification                                                   │  │
+  │ Current run · Implementation finished · Verification ready                 │  │
+  │  Ctrl+Enter  Generate the patch and run deterministic checks               │  │
+  │ Ctrl+K Other actions                                                       │  │
+  └────────────────────────────────────────────────────────────────────────────┘  │
+                                                                                  │
+  ┌─ Command Input ────────────────────────────────────────────────────────────┐  │
+  │ › Type / for commands                                                      │  │   Live
+  │ /run   /status   /actions   /config                                        │  │   Context
+  └────────────────────────────────────────────────────────────────────────────┘  │   Changes
+                                                                                  │   Evidences
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Tab Navigate  F4 Detail  F6 Views  / Command  End Follow                                         Esc Runs  Ctrl+Q Quit

@@ -1,0 +1,39 @@
+10 / Context · Sources et limites
+Échantillons indépendants · Source exacte, affichage borné, historique dérivé
+MAQUETTE · Données fictives · Sans action moteur
+
+
+  ┌─ Raw Prompt · captured source ───────────────────────────────────────────────────────────────────────────────────┐
+  │                                                                                                                  │
+  │  context-raw-prompt.md · capture complete · hash matched                                                         │
+  │  Display preview: lines 1–4 / 148 · Original retained locally                                                    │
+  │                                                                                                                  │
+  │   # Implementation agent                                                                                         │
+  │   You are working in the selected run workspace.                                                                 │
+  │   Implement the approved plan.                                                                                   │
+  │   Return implementation-result.json with the required fields.                                                    │
+  │                                                                                                                  │
+  │                                                                                                                  │
+  └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+  ┌─ Legacy capture ────────────────────────────────────┐      ┌─ Display redaction ─────────────────────────────────┐
+  │                                                     │      │                                                     │
+  │  Derived from legacy prompt                         │      │  API_TOKEN=[redacted secret]                        │
+  │                                                     │      │                                                     │
+  │  Exact injection was not recorded.                  │      │  Redaction applies to this display.                 │
+  │                                                     │      │                                                     │
+  │  Sections shown only when recoverable.              │      │  Source access follows local permissions.           │
+  │                                                     │      │                                                     │
+  └─────────────────────────────────────────────────────┘      └─────────────────────────────────────────────────────┘
+
+
+  ┌─ No captured context ───────────────────────────────┐      ┌─ Research · runner recorded ────────────────────────┐
+  │                                                     │      │                                                     │
+  │  No captured context for this execution.            │      │  Workspace changes detected after execution.        │
+  │                                                     │      │                                                     │
+  │  No reconstructed prompt or fake sections.          │      │  Detection can block the stage; it does not         │
+  │                                                     │      │  prevent filesystem writes.                         │
+  │                                                     │      │                                                     │
+  │                                                     │      │                                                     │
+  └─────────────────────────────────────────────────────┘      └─────────────────────────────────────────────────────┘

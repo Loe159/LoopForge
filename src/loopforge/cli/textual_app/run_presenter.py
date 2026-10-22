@@ -51,6 +51,34 @@ def run_glyph(unicode_value: str, ascii_value: str) -> str:
     return ascii_value if ascii_only() else unicode_value
 
 
+def task_summary(snapshot: UiSnapshot) -> Text | None:
+    """Literal task expectations, kept separate from execution and proof receipts."""
+
+    run = snapshot.run
+    shell = run.shell
+    if not shell or not shell.run or run.reading.mode == "Raw":
+        return None
+    stage = run.reading.stage_id or run.agent.stage_id or shell.run.current_stage
+    if stage not in {"task", "task_draft", "task_approved"}:
+        return None
+    text = Text("TASK\n\n", style="#CBC3D7")
+    text.append(shell.run.task, style="#E7E0ED")
+    text.append("\n\nSUCCESS CRITERIA\n\n", style="#CBC3D7")
+    if run.success_checks:
+        for number, criterion in enumerate(run.success_checks, 1):
+            text.append(f"{number}. {criterion}\n", style="#E7E0ED")
+        text.append("\nRecorded expectations. See Evidences for verification results.\n", style="#958EA0")
+    else:
+        text.append("Add an objective success criterion before task approval.\n", style="#FFB869")
+    if run.task_rubric:
+        text.append("\nEVALUATION RUBRIC\n\n", style="#CBC3D7")
+        text.append(run.task_rubric, style="#E7E0ED")
+    if run.task_missing:
+        text.append("\nNeeds input: " + ", ".join(run.task_missing), style="#FFB869")
+    text.append("\n\ntask.md - recorded task", style="#958EA0")
+    return text
+
+
 def terminal_marker(value: object) -> str:
     """Render a shared presentation marker within terminal capabilities."""
 
@@ -771,3 +799,70 @@ def _family_marker(family: str) -> str:
     if family == "blocked":
         return "x" if ascii_only() else "×"
     return "o" if ascii_only() else "○"
+
+
+def execution_result(snapshot: UiSnapshot, *, active: bool = False) -> Text | None:
+    """Project retained execution facts, without promoting agent claims to proof."""
+    separator = run_glyph(" · ", " - ")
+    run, agent = snapshot.run, snapshot.run.agent
+    attempt = next((a for a in run.attempts if agent.attempt_number is not None
+                    and a.get("number") == agent.attempt_number), {})
+    outcome = str(attempt.get("status") or "")
+    if active or not agent.session_id or not (agent.session_closed or outcome in {
+        "completed", "blocked", "failed", "cancelled", "interrupted",
+    }):
+        return None
+    headings = {
+        "completed": (run_glyph("✓", "+") + " Agent finished", semantic_color("success")),
+        "blocked": ("Execution blocked", semantic_color("danger")),
+        "failed": ("Execution failed", semantic_color("danger")),
+        "cancelled": ("Execution cancelled", semantic_color("secondary")),
+        "interrupted": ("Execution interrupted", semantic_color("secondary")),
+    }
+    label, color = headings.get(outcome, ("Agent session closed", "#CBC3D7"))
+    result = Text(label, style=color)
+
+    def field(label: str, value: object, color: str = "#CBC3D7") -> None:
+        clean = observable_stream_text(str(value), limit=500)
+        if clean:
+            result.append("\n\n" if "\n" not in result.plain else "\n")
+            result.append(f"{label:<14}", style=semantic_color("secondary"))
+            result.append(clean, style=color)
+
+    if agent.result_ref:
+        field("Output", agent.result_ref + separator + ("extracted" if agent.implementation_contract else "retained"))
+    if attempt.get("contract_validation_error"):
+        field("Contract", "Rejected: " + str(attempt["contract_validation_error"]), semantic_color("danger"))
+    changes = run.changes
+    if (changes is not None and changes.capture_state == "complete" and not changes.stale
+            and changes.scope == "execution" and changes.source == "runner-workspace-snapshots"):
+        text = f"{len(changes.files)} files"
+        counts = [(file.additions, file.deletions) for file in changes.files]
+        if all(type(a) is int and type(d) is int and a >= 0 and d >= 0 for a, d in counts):
+            text += separator + f"+{sum(a for a, _ in counts)} -{sum(d for _, d in counts)}"
+        field("Changes", text + separator + "Session snapshot")
+    numbered = [a.get("number") for a in run.attempts if type(a.get("number")) is int]
+    sessions = [s for s in run.sessions if s.get("stage_id") == agent.stage_id]
+    current = (agent.attempt_number == max(numbered) if numbered else bool(sessions))
+    current = current and (not sessions or sessions[-1].get("session_id") == agent.session_id)
+    shell = run.shell
+    current = current and bool(shell and shell.run and
+        agent.stage_id in {shell.run.current_stage, "implementation"})
+    if current and shell and shell.run:
+        # Run-level verification never belongs to unrelated research/planning sessions.
+        if agent.stage_id in {"implementation", "verification"}:
+            proof = run.verification or {}
+            if proof and run.candidate_revision is not None:
+                if proof.get("candidate_revision") == run.candidate_revision:
+                    if proof.get("status"):
+                        field("Verification", f"{proof['status']}{separator}candidate {run.candidate_revision}{separator}LoopForge")
+                else:
+                    field("Verification", "Outdated receipt" + separator + "different candidate", semantic_color("attention"))
+            elif not proof:
+                stage = next((s for s in shell.stages if s.id == "verification"), None)
+                if stage and stage.status in {"pending", "ready", "active", "running"}:
+                    field("Verification", stage.status.title() + separator + "LoopForge")
+        action = shell.run.next_action
+        if action and action.available:
+            field("Next", action.label + separator + "current run")
+    return result

@@ -220,6 +220,7 @@ def contextual_commands(project_dir: Path | None = None) -> dict[str, str]:
 class DispatchResult:
     exit_code: int
     should_exit: bool = False
+    run_id: str | None = None
 
 
 def tui_dependency_state() -> dict[str, bool]:
@@ -649,10 +650,12 @@ class InteractiveShell:
             )
         return DispatchResult(0 if result.ok else 1)
 
-    def complete_current_task_definition(self, success_check: str) -> DispatchResult:
+    def complete_current_task_definition(self, success_check: str, *,
+                                         expected_scope: ActionScope | None = None) -> DispatchResult:
         """Complete the selected run's task contract through the engine facade."""
 
-        result = complete_task_definition(self.project_dir, success_check=success_check)
+        result = complete_task_definition(self.project_dir, success_check=success_check,
+                                          **({"expected_scope": expected_scope} if expected_scope else {}))
         rows = [("status", result.message), ("artifact", result.artifact_path or "none")]
         if result.ok:
             render_success(
@@ -1072,6 +1075,21 @@ class InteractiveShell:
         if not task:
             self.write("Usage: /run <task> or /run --task \"...\"", error=True)
             return DispatchResult(2)
+        return self.create_run_from_intake(
+            task, pack=pack, success_checks=success_checks,
+            selected_skills=selected_skills, allowed_tools=allowed_tools,
+            max_attempts=max_attempts, timeout_seconds=timeout_seconds, rubric=rubric,
+        )
+
+    def create_run_from_intake(
+        self, task: str, *, pack: str | None = None,
+        success_checks: list[str] | None = None,
+        selected_skills: list[str] | None = None,
+        allowed_tools: list[str] | None = None,
+        max_attempts: int = 3, timeout_seconds: int = 1800, rubric: str = "",
+    ) -> DispatchResult:
+        """Typed intake shared by /run and the TUI; user text is never shell code."""
+
         try:
             with self.renderer.loading("Creating LoopForge run..."):
                 result = create_run(
@@ -1099,7 +1117,7 @@ class InteractiveShell:
             ],
             next_command=self._next_command_from_guidance() or "/continue",
         )
-        return DispatchResult(0)
+        return DispatchResult(0, run_id=str(result.run["run_id"]))
 
     def cmd_status(self, raw: str = "") -> DispatchResult:
         details = raw.strip().lower() == "details"

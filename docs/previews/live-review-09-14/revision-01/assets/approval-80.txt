@@ -1,0 +1,50 @@
+Live ajusté · Approval required en orange
+80 colonnes · Dock A · Bloc Command Input actuel conservé
+MAQUETTE · Données fictives · Sans action moteur
+
+ LoopForge    AUTH DEMO / Run #42                               NEEDS APPROVAL
+ v0.1.0       git:fix/auth
+────────────────────────────────────────────────────────────────────────────────
+
+  PLANNING · Live                                                Session 01 ▾
+  F6 Supervision
+   Focused   All   Raw     ↓ Follow live
+
+
+  │ Agent
+  │ The implementation plan is ready for your review.
+
+
+
+   ▸ plan.md · Planning · Session 01
+
+
+
+   ┌─ Execution result ────────────────────────────────────────────────────┐
+   │  Agent finished                                                       │
+   │                                                                       │
+   │  Output  plan.md · extracted                                          │
+   │                                                                       │
+   │  Next    Plan approval · action below                                 │
+   └───────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+
+
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │ Approval required                                                        │
+  │ Review plan.md before implementation.                                    │
+  │  Ctrl+Enter  Review and approve the implementation plan                  │
+  │ Ctrl+K Other actions                                                     │
+  └──────────────────────────────────────────────────────────────────────────┘
+
+  ┌─ Command Input ──────────────────────────────────────────────────────────┐
+  │ › Type / for commands                                                    │
+  │ /run   /status   /actions   /config                                      │
+  └──────────────────────────────────────────────────────────────────────────┘
+
+────────────────────────────────────────────────────────────────────────────────
+ Tab Navigate  F4 Detail  F6 Views  / Command
