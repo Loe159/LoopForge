@@ -1465,3 +1465,167 @@ RunDetailScreen {
 /* Reclaim selection chrome, never the existing command input, at low heights. */
 .run-short #run-selection, .run-short #run-selection-stage,
 .run-short #run-session-select { height: 1; min-height: 1; }
+
+
+/* Command Palette: compact, contextual, and independent of Command Input. */
+LoopForgeCommandPalette {
+    align: center top;
+    background: #0F0D15 75%;
+}
+
+#lf-command-palette {
+    width: 74;
+    max-width: 94%;
+    height: 18;
+    max-height: 75%;
+    min-height: 7;
+    margin-top: 2;
+    background: #15121B;
+    border: solid #8B5CF6;
+    padding: 0;
+}
+
+#lf-palette-heading {
+    height: 2;
+    background: #15121B;
+    color: #CBC3D7;
+    padding: 0 1;
+    align-vertical: middle;
+}
+
+#lf-palette-heading-label {
+    width: 1fr;
+    color: #CBC3D7;
+}
+
+#lf-palette-heading-key {
+    width: auto;
+    color: #958EA0;
+}
+
+#lf-palette-search {
+    height: 3;
+    background: #1D1A23;
+    color: #E7E0ED;
+    border: solid #494454;
+    padding: 0 1;
+}
+
+#lf-palette-search:focus {
+    border: solid #494454;
+    color: #D0BCFF;
+}
+
+#lf-palette-results {
+    height: 1fr;
+    background: #15121B;
+    scrollbar-size: 1 1;
+    scrollbar-color: #494454;
+    scrollbar-color-hover: #8B5CF6;
+}
+
+.lf-palette-group {
+    height: auto;
+    padding: 0 0 1 0;
+}
+
+.lf-palette-group-title {
+    height: 2;
+    padding: 1 1 0 1;
+    color: #958EA0;
+}
+
+.lf-palette-row {
+    height: auto;
+    background: #15121B;
+    color: #E7E0ED;
+    padding: 0 1;
+}
+
+.lf-palette-row.selected {
+    background: #D0BCFF;
+    color: #0A0A0A;
+}
+
+.lf-palette-row-main {
+    height: 1;
+    width: 100%;
+}
+
+.lf-palette-marker {
+    width: 2;
+    color: #CBC3D7;
+}
+
+.lf-palette-label {
+    width: 1fr;
+    min-width: 1;
+    color: #E7E0ED;
+    text-overflow: ellipsis;
+}
+
+.lf-palette-shortcut {
+    width: auto;
+    max-width: 16;
+    color: #958EA0;
+    text-overflow: ellipsis;
+}
+
+.lf-palette-row.selected .lf-palette-marker,
+.lf-palette-row.selected .lf-palette-label,
+.lf-palette-row.selected .lf-palette-shortcut {
+    color: #0A0A0A;
+}
+
+.lf-palette-description {
+    display: none;
+    height: auto;
+    max-height: 3;
+    width: 100%;
+    margin-left: 2;
+    color: #383141;
+    text-overflow: ellipsis;
+}
+
+.lf-palette-row.selected .lf-palette-description {
+    display: block;
+}
+
+#lf-palette-empty {
+    display: none;
+    color: #958EA0;
+    height: auto;
+    padding: 1 1;
+    text-align: center;
+}
+
+#lf-palette-footer {
+    height: 2;
+    padding: 0 1;
+    background: #0F0D15;
+    border-top: solid #494454;
+    color: #958EA0;
+    align-vertical: middle;
+}
+
+#lf-palette-count {
+    width: 1fr;
+}
+
+#lf-palette-help {
+    width: auto;
+    max-width: 70%;
+    text-overflow: ellipsis;
+}
+
+LoopForgeCommandPalette.-narrow #lf-command-palette {
+    width: 94%;
+}
+
+LoopForgeCommandPalette.-narrow #lf-palette-heading {
+    height: 1;
+}
+
+LoopForgeCommandPalette.-narrow #lf-palette-help {
+    max-width: 65%;
+}

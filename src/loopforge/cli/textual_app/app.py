@@ -14,7 +14,6 @@ from textual import on, work
 from textual.app import App, ComposeResult
 from textual.css.query import NoMatches
 from textual.binding import Binding
-from textual.command import DiscoveryHit, Hit, Hits, Provider
 from textual.containers import Container
 from textual.events import Resize
 from textual.timer import Timer
@@ -35,6 +34,11 @@ from loopforge.cli.presentation import FAMILY_PRESENTATION
 from loopforge.cli.state_store import StateStore
 from loopforge.cli.run_projection import project_events
 from loopforge.cli.textual_app.messages import LoadFailed, SnapshotPublished
+from loopforge.cli.textual_app.command_palette import (
+    LoopForgeCommandPalette,
+    PaletteEntry,
+    build_palette_entries,
+)
 from loopforge.cli.textual_app.run_presenter import (
     ascii_only as _ascii_only,
     compact_count as _compact_count,
@@ -129,51 +133,6 @@ EXPERT_COMMANDS = (
 )
 
 
-class LoopForgeActionProvider(Provider):
-    """Expose the shared action descriptors in Textual's command palette."""
-
-    async def search(self, query: str) -> Hits:
-        matcher = self.matcher(query)
-        for action in self.app.available_actions:
-            score = matcher.match(f"{action.label} {action.id}")
-            if score > 0:
-                yield Hit(
-                    score,
-                    matcher.highlight(action.label),
-                    lambda action=action: self.app.request_action(action),
-                    text=action.label,
-                    help=action.description,
-                )
-        shell = self.app._snapshot.run.shell
-        if shell is not None and shell.run is not None:
-            for cmd, label in EXPERT_COMMANDS:
-                score = matcher.match(label)
-                if score > 0:
-                    yield Hit(
-                        score,
-                        matcher.highlight(label),
-                        lambda cmd=cmd: self.app._run_slash_command(cmd),
-                        text=label,
-                        help=f"Slash command {cmd}",
-                    )
-
-    async def discover(self) -> Hits:
-        for action in self.app.available_actions:
-            yield DiscoveryHit(
-                action.label,
-                lambda action=action: self.app.request_action(action),
-                help=action.description,
-            )
-        shell = self.app._snapshot.run.shell
-        if shell is not None and shell.run is not None:
-            for cmd, label in EXPERT_COMMANDS:
-                yield DiscoveryHit(
-                    label,
-                    lambda cmd=cmd: self.app._run_slash_command(cmd),
-                    help=f"Slash command {cmd}",
-                )
-
-
 class LoopForgeApp(App[None]):
     HOME_DETAILS_DELAY = 0.15
 
@@ -181,7 +140,7 @@ class LoopForgeApp(App[None]):
 
     TITLE = "LoopForge"
     CSS_PATH = [Path(__file__).with_name(name) for name in ("styles.tcss", "settings.tcss")]
-    COMMANDS = {LoopForgeActionProvider}
+    COMMANDS = set()  # Ctrl+K opens the LoopForge modal, not Textual's stock palette.
     BINDINGS = [
         Binding("ctrl+k", "command_palette", "Actions", show=True),
         Binding("f4", "run_detail", "Detail", show=False),
@@ -281,9 +240,108 @@ class LoopForgeApp(App[None]):
         shell = self._snapshot.run.shell
         return shell.actions if shell is not None else ()
 
+    def action_command_palette(self) -> None:
+        """Open the current context's compact command palette."""
+
+        if len(self.screen_stack) > 1:
+            return
+        from loopforge.cli.interactive import contextual_commands
+
+        if self._screen == "home":
+            selected = self._home_selected_project()
+            project_dir = Path(str(selected["path"])) if selected else None
+            has_project = selected is not None
+        else:
+            project_dir = self.shell.project_dir
+            has_project = project_dir is not None
+
+        has_run = self._screen == "run" and (
+            self._snapshot.run.shell is not None
+            and self._snapshot.run.shell.run is not None
+        )
+        try:
+            commands = contextual_commands(project_dir)
+        except (OSError, ValueError):
+            # An inaccessible project must never become an executable
+            # workflow shortcut just because palette discovery failed.
+            commands = {"help": "Show command help.",
+                        "commands": "List available interactive commands."}
+
+        entries = build_palette_entries(
+            self.available_actions if has_run else (),
+            commands,
+            expert_commands=EXPERT_COMMANDS,
+            has_run=has_run,
+            has_project=has_project,
+        )
+        self.push_screen(LoopForgeCommandPalette(entries), self._palette_selected)
+
+    def _palette_selected(self, entry: PaletteEntry | None) -> None:
+        """Route a selection through the existing guarded action/command paths."""
+
+        if entry is None:
+            return
+        if entry.action is not None:
+            # The snapshot may have advanced while a modal was open. Never
+            # execute an old action just because it was shown in the palette.
+            current = next(
+                (action for action in self.available_actions
+                 if action.id == entry.action.id and action.available),
+                None,
+            )
+            if current is None:
+                self._set_notice("This action is no longer available. Refresh the run.")
+                return
+            self.request_action(current)
+            return
+
+        command = entry.command
+        if command in {"/run", "/new"}:
+            self.action_new_run()
+        elif command == "/archive":
+            self.action_archive()
+        elif command in {"/trust", "/untrust"}:
+            self._prefill_palette_command(command + " pack ")
+        elif command in {"/do", "/cd", "/resume", "/complete-task",
+                         "/fork", "/report"}:
+            self._prefill_palette_command(command + " ")
+        elif command == "/update":
+            # Never install software from a single discovery keystroke.
+            self._prefill_palette_command(command)
+        else:
+            self._run_slash_command(command)
+
+    def _prefill_palette_command(self, command: str) -> None:
+        """Use the existing slash input for commands requiring user arguments."""
+
+        field: HomeCommandInput | None = None
+        if self._screen == "home":
+            field = self.query_one("#home-command-input", HomeCommandInput)
+        elif self._screen == "run":
+            command_bar = self.query_one("#run-command-bar", RunCommandBar)
+            if command_bar.display:
+                field = self.query_one("#run-command-input", HomeCommandInput)
+        if field is None:
+            self.push_screen(
+                TextEntryScreen(
+                    "Run LoopForge command",
+                    "Complete the command and press Enter.",
+                    value=command,
+                    submit_label="Run",
+                ),
+                self._run_slash_command,
+            )
+            return
+        field.value = command
+        field.cursor_position = len(command)
+        field.set_command_active(True)
+        field.focus()
+
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         """Enable the dashboard's priority bindings only on its own surface."""
 
+        if any(isinstance(screen, LoopForgeCommandPalette) for screen in self.screen_stack):
+            return False  # Only the modal's own bindings may consume keys.
         if any(isinstance(screen, TaskComposer) for screen in self.screen_stack):
             if action in {"focus_next", "focus_previous"}:
                 return super().check_action(action, parameters)
