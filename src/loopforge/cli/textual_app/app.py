@@ -17,6 +17,7 @@ from textual.binding import Binding
 from textual.containers import Container
 from textual.events import Resize
 from textual.timer import Timer
+from textual.widget import Widget
 from textual.widgets import Button, Collapsible, Footer, Header, Input, OptionList, Select, Static
 from textual.widgets._collapsible import CollapsibleTitle
 
@@ -84,14 +85,19 @@ from loopforge.cli.textual_app.screens import (
 )
 from loopforge.cli.textual_app.workers import load_project_snapshot, _identity_stale
 from loopforge.cli.textual_app.task_composer import TaskComposer
+from loopforge.cli.textual_app.settings import SettingsDashboard
 from loopforge.cli.ui import TerminalRenderer
 from loopforge.engine import (
     AGENT_COMMANDS,
     ActionScope,
     DEFAULT_AGENT_EXECUTION_MODE,
     SUPPORTED_ADAPTERS,
+    SUPPORTED_PROFILES,
     current_status,
+    loopforge_home,
+    profile_policy,
     set_default_adapter,
+    user_preferences_path,
 )
 
 if TYPE_CHECKING:
@@ -133,7 +139,7 @@ class LoopForgeApp(App[None]):
     """Keyboard-first Textual migration with no engine work in render callbacks."""
 
     TITLE = "LoopForge"
-    CSS_PATH = str(Path(__file__).with_name("styles.tcss"))
+    CSS_PATH = [Path(__file__).with_name(name) for name in ("styles.tcss", "settings.tcss")]
     COMMANDS = set()  # Ctrl+K opens the LoopForge modal, not Textual's stock palette.
     BINDINGS = [
         Binding("ctrl+k", "command_palette", "Actions", show=True),
@@ -208,6 +214,8 @@ class LoopForgeApp(App[None]):
         self._session_options_signature = None
         self._syncing_session_select = False
         self._screen = "home"
+        self._settings_opener = "home"
+        self._settings_return_focus: Widget | None = None
         self._home_focus = "projects"
         self._task_operation_screen: TaskComposer | None = None
         self._home_details_timer: Timer | None = None
@@ -231,7 +239,6 @@ class LoopForgeApp(App[None]):
     def available_actions(self) -> tuple[ActionDescriptor, ...]:
         shell = self._snapshot.run.shell
         return shell.actions if shell is not None else ()
-
 
     def action_command_palette(self) -> None:
         """Open the current context's compact command palette."""
@@ -339,6 +346,13 @@ class LoopForgeApp(App[None]):
             if action in {"focus_next", "focus_previous"}:
                 return super().check_action(action, parameters)
             return False  # The composer and its confirmation own their native keys.
+        if self._screen == "settings":
+            # Settings owns navigation. In particular Enter must never open the
+            # project adapter picker or trigger a workflow action behind it.
+            return action in {
+                "focus_next", "focus_previous", "command_palette", "show_home",
+                "cancel_or_exit", "root_cancel_or_exit", "quit",
+            }
         if action in {"root_open_selected", "open_selected"} and self._screen == "run":
             if (len(self.screen_stack) == 1 and isinstance(self.focused, Button)
                     and (self.focused.id or "").startswith("run-")):
@@ -381,6 +395,7 @@ class LoopForgeApp(App[None]):
         yield Header(show_clock=False)
         yield HomeDashboard()
         yield RunDashboard()
+        yield SettingsDashboard()
         with Container(id="main-content"):
             yield Static(id="screen-title")
             yield Static(id="screen-state", classes="secondary")
@@ -660,9 +675,34 @@ class LoopForgeApp(App[None]):
         self.action_show_evidence()
 
     def action_show_settings(self) -> None:
+        if self._screen == "settings" or len(self.screen_stack) != 1:
+            return
+        if self._screen == "home":
+            self._commit_home_details()
+        self._settings_opener = self._screen
+        self._settings_return_focus = self.focused
         self._screen = "settings"
-        self._reset_list_cursor()
         self._render_snapshot(self._snapshot)
+        self.query_one(SettingsDashboard).focus_navigation()
+
+    @on(SettingsDashboard.BackRequested)
+    def _settings_back_requested(self, event: SettingsDashboard.BackRequested) -> None:
+        event.stop()
+        self._close_settings()
+
+    def _close_settings(self) -> None:
+        if self._screen != "settings":
+            return
+        self._screen = self._settings_opener
+        self._render_snapshot(self._snapshot)
+        self.call_after_refresh(self._restore_settings_focus)
+
+    def _restore_settings_focus(self) -> None:
+        if self._screen != self._settings_opener or len(self.screen_stack) != 1:
+            return
+        previous = self._settings_return_focus
+        if previous is None or previous.is_attached:
+            self.set_focus(previous)
 
     def action_root_show_settings(self) -> None:
         self.action_show_settings()
@@ -696,6 +736,9 @@ class LoopForgeApp(App[None]):
         self.load_selected_project(self.shell.project_dir)
 
     def action_go_back(self) -> None:
+        if self._screen == "settings":
+            self.query_one(SettingsDashboard).action_back()
+            return
         if self._screen == "home":
             command_input = self.query_one("#home-command-input", Input)
             if command_input.has_focus:
@@ -788,7 +831,7 @@ class LoopForgeApp(App[None]):
                 self._open_evidence_worker(item)
             return
         if self._screen == "settings":
-            self.show_adapter_selector()
+            self.query_one(SettingsDashboard).action_focus_content()
 
     def action_home_open_selected(self) -> None:
         self.action_open_selected()
@@ -1628,16 +1671,19 @@ class LoopForgeApp(App[None]):
     def _sync_screen_surface(self) -> None:
         home = self._base_query_one("#home-dashboard", HomeDashboard)
         run = self._base_query_one("#run-dashboard", RunDashboard)
+        settings = self._base_query_one("#settings-dashboard", SettingsDashboard)
         main = self._base_query_one("#main-content", Container)
         legacy_header = self._base_query_one("Header", Header)
         legacy_footer = self._base_query_one("Footer", Footer)
         is_home = self._screen == "home"
         is_run = self._screen == "run"
+        is_settings = self._screen == "settings"
         home.display = is_home
         run.display = is_run
-        main.display = not is_home and not is_run
-        legacy_header.display = not is_home and not is_run
-        legacy_footer.display = not is_home and not is_run
+        settings.display = is_settings
+        main.display = not is_home and not is_run and not is_settings
+        legacy_header.display = main.display
+        legacy_footer.display = main.display
 
     def _render_snapshot(self, snapshot: UiSnapshot) -> None:
         self._apply_shell_theme()
@@ -1656,6 +1702,9 @@ class LoopForgeApp(App[None]):
             return
         if self._screen == "run":
             self._render_run(snapshot)
+            return
+        if self._screen == "settings":
+            self._render_settings(snapshot)
             return
         title, before, items, formatter, after, help_text = self._screen_layout(snapshot)
         try:
@@ -1676,6 +1725,47 @@ class LoopForgeApp(App[None]):
         self._render_operation_panel(snapshot)
         self.query_one("#screen-notice", Static).update(self._notice)
         self.query_one("#screen-help", Static).update(help_text)
+
+    def _render_settings(self, snapshot: UiSnapshot) -> None:
+        """Supply existing, read-only information to the approved global frame."""
+
+        diagnostics = self._adapter_diagnostics()
+        harnesses = Text()
+        harnesses.append("Harness pris en charge\n\n", style="bold")
+        for name in AGENT_COMMANDS:
+            harnesses.append(f"{name}\n", style="#CBC3D7")
+            harnesses.append(f"  {diagnostics[name]}\n")
+        harnesses.append("\nLa présence du binaire ne confirme pas la connexion.", style="#958EA0")
+        workflow = Text("Les étapes et leurs acteurs sont définis par le contrat du pack.\n\n")
+        shell = snapshot.run.shell
+        if shell is not None and shell.stages:
+            workflow.append("Contexte du run courant\n", style="bold")
+            for stage in shell.stages:
+                workflow.append(f"{stage.title}\n")
+        else:
+            workflow.append("Aucun workflow de run sélectionné.", style="#958EA0")
+        autonomy = Text()
+        autonomy.append("Profils disponibles\n\n", style="bold")
+        for name in SUPPORTED_PROFILES:
+            autonomy.append(f"{name}\n", style="#CBC3D7")
+            autonomy.append(f"{profile_policy(name)['summary']}\n\n")
+        diagnostic_text = Text(f"Révision du snapshot : {snapshot.revision}\n\n")
+        diagnostic_text.append(harnesses)
+        self._base_query_one("#settings-dashboard", SettingsDashboard).update_values({
+            "behavior": Text(
+                f"Thème utilisateur : {getattr(self.shell, 'theme', 'default')}\n\n"
+                "Le mode d’exécution se choisit au lancement de l’opération.\n"
+                f"Mode par défaut : {DEFAULT_AGENT_EXECUTION_MODE}"
+            ),
+            "harnesses": harnesses,
+            "workflow": workflow,
+            "autonomy": autonomy,
+            "storage": Text(
+                f"Préférences utilisateur\n{user_preferences_path()}\n\n"
+                f"Données LoopForge\n{loopforge_home()}"
+            ),
+            "diagnostics": diagnostic_text,
+        })
 
     def _render_run(self, snapshot: UiSnapshot) -> None:
         """Render the dedicated live surface from immutable run state."""
@@ -2170,19 +2260,7 @@ class LoopForgeApp(App[None]):
             items = self._visible_evidence()
             before = "Evidence" if items else "Evidence\nNo evidence available."
             return "Evidence", before, items, _evidence_line, "", "Enter open · / search · c copy · x export · Esc run"
-        values = [
-            ("Theme", getattr(self.shell, "theme", "default")),
-            ("Adapter", getattr(self.shell, "selected_adapter", "default")),
-            ("Project", str(snapshot.selected_project or self.shell.project_dir)),
-            ("Git", snapshot.project.branch),
-            ("Snapshot", str(snapshot.revision)),
-        ]
-        diagnostics = self._adapter_diagnostics()
-        before = "\n".join(f"{key}: {value}" for key, value in values)
-        before += "\n\nAdapter diagnostics\n" + "\n".join(
-            f"{adapter}: {diagnostic}" for adapter, diagnostic in diagnostics.items()
-        )
-        return "Settings and diagnostics", before, (), None, "", "Enter adapter picker · Esc run · Ctrl+P projects"
+        raise ValueError(f"No legacy layout for screen: {self._screen}")
 
     def _filtered_projects(self) -> tuple[object, ...]:
         return _filter_rows(self._snapshot.home.projects, self._filter)

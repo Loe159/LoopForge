@@ -191,7 +191,8 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
             app.action_show_settings()
             self.assertEqual(app._screen, "settings")
             await pilot.press("escape")
-            self.assertEqual(app._screen, "run")
+            self.assertEqual(app._screen, "home")
+            app._screen = "run"
             app.action_show_evidence()
             self.assertEqual(app._screen, "run")
             app.request_action(action)
@@ -199,7 +200,7 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
             await pilot.press("escape")
             self.assertIsNone(app._operation)
 
-    async def test_pilot_selects_kilo_code_adapter_from_settings_and_action(self) -> None:
+    async def test_pilot_preserves_project_adapter_action_from_global_settings(self) -> None:
         from loopforge.cli.actions import ActionDescriptor
         from loopforge.cli.interactive import InteractiveShell
         from loopforge.cli.textual_app import LoopForgeApp
@@ -218,10 +219,17 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
                     app.action_show_settings()
                     await pilot.pause()
                     await pilot.press("enter")
+                    self.assertFalse(isinstance(app.screen, AdapterSelectionScreen))
+                    # Global Settings must not silently mutate a project's
+                    # default. The existing explicit project action still works.
+                    app.request_action(ActionDescriptor(
+                        "choose-adapter", "Choose adapter", "Project default", "low",
+                        False, True, "/adapter", "adapter",
+                    ))
                     await wait_for_condition(
                         pilot,
                         lambda: isinstance(app.screen, AdapterSelectionScreen),
-                        "the adapter picker from Settings",
+                        "the explicit project adapter picker",
                     )
                     await pilot.press("down", "down", "enter")
                     await wait_for_condition(
@@ -230,7 +238,6 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
                         "the adapter picker to close",
                     )
                     self.assertEqual(shell.selected_adapter, "kilo-code")
-                    self.assertIn("kilo-code", str(app.query_one("#screen-body").render()))
 
                     action = ActionDescriptor(
                         "choose-adapter",
@@ -1273,10 +1280,15 @@ class TextualFoundationTests(unittest.IsolatedAsyncioTestCase):
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
             self._paint(app, "settings")
-            self.assertEqual(str(app.query_one("#screen-title").render()), "Settings and diagnostics")
-            body = self._body_text(app)
-            for label in ("Theme:", "Adapter:", "Git:", "Snapshot:", "Adapter diagnostics"):
-                self.assertIn(label, body)
+            from loopforge.cli.textual_app.settings import SettingsDashboard
+
+            frame = app.query_one(SettingsDashboard)
+            self.assertTrue(frame.display)
+            self.assertEqual(str(app.query_one("#settings-scope").render()), "Global")
+            self.assertIn("Thème utilisateur", str(app.query_one("#settings-values").render()))
+            frame._select_section("diagnostics")
+            self.assertIn("Révision du snapshot", str(app.query_one("#settings-values").render()))
+            self.assertIn("Harness pris en charge", str(app.query_one("#settings-values").render()))
 
     async def test_open_selected_resets_selected_index_to_zero(self) -> None:
         from loopforge.cli import main
