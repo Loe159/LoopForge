@@ -239,9 +239,9 @@ PYTHONPATH=src .venv/bin/python tools/demo_settings_navigation.py --capture /tmp
 PYTHONPATH=src .venv/bin/python -m unittest tests.test_settings_navigation
 ```
 
-Git: isolated local implementation commit; no push authorized. The full-suite
+Git: isolated local implementation commit `d9dc9a7`; no push performed. The full-suite
 baseline failure is recorded rather than broadening this approved UI change
-into unrelated Research/installation fixes. Exact commit reference follows.
+into unrelated Research/installation fixes.
 Visual acceptance: pending user inspection of the actual frame/navigation.
 
 ### Finish review
