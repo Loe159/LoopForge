@@ -1,0 +1,188 @@
+#settings-dashboard {
+    display: none;
+    height: 1fr;
+    background: #15121B;
+    color: #E7E0ED;
+}
+
+#settings-header {
+    height: 3;
+    border-bottom: solid #494454;
+    padding: 0 2;
+    align: left middle;
+}
+
+#settings-brand {
+    width: 1fr;
+    height: 1;
+    text-style: bold;
+}
+
+#settings-scope {
+    width: 8;
+    height: 1;
+    color: #CBC3D7;
+}
+
+#settings-back {
+    width: 10;
+    min-width: 10;
+    height: 1;
+    padding: 0 1;
+    border: none;
+    background: #1D1A23;
+    color: #CBC3D7;
+}
+
+#settings-back:focus {
+    background: #D0BCFF;
+    color: #0A0A0A;
+    text-style: bold;
+}
+
+#settings-workspace {
+    height: 1fr;
+    min-height: 3;
+    margin: 1 2;
+}
+
+#settings-rail {
+    width: 28;
+    border: solid #808080;
+    border-title-color: #CBC3D7;
+    margin-right: 2;
+}
+
+#settings-navigation {
+    height: 1fr;
+    border: none;
+    padding: 0;
+    background: #15121B;
+    color: #E7E0ED;
+}
+
+#settings-navigation .option-list--option {
+    padding: 0 1;
+}
+
+#settings-navigation .option-list--option-highlighted {
+    background: #2C2832;
+    color: #E7E0ED;
+}
+
+#settings-navigation:focus .option-list--option-highlighted {
+    background: #D0BCFF;
+    color: #0A0A0A;
+    text-style: bold;
+}
+
+#settings-pack-scope {
+    height: auto;
+    padding: 1;
+    color: #958EA0;
+}
+
+#settings-main {
+    width: 1fr;
+    height: 1fr;
+}
+
+#settings-section-select {
+    display: none;
+    height: 1;
+    min-height: 1;
+    margin-bottom: 1;
+    color: #E7E0ED;
+    background: #1D1A23;
+}
+
+#settings-section-select SelectCurrent,
+#settings-section-select SelectCurrent #label,
+#settings-section-select SelectCurrent .arrow {
+    background: #1D1A23;
+    color: #E7E0ED;
+}
+
+#settings-section-select:focus SelectCurrent,
+#settings-section-select:focus SelectCurrent #label,
+#settings-section-select:focus SelectCurrent .arrow {
+    background: #D0BCFF;
+    background-tint: transparent;
+    color: #0A0A0A;
+}
+
+#settings-section-select SelectOverlay {
+    background: #1D1A23;
+    color: #E7E0ED;
+    border: solid #8B5CF6;
+    background-tint: transparent;
+}
+
+#settings-section-select SelectOverlay .option-list--option-highlighted {
+    background: #D0BCFF;
+    color: #0A0A0A;
+}
+
+#settings-content {
+    height: 1fr;
+    border: solid #808080;
+    border-title-color: #CBC3D7;
+    padding: 1 2;
+    background: #15121B;
+    scrollbar-color: #958EA0;
+    scrollbar-background: #1D1A23;
+}
+
+#settings-rail.focused, #settings-content.focused {
+    border: solid #8B5CF6;
+    border-title-color: #D0BCFF;
+}
+
+#settings-section-title {
+    height: auto;
+    text-style: bold;
+}
+
+#settings-description {
+    height: auto;
+    margin-top: 1;
+    color: #CBC3D7;
+}
+
+#settings-values {
+    height: auto;
+    margin-top: 2;
+    color: #E7E0ED;
+}
+
+#settings-hotkeys {
+    height: auto;
+    min-height: 1;
+    padding: 0 2;
+    background: #0F0D15;
+    color: #CBC3D7;
+}
+
+.settings-compact #settings-rail {
+    display: none;
+}
+
+.settings-compact #settings-section-select {
+    display: block;
+}
+
+.settings-compact #settings-header {
+    padding: 0 1;
+}
+
+.settings-compact #settings-workspace {
+    margin: 0 1;
+}
+
+.settings-compact #settings-content {
+    padding: 0 1;
+}
+
+.settings-compact #settings-hotkeys {
+    padding: 0 1;
+}
