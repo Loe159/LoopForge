@@ -11,6 +11,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.events import Resize
 from textual.screen import Screen
+from textual.widget import Widget
 from textual.widgets import Button, Static, TextArea
 
 from loopforge.cli.task_intake import TaskContext, TaskDraft, load_task_context
@@ -64,6 +65,13 @@ class TaskComposer(Screen[str | None]):
     def title_text(self) -> str:
         return "Complete task contract" if self.complete else "New run / Task"
 
+    @property
+    def focus_chain(self) -> list[Widget]:
+        # Enter criteria consecutively; every button remains reachable afterwards.
+        chain = super().focus_chain
+        return ([widget for widget in chain if isinstance(widget, TextArea) and not widget.read_only]
+                + [widget for widget in chain if isinstance(widget, Button)])
+
     def compose(self) -> ComposeResult:
         yield Static("LoopForge", id="task-brand")
         yield Static(self.title_text, id="task-title")
@@ -76,7 +84,9 @@ class TaskComposer(Screen[str | None]):
                 task.border_title = _chrome("Task · recorded" if self.complete else "Task · required")
                 yield task
                 yield Static("SUCCESS CRITERIA", id="task-criteria-title")
-                yield Static("What observable result will show that this is done?", id="task-criteria-help")
+                yield Static("What observable result will show that this is done?"
+                             + ("" if self.complete else " Tab to the next criterion; empty fields are ignored."),
+                             id="task-criteria-help")
                 with Vertical(id="task-criteria"):
                     yield CriterionField(1, removable=not self.complete)
                 if not self.complete:
@@ -130,7 +140,8 @@ class TaskComposer(Screen[str | None]):
         self.query_one("#task-project", Static).update(Text(
             f"Project  {context.project_name}" + _chrome(" · ") + str(context.scope.project_path)))
         self.query_one("#task-defaults", Static).update(Text(
-            _chrome(" · ").join((context.pack, context.profile, context.adapter))))
+            _chrome(" · ").join((context.pack, context.profile, context.adapter))
+            + ("" if context.initialized else " · Initializes on creation")))
         self.query_one("#task-context-details", Static).update(Text(
             f"PROJECT DEFAULTS\n\nPack     {context.pack}\nProfile  {context.profile}"
             f"\nAdapter  {context.adapter}\n\n\nAFTER {'COMPLETION' if self.complete else 'CREATION'}"
@@ -159,9 +170,19 @@ class TaskComposer(Screen[str | None]):
         )
 
     @on(TextArea.Changed)
-    def _text_changed(self, event: TextArea.Changed) -> None:
+    async def _text_changed(self, event: TextArea.Changed) -> None:
         event.stop()
+        if event.text_area.has_class("criterion-value"):
+            await self._ensure_empty_criterion()
         self._update_validation()
+
+    async def _ensure_empty_criterion(self) -> None:
+        if self.complete or self.busy:
+            return
+        areas = list(self.query(".criterion-value").results(TextArea))
+        if not areas or areas[-1].text.strip():
+            self._next_criterion += 1
+            await self.query_one("#task-criteria").mount(CriterionField(self._next_criterion))
 
     def _update_validation(self) -> None:
         if not self.is_mounted:
@@ -217,7 +238,7 @@ class TaskComposer(Screen[str | None]):
         count = len(draft.success_checks)
         unit = "criterion" if count == 1 else "criteria"
         hint = (f"{count} {unit} · Tab fields below · Esc Back" if self.has_class("short") else
-                "Tab Fields · Enter New line · Esc Back · Ctrl+Enter Submit")
+                "Tab / Shift+Tab Fields · Enter New line · Esc Back · Ctrl+Enter Submit")
         self.query_one("#task-hotkeys", Static).update(_chrome(hint))
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -230,10 +251,8 @@ class TaskComposer(Screen[str | None]):
         elif identity == "task-recheck" and not self.busy:
             self.load_context()
         elif identity == "task-add-criterion" and not self.busy:
-            self._next_criterion += 1
-            field = CriterionField(self._next_criterion)
-            await self.query_one("#task-criteria").mount(field)
-            field.query_one(TextArea).focus()
+            await self._ensure_empty_criterion()
+            list(self.query(".criterion-value").results(TextArea))[-1].focus()
         elif identity.startswith("criterion-remove-") and not self.busy:
             fields = list(self.query(CriterionField))
             field = getattr(event.button.parent, "parent", None)
@@ -241,6 +260,7 @@ class TaskComposer(Screen[str | None]):
                 return  # A second queued click may outlive the removed row.
             index = fields.index(field)
             await field.remove()
+            await self._ensure_empty_criterion()
             remaining = list(self.query(CriterionField))
             if remaining:
                 remaining[min(index, len(remaining)-1)].query_one(TextArea).focus()

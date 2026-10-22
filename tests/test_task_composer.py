@@ -59,6 +59,8 @@ class TaskComposerPilotTests(unittest.IsolatedAsyncioTestCase):
     async def test_criteria_add_remove_preserves_multiline_values_and_focus(self):
         async with composer_case() as (_, pilot, form, _, _):
             form.query_one("#task-description", TextArea).load_text("Task")
+            form.query_one("#criterion-value-1", TextArea).load_text("First result")
+            await pilot.pause()
             form.query_one("#task-add-criterion", Button).focus()
             await pilot.press("enter")
             await pilot.pause()
@@ -70,6 +72,65 @@ class TaskComposerPilotTests(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertEqual(form.draft().success_checks, ("Observable\nresult [red]",))
             self.assertIs(form.focused, second)
+
+    async def test_tab_moves_between_editors_then_reaches_every_button(self):
+        async with composer_case() as (_, pilot, form, _, _):
+            await pilot.press(*"Task", "tab", *"First result")
+            await pilot.pause()
+            first = form.query_one("#criterion-value-1", TextArea)
+            second = form.query_one("#criterion-value-2", TextArea)
+            self.assertIs(form.focused, first)  # Appending never steals the cursor.
+            await pilot.press("tab")
+            self.assertIs(form.focused, second)
+            await pilot.press("shift+tab")
+            self.assertIs(form.focused, first)
+            await pilot.press("shift+tab")
+            self.assertEqual(form.focused.id, "task-description")
+            await pilot.press("tab", "tab", *"Second result", "tab")
+            self.assertEqual(form.focused.id, "criterion-value-3")
+            self.assertEqual(form.draft().success_checks, ("First result", "Second result"))
+            visited = set()
+            for _ in range(len(form.focus_chain)):
+                await pilot.press("tab")
+                visited.add(form.focused.id)
+            expected = {button.id for button in form.query(Button) if button.display and not button.disabled}
+            self.assertTrue(expected <= visited)
+            self.assertEqual(form.draft().task, "Task")
+
+    async def test_blank_tail_is_restored_after_removal_and_never_saved(self):
+        async with composer_case() as (_, pilot, form, _, _):
+            await pilot.press(*"Task", "tab", *"Result", "tab")
+            form.query_one("#criterion-remove-2", Button).focus()
+            await pilot.press("enter")
+            await pilot.pause()
+            areas = list(form.query(".criterion-value").results(TextArea))
+            self.assertEqual([area.text for area in areas], ["Result", ""])
+            areas[0].focus()
+            areas[0].load_text("   ")
+            await pilot.pause()
+            self.assertEqual(form.draft().success_checks, ())
+            for button in list(form.query(".criterion-remove").results(Button)):
+                if button.is_mounted:
+                    button.focus()
+                    await pilot.press("enter")
+                    await pilot.pause()
+            self.assertEqual(len(form.query(".criterion-value")), 1)
+            self.assertEqual(form.draft().success_checks, ())
+
+    async def test_conditional_rubric_and_discard_dialog_remain_keyboard_accessible(self):
+        async with composer_case(profile="autonomous") as (app, pilot, form, _, _):
+            form.query_one("#task-description", TextArea).load_text("Improve the design")
+            await pilot.pause()
+            await pilot.press("tab", "tab")
+            self.assertEqual(form.focused.id, "task-rubric")
+            await pilot.press(*"Visible focus", "escape")
+            await pilot.pause()
+            self.assertEqual(app.focused.id, "confirm-cancel")
+            await pilot.press("tab")
+            self.assertEqual(app.focused.id, "confirm-approve")
+            await pilot.press("shift+tab", "enter")
+            await pilot.pause()
+            self.assertIs(app.screen, form)
 
     async def test_empty_task_and_conditional_rubric_use_engine_contract(self):
         async with composer_case(profile="autonomous") as (_, pilot, form, _, _):
@@ -104,7 +165,7 @@ class TaskComposerPilotTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_resize_keeps_footer_and_focus_scrolls_criteria_into_view(self):
         async with composer_case() as (_, pilot, form, _, _):
-            for width in (60, 80, 120, 160):
+            for width in (48, 52, 60, 80, 100, 120, 160):
                 await pilot.resize_terminal(width, 24)
                 await pilot.pause()
                 action = form.query_one("#task-submit")
@@ -113,8 +174,10 @@ class TaskComposerPilotTests(unittest.IsolatedAsyncioTestCase):
                 self.assertLessEqual(action.region.right, width)
                 self.assertEqual(form.query_one("#task-context-details").display, width >= 110)
                 criterion = form.query_one("#criterion-value-1", TextArea)
-                criterion.focus()
+                form.query_one("#task-description", TextArea).focus()
+                await pilot.press("tab")
                 await pilot.pause()
+                self.assertIs(form.focused, criterion)
                 self.assertLess(criterion.region.y, action.region.y)
                 self.assertGreater(criterion.region.bottom, 0)
 
@@ -200,6 +263,26 @@ class TaskComposerPilotTests(unittest.IsolatedAsyncioTestCase):
 
 
 class TaskIntakeIntegrationTests(unittest.TestCase):
+    def test_uninitialized_context_is_readonly_then_slash_run_initializes_once(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"LOOPFORGE_HOME": str(Path(tmp)/"home")}):
+            project = Path(tmp)/"project"
+            project.mkdir()
+            cli_fixtures.CliTests().initialize_git_project(project)
+            shown = load_task_context(project)
+            self.assertFalse(shown.initialized)
+            self.assertFalse((project/".loopforge").exists())
+            shell = InteractiveShell(project, output=io.StringIO(), error=io.StringIO())
+            with patch("loopforge.cli.interactive.initialize_project", wraps=initialize_project) as init:
+                self.assertEqual(shell.cmd_run('--task "First task" --success-check "Result"').exit_code, 0)
+                first = current_status(project)
+                self.assertTrue(first.initialized)
+                self.assertEqual((first.config["profile"], first.config["default_adapter"]),
+                                 (shown.profile, shown.adapter))
+                self.assertFalse(first.run["approval"]["approved"])
+                self.assertEqual(first.run["stage_statuses"]["research"], "pending")
+                self.assertEqual(shell.create_run_from_intake("Second task").exit_code, 0)
+                init.assert_called_once_with(project)
+
     def test_scoped_completion_refuses_a_different_run_without_editing_it(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"LOOPFORGE_HOME": str(Path(tmp)/"home")}):
             project = Path(tmp)/"project"
@@ -279,3 +362,36 @@ class TaskRouteIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 await pilot.press("enter")
                 await wait_for_condition(pilot, lambda: current_status(project).run["approval"]["approved"], "explicit approval")
                 self.assertEqual(current_status(project).run["stage_statuses"]["research"], "pending")
+                # Disk persistence precedes the operation's UI refresh. Drain it
+                # before tearing down widgets with snapshot messages in flight.
+                await wait_for_condition(
+                    pilot, lambda: app.snapshot.operation.finished
+                    and not app._run_operation_busy(app.snapshot)
+                    and app.store.status.run["approval"]["approved"], "published Task approval")
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+
+    async def test_uninitialized_project_can_create_via_keyboard_without_prior_init(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"LOOPFORGE_HOME": str(Path(tmp)/"home")}):
+            project = Path(tmp)/"project"
+            project.mkdir()
+            cli_fixtures.CliTests().initialize_git_project(project)
+            shell = InteractiveShell(project, output=io.StringIO(), error=io.StringIO())
+            app = LoopForgeApp(shell)
+            async with app.run_test(size=(80,24)) as pilot:
+                await wait_for_condition(pilot, lambda: bool(app.snapshot.home.projects), "Home project")
+                await pilot.press("down", "n")
+                await wait_for_condition(pilot, lambda: isinstance(app.screen, TaskComposer) and app.screen.context is not None,
+                                         "Uninitialized project composer")
+                self.assertFalse(current_status(project).initialized)
+                await pilot.press(*"Reject expired tokens", "tab", *"Expired tokens return 401", "tab")
+                self.assertEqual(app.focused.id, "criterion-value-2")
+                await pilot.press("ctrl+enter")
+                await wait_for_condition(pilot, lambda: app._screen=="run" and bool(app.available_actions), "Created Task")
+                status = current_status(project)
+                self.assertTrue(status.initialized)
+                self.assertEqual(status.run["success_checks"], ["Expired tokens return 401"])
+                self.assertFalse(status.run["approval"]["approved"])
+                self.assertEqual(status.run["stage_statuses"]["research"], "pending")
+                await app.workers.wait_for_complete()
+                await pilot.pause()

@@ -277,6 +277,8 @@ class LoopForgeApp(App[None]):
         """Enable the dashboard's priority bindings only on its own surface."""
 
         if any(isinstance(screen, TaskComposer) for screen in self.screen_stack):
+            if action in {"focus_next", "focus_previous"}:
+                return super().check_action(action, parameters)
             return False  # The composer and its confirmation own their native keys.
         if action in {"root_open_selected", "open_selected"} and self._screen == "run":
             if (len(self.screen_stack) == 1 and isinstance(self.focused, Button)

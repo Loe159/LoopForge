@@ -17,7 +17,7 @@ from loopforge.cli.presentation import ProjectSummary, RunSummary, ShellSnapshot
 from loopforge.cli.task_intake import TaskContext
 from loopforge.cli.textual_app import LoopForgeApp
 from loopforge.cli.textual_app.screens import RunDetailScreen
-from loopforge.cli.textual_app.task_composer import CriterionField, TaskComposer
+from loopforge.cli.textual_app.task_composer import TaskComposer
 from loopforge.engine import ActionScope
 
 
@@ -44,9 +44,9 @@ class ComposerPreview(TaskComposer):
         if self.preview_state == "rubric":
             self.query_one("#task-rubric").load_text("Compare hierarchy, keyboard focus and error recovery.")
         if not self.complete and self.preview_state != "empty":
-            self._next_criterion = 2
-            await self.query_one("#task-criteria").mount(CriterionField(2))
-            self.query_one("#criterion-value-2").load_text("Valid tokens still return HTTP 200.")
+            await self._ensure_empty_criterion()
+            self.query(".criterion-value").last().load_text("Valid tokens still return HTTP 200.")
+            await self._ensure_empty_criterion()
         if self.preview_state == "error":
             self.show_failure("Could not write project metadata. Check local access, then retry.")
         if self.preview_state == "saving":

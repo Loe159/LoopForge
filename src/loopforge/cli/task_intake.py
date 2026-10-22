@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from loopforge.engine import ActionScope, current_status, detect_project_pack
+from loopforge.engine import ActionScope, DEFAULT_ADAPTER, DEFAULT_PROFILE, current_status, detect_project_pack
 
 
 @dataclass(frozen=True)
@@ -26,15 +26,16 @@ class TaskContext:
     success_checks: tuple[str, ...] = ()
     rubric: str = ""
     missing: tuple[str, ...] = ()
+    initialized: bool = True
 
 
 def load_task_context(project: Path) -> TaskContext:
     """Called in a worker, never from a widget's render/compose callback."""
 
     status = current_status(project)
-    if not status.initialized or status.config is None:
-        raise ValueError("Initialize this project before creating a run.")
-    config, run = status.config, status.run or {}
+    if not status.project_dir.is_dir():
+        raise ValueError("The project directory no longer exists.")
+    config, run = status.config or {}, status.run or {}
     contract = status.loop_contract or {}
     pack = detect_project_pack(project)
     return TaskContext(
@@ -43,11 +44,12 @@ def load_task_context(project: Path) -> TaskContext:
                           revision=run.get("run_revision", 0),
                           config_revision=config.get("config_revision", 0)),
         project_name=str(config.get("project_name") or project.name),
-        profile=str(config.get("profile") or "supervised"),
+        profile=str(config.get("profile") or DEFAULT_PROFILE),
         pack=str(pack.get("name") or "unknown"),
-        adapter=str(config.get("default_adapter") or "default"),
+        adapter=str(config.get("default_adapter") or DEFAULT_ADAPTER),
         task=str(run.get("task") or ""),
         success_checks=tuple(str(value) for value in (run.get("success_checks") or [])),
         rubric=str(contract.get("rubric") or ""),
         missing=tuple(str(value) for value in ((run.get("task_validation") or {}).get("missing") or [])),
+        initialized=status.initialized,
     )

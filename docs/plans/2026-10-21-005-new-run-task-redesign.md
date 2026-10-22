@@ -1,7 +1,7 @@
 # New Run / Task — design A retenu
 
 Conception : 21 octobre 2026. Retour reçu : 22 octobre 2026.
-Statut : **design A implémenté et contrôlé localement ; trois erreurs préexistantes dans la suite complète**.
+Statut : **design et tailles de terminal validés visuellement ; corrections clavier et initialisation implémentées et contrôlées, confirmation d'usage attendue**.
 Autorisation d'implémentation reçue le 22 octobre 2026 : « Fais
 l'implémentation. » Cette instruction autorise le travail produit et ses tests,
 sans accorder d'approbation à une tâche réelle du moteur.
@@ -18,6 +18,39 @@ La [livraison locale et ses captures natives](../previews/new-run-task-implement
 et la [revue de code / inspection Impeccable](../previews/new-run-task-implementation/REVIEW.md)
 documentent désormais le résultat. Les sections de conception ci-dessous
 conservent le brief validé.
+
+## Retour visuel du 22 octobre — clavier et premier run
+
+L'utilisateur confirme : « Le design est validé. Rien à dire sur toutes les
+tailles d'écran. » L'acceptation visuelle de la composition A est enregistrée.
+Il demande directement les corrections de comportement suivantes ; elles
+autorisent leur implémentation sans nouvelle variante graphique :
+
+- Tab passe à l'éditeur suivant, Maj+Tab revient au précédent. Les éditeurs
+  précèdent les boutons dans le parcours ; les boutons restent accessibles.
+- Dès que le dernier critère contient du texte, un critère vide apparaît à
+  la suite sans voler le focus. Le dernier champ vide est recréé si on le
+  supprime. Les champs vides ou remplis d'espaces ne sont jamais enregistrés.
+- Un projet non initialisé peut ouvrir le formulaire. L'ouverture et l'abandon
+  ne l'initialisent pas ; Create run appelle l'API d'initialisation existante
+  avant l'API de création. Le slash `/run` partage ce comportement, déjà
+  présent dans la commande CLI principale. Aucun dépôt Git n'est créé et
+  aucune approbation Task ni exécution Research n'est accordée.
+
+Cause du défaut Tab : `LoopForgeApp.check_action` bloquait toutes les actions
+app pendant le formulaire, y compris `focus_next` et `focus_previous` utilisés
+par Textual. Ces deux actions natives sont rétablies, y compris dans le
+dialogue d'abandon ; les raccourcis globaux restent à leur propriétaire.
+
+Les [contrôles et captures du correctif](../previews/new-run-task-implementation/keyboard-followup/REVIEW.md)
+documentent 107 tests ciblés réussis, huit répétitions d'intégration réussies,
+et les deux derniers passages complets : 787 tests chacun, avec uniquement
+les trois erreurs d'archivage préexistantes. Une course de fermeture du test
+d'approbation révélée par un passage intermédiaire a été corrigée avant ces
+deux derniers passages. Compilation et contrôles de diff passent.
+
+Les corrections demandées sont à confirmer dans l'application réelle après
+livraison. Commit local du correctif ; ce retour ne demande pas de nouveau push.
 
 ## Brief
 

@@ -1092,6 +1092,9 @@ class InteractiveShell:
 
         try:
             with self.renderer.loading("Creating LoopForge run..."):
+                if not current_status(self.project_dir).initialized:
+                    initialize_project(self.project_dir)
+                    self.refresh_session_config()
                 result = create_run(
                     self.project_dir,
                     task=task,

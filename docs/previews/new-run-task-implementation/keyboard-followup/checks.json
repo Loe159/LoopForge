@@ -1,0 +1,127 @@
+{
+  "date": "2026-10-22",
+  "focused": {
+    "command": "PYTHONPATH=src .venv/bin/python -m unittest tests.test_task_composer tests.test_cli_structure tests.test_engine_services",
+    "tests": 107,
+    "errors": 0,
+    "failures": 0
+  },
+  "widths_tested": [
+    48,
+    52,
+    60,
+    80,
+    100,
+    120,
+    160
+  ],
+  "capture_sizes": [
+    [
+      48,
+      24
+    ],
+    [
+      60,
+      24
+    ],
+    [
+      80,
+      24
+    ],
+    [
+      120,
+      40
+    ],
+    [
+      160,
+      40
+    ]
+  ],
+  "source_hashes": {
+    "src/loopforge/cli/task_intake.py": "9d22de5685bd0f59d9d89b573fa5cc73bf4b9c7466724859826a3fdc1571edab",
+    "src/loopforge/cli/interactive.py": "d7af3c1a846454b995db21acc556d766838347c9fa1e35e8c05999e5c239e91f",
+    "src/loopforge/cli/textual_app/app.py": "c429f84bee640ec1b82e4718d9842f4b57b590e75fc54c63a1563dcf57cea695",
+    "src/loopforge/cli/textual_app/task_composer.py": "418f0d9b419c556dabd9e9e73900b9297003f6c8d498bfbced3973dc305203fe",
+    "tests/test_task_composer.py": "79a13d93a2a58f27a18dcd826972f9ac29c6f2278f79f50a09252bcfcc286daf",
+    "tools/demo_task_composer.py": "0e5a83ce9f4a55a1593ac6f04e1047838f7ba9a2af9205538cbaea97a783c248"
+  },
+  "compileall": "passed",
+  "diff_check": "passed",
+  "mouse": "native click in criterion and on Add criterion after scrolling: passed",
+  "impeccable_detector": [],
+  "full_suite": [
+    {
+      "command": "PYTHONPATH=src .venv/bin/python -m unittest",
+      "log": "/tmp/loopforge-task-keyboard-full-1.log",
+      "tests": 787,
+      "elapsed_seconds": 272.789,
+      "failures": 0,
+      "errors": 3,
+      "skipped": 3,
+      "preexisting_error_test": "test_readonly_research_retains_invalid_candidates_and_allows_retry",
+      "preexisting_error_cases": [
+        "empty stdout",
+        "invalid Markdown",
+        "partial headings"
+      ]
+    },
+    {
+      "command": "PYTHONPATH=src .venv/bin/python -m unittest",
+      "log": "/tmp/loopforge-task-keyboard-full-2.log",
+      "tests": 787,
+      "elapsed_seconds": 280.369,
+      "failures": 0,
+      "errors": 4,
+      "skipped": 3,
+      "extra_error_test": "test_home_create_opens_task_and_approval_never_starts_research",
+      "extra_error_resolution": "Wait for published approval and completed workers before test teardown."
+    },
+    {
+      "command": "PYTHONPATH=src .venv/bin/python -m unittest",
+      "log": "/tmp/loopforge-task-keyboard-full-3.log",
+      "phase": "after_route_synchronization",
+      "tests": 787,
+      "elapsed_seconds": 273.832,
+      "failures": 0,
+      "errors": 3,
+      "skipped": 3,
+      "error_cases": [
+        "test_readonly_research_retains_invalid_candidates_and_allows_retry (tests.test_cli.CliTests.test_readonly_research_retains_invalid_candidates_and_allows_retry) (candidate='empty stdout')",
+        "test_readonly_research_retains_invalid_candidates_and_allows_retry (tests.test_cli.CliTests.test_readonly_research_retains_invalid_candidates_and_allows_retry) (candidate='invalid Markdown')",
+        "test_readonly_research_retains_invalid_candidates_and_allows_retry (tests.test_cli.CliTests.test_readonly_research_retains_invalid_candidates_and_allows_retry) (candidate='partial headings')"
+      ]
+    },
+    {
+      "command": "PYTHONPATH=src .venv/bin/python -m unittest",
+      "log": "/tmp/loopforge-task-keyboard-full-4.log",
+      "phase": "after_route_synchronization",
+      "tests": 787,
+      "elapsed_seconds": 278.312,
+      "failures": 0,
+      "errors": 3,
+      "skipped": 3,
+      "error_cases": [
+        "test_readonly_research_retains_invalid_candidates_and_allows_retry (tests.test_cli.CliTests.test_readonly_research_retains_invalid_candidates_and_allows_retry) (candidate='empty stdout')",
+        "test_readonly_research_retains_invalid_candidates_and_allows_retry (tests.test_cli.CliTests.test_readonly_research_retains_invalid_candidates_and_allows_retry) (candidate='invalid Markdown')",
+        "test_readonly_research_retains_invalid_candidates_and_allows_retry (tests.test_cli.CliTests.test_readonly_research_retains_invalid_candidates_and_allows_retry) (candidate='partial headings')"
+      ]
+    }
+  ],
+  "initial_source_hashes": {
+    "src/loopforge/cli/task_intake.py": "9d22de5685bd0f59d9d89b573fa5cc73bf4b9c7466724859826a3fdc1571edab",
+    "src/loopforge/cli/interactive.py": "d7af3c1a846454b995db21acc556d766838347c9fa1e35e8c05999e5c239e91f",
+    "src/loopforge/cli/textual_app/app.py": "c429f84bee640ec1b82e4718d9842f4b57b590e75fc54c63a1563dcf57cea695",
+    "src/loopforge/cli/textual_app/task_composer.py": "418f0d9b419c556dabd9e9e73900b9297003f6c8d498bfbced3973dc305203fe",
+    "tests/test_task_composer.py": "8c6faaa7057237b7e187b6f9fd862ecf8d4247291e77f95513ed8756aef33e4b",
+    "tools/demo_task_composer.py": "0e5a83ce9f4a55a1593ac6f04e1047838f7ba9a2af9205538cbaea97a783c248"
+  },
+  "route_repetitions": {
+    "tests": 8,
+    "errors": 0,
+    "failures": 0,
+    "log": "/tmp/loopforge-task-keyboard-route-repeat.log"
+  },
+  "visual_design_accepted": true,
+  "interaction_followup_confirmation": "pending",
+  "engine_approval_granted": false
+}

@@ -4,6 +4,13 @@ Design A retenu le 22 octobre 2026 : tâche et critères réunis.
 L'instruction ultérieure « Fais l'implémentation » autorise ce travail produit.
 Elle n'accorde aucune approbation à une tâche réelle du moteur.
 
+Le retour visuel du 22 octobre valide la composition et les tailles de terminal.
+La [correction clavier et initialisation](keyboard-followup/REVIEW.md) documente
+le défaut Tab reproduit après cette livraison, son correctif, l'ajout automatique
+d'un critère vide et la création depuis un projet non initialisé. Les captures
+et résultats ci-dessous conservent l'état de la livraison initiale ; le suivi
+contient les contrôles les plus récents.
+
 ## Comportement livré
 
 - Page dédiée avec projet et chemin visibles, description multiligne, critères
