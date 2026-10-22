@@ -293,9 +293,14 @@ class LoopForgeApp(App[None]):
             self.action_new_run()
         elif command == "/archive":
             self.action_archive()
-        elif command in {"/do", "/cd", "/resume", "/trust", "/untrust",
-                         "/complete-task", "/branch"}:
+        elif command in {"/trust", "/untrust"}:
+            self._prefill_palette_command(command + " pack ")
+        elif command in {"/do", "/cd", "/resume", "/complete-task",
+                         "/fork", "/report"}:
             self._prefill_palette_command(command + " ")
+        elif command == "/update":
+            # Never install software from a single discovery keystroke.
+            self._prefill_palette_command(command)
         else:
             self._run_slash_command(command)
 
