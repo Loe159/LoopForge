@@ -87,6 +87,8 @@ def build_palette_entries(
             if name in SUPPORTED_COMMANDS:
                 catalog.setdefault(name, SUPPORTED_COMMANDS[name])
 
+    if "run" in catalog:
+        catalog.pop("new", None)  # Synonym, not a second entry for one action.
     if not has_project:
         for name in ("run", "new", "init", "continue", "do", "verify"):
             catalog.pop(name, None)
@@ -231,8 +233,12 @@ class LoopForgeCommandPalette(ModalScreen[PaletteEntry | None]):
                              id="lf-palette-help")
 
     def on_mount(self) -> None:
+        self.set_class(self.size.width <= 60, "-narrow")
         self._filter("")
         self.query_one("#lf-palette-search", Input).focus()
+
+    def on_resize(self, event: events.Resize) -> None:
+        self.set_class(event.size.width <= 60, "-narrow")
 
     @on(Input.Changed, "#lf-palette-search")
     def _on_search_changed(self, event: Input.Changed) -> None:
@@ -248,17 +254,12 @@ class LoopForgeCommandPalette(ModalScreen[PaletteEntry | None]):
             score = command_match_score(entry, query)
             if score:
                 matches.append((index, score))
-        # Keep section order, with stable relevance ranking inside each section.
-        if query.strip():
-            matches.sort(key=lambda item: (
-                ("NEXT ACTION", "COMMANDS", "INSPECTION").index(
-                    self.entries[item[0]].category),
-                -item[1],
-                item[0],
-            ))
+        # Navigation follows the visible grid; relevance selects the best match
+        # without producing a different keyboard order from the rendered order.
         self._matching = [index for index, _score in matches]
         if self._current not in self._matching:
-            self._current = self._matching[0] if self._matching else None
+            best = max(matches, key=lambda pair: (pair[1], -pair[0]), default=None)
+            self._current = best[0] if best is not None else None
         self._refresh_rows()
 
     def _refresh_rows(self) -> None:
