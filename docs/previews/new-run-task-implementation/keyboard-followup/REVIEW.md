@@ -104,4 +104,9 @@ PYTHONPATH=src .venv/bin/python tools/demo_task_composer.py --state filled
 Dans l'application réelle, sélectionner un projet, ouvrir New Run, saisir la
 tâche, Tab, saisir un critère, Tab. Le champ suivant est prêt ; Create run
 initialise le projet si nécessaire. L'approbation Task demeure une action
-distincte. Confirmation utilisateur de ces corrections encore attendue.
+distincte.
+
+Validation utilisateur reçue le 22 octobre 2026 après le correctif `46e9166` :
+« C'est parfait je valide ». Les corrections d'interaction sont acceptées,
+ainsi que la composition et les tailles de terminal déjà validées. Cette
+acceptation n'est pas une approbation moteur ni une demande de push.

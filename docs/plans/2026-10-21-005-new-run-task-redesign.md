@@ -1,7 +1,7 @@
 # New Run / Task — design A retenu
 
 Conception : 21 octobre 2026. Retour reçu : 22 octobre 2026.
-Statut : **design et tailles de terminal validés visuellement ; corrections clavier et initialisation implémentées et contrôlées, confirmation d'usage attendue**.
+Statut : **validé par l'utilisateur — design, tailles de terminal, navigation clavier, critères et initialisation automatique**.
 Autorisation d'implémentation reçue le 22 octobre 2026 : « Fais
 l'implémentation. » Cette instruction autorise le travail produit et ses tests,
 sans accorder d'approbation à une tâche réelle du moteur.
@@ -49,8 +49,11 @@ les trois erreurs d'archivage préexistantes. Une course de fermeture du test
 d'approbation révélée par un passage intermédiaire a été corrigée avant ces
 deux derniers passages. Compilation et contrôles de diff passent.
 
-Les corrections demandées sont à confirmer dans l'application réelle après
-livraison. Commit local du correctif ; ce retour ne demande pas de nouveau push.
+Validation finale reçue le 22 octobre 2026 après livraison du correctif
+`46e9166` : « C'est parfait je valide ». Le parcours New Run / Task est accepté,
+y compris Tab / Maj+Tab, le critère vide final et l'initialisation automatique.
+Cette acceptation produit n'accorde aucune approbation à une tâche du moteur
+et ne demande pas de nouveau push.
 
 ## Brief
 

@@ -122,6 +122,18 @@
     "log": "/tmp/loopforge-task-keyboard-route-repeat.log"
   },
   "visual_design_accepted": true,
-  "interaction_followup_confirmation": "pending",
-  "engine_approval_granted": false
+  "interaction_followup_confirmation": "accepted",
+  "engine_approval_granted": false,
+  "user_acceptance": {
+    "date": "2026-10-22",
+    "message": "C'est parfait je valide",
+    "implementation_commit": "46e9166",
+    "scope": [
+      "visual design",
+      "terminal sizes",
+      "keyboard navigation",
+      "trailing empty criterion",
+      "automatic project initialization"
+    ]
+  }
 }
