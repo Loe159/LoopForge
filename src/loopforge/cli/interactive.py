@@ -2222,17 +2222,8 @@ class InteractiveShell:
             self.write("usage: /update", error=True)
             return DispatchResult(2)
         result = install_loopforge(update=True)
-        rows = [("source", result.source_root), *result.diagnostics.items()]
-        if result.ok:
-            render_success(self.renderer, "LoopForge update", rows)
-        else:
-            render_blocked(
-                self.renderer,
-                "LoopForge update",
-                rows,
-                blockers=result.blockers,
-                next_command="/update",
-            )
+        message = result.message if result.ok else "\n".join(result.blockers or [result.message])
+        self.write(message, error=not result.ok)
         return DispatchResult(0 if result.ok else 1)
 
     def cmd_debug_config(self, raw: str = "") -> DispatchResult:

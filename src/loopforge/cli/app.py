@@ -110,6 +110,9 @@ class MaintenanceCommandHandler:
         }
         if fmt == "json":
             api.print_json_payload(payload)
+        elif update and not context.options.quiet:
+            message = result.message if result.ok else "\n".join(result.blockers or [result.message])
+            print(message, file=context.stdout if result.ok else context.stderr)
         elif not context.options.quiet:
             rows = [("source", result.source_root), *result.diagnostics.items()]
             title = "LoopForge update" if update else "LoopForge install"

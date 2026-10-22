@@ -63,6 +63,7 @@ class JsonStoreTests(unittest.TestCase):
 
 class InstallationTests(unittest.TestCase):
     def test_update_installs_master_without_a_source_checkout(self) -> None:
+        commit = "0123456789abcdef" * 2 + "01234567"
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             scripts = root / "scripts"
@@ -73,7 +74,7 @@ class InstallationTests(unittest.TestCase):
                 subprocess.CompletedProcess([], 0, stdout="pip 24\n", stderr=""),
                 subprocess.CompletedProcess([], 0, stdout="git version 2.45\n", stderr=""),
                 subprocess.CompletedProcess([], 0, stdout="installed\n", stderr=""),
-                subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout=commit + "\n", stderr=""),
             ]
 
             with (
@@ -84,8 +85,10 @@ class InstallationTests(unittest.TestCase):
 
             self.assertTrue(result.ok, result.blockers)
             self.assertTrue(result.updated)
+            self.assertEqual(result.diagnostics["commit"], commit)
+            self.assertEqual(result.message, "LoopForge mis à jour (commit 0123456789ab).")
             self.assertEqual(
-                [call.args[0] for call in run.call_args_list],
+                [call.args[0] for call in run.call_args_list[:3]],
                 [
                     [sys.executable, "-m", "pip", "--version"],
                     ["git", "--version"],
@@ -93,13 +96,43 @@ class InstallationTests(unittest.TestCase):
                         sys.executable, "-m", "pip", "install", "--upgrade",
                         "--force-reinstall", "git+https://github.com/Loe159/LoopForge.git@master",
                     ],
-                    [
-                        sys.executable,
-                        "-c",
-                        "import loopforge, rich, textual",
-                    ],
                 ],
             )
+            # Execute the verification code against installation metadata, not
+            # a mocked hash, so the subprocess contract is exercised as well.
+            (root / "loopforge.py").write_text("", encoding="utf-8")
+            metadata = root / "loopforge-0.1.0.dist-info"
+            metadata.mkdir()
+            (metadata / "METADATA").write_text(
+                "Name: loopforge\nVersion: 0.1.0\n", encoding="utf-8"
+            )
+            (metadata / "direct_url.json").write_text(
+                json.dumps({"vcs_info": {"commit_id": commit}}), encoding="utf-8"
+            )
+            verification = subprocess.run(
+                run.call_args_list[3].args[0], cwd=root,
+                capture_output=True, text=True, check=True,
+            )
+            self.assertIn("-E", run.call_args_list[3].args[0])
+            self.assertEqual(verification.stdout.strip(), commit)
+
+    def test_update_does_not_claim_success_without_a_verified_commit(self) -> None:
+        for output in ("", "not-a-commit", "secret\n" + "a" * 40):
+            with (
+                self.subTest(output=output),
+                tempfile.TemporaryDirectory() as temp_dir,
+                mock.patch("loopforge.engine.subprocess.run", side_effect=[
+                    subprocess.CompletedProcess([], 0),
+                    subprocess.CompletedProcess([], 0),
+                    subprocess.CompletedProcess([], 0),
+                    subprocess.CompletedProcess([], 0, stdout=output),
+                ]),
+            ):
+                result = install_loopforge(update=True, source_root=Path(temp_dir))
+                self.assertFalse(result.ok)
+                self.assertNotIn("commit", result.diagnostics)
+                self.assertIn("Impossible de vérifier le commit LoopForge installé.", result.blockers)
+                self.assertNotIn("secret", str(result))
 
     def test_update_failure_is_reported_without_subprocess_secrets(self) -> None:
         for failure in (subprocess.CompletedProcess([], 1, "secret", "secret"), OSError("secret")):

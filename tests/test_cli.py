@@ -5193,7 +5193,7 @@ Only this section is present.
             result = InstallationResult(
                 source_root=Path("C:/LoopForge"),
                 ok=True,
-                message="LoopForge is installed and ready to use.",
+                message="LoopForge mis à jour (commit 0123456789ab).",
                 diagnostics={"pip_upgrade": "updated"},
                 blockers=[],
                 updated=True,
@@ -5206,7 +5206,56 @@ Only this section is present.
 
             self.assertEqual(dispatch.exit_code, 0)
             install.assert_called_once_with(update=True)
-            self.assertIn("LoopForge update", output.getvalue())
+            self.assertEqual(output.getvalue(), result.message + "\n")
+
+    def test_update_prints_only_the_message_even_in_a_rich_terminal(self) -> None:
+        for ok, blockers in (
+            (True, []),
+            (False, ["Python 3.11+ is required."]),
+            (False, ["pip is unavailable for the current Python interpreter."]),
+            (False, []),
+        ):
+            with self.subTest(ok=ok, blockers=blockers):
+                output, error = TtyStringIO(), TtyStringIO()
+                result = InstallationResult(
+                    source_root=Path("/source"), ok=ok,
+                    message="LoopForge mis à jour (commit 0123456789ab)." if ok else "Update failed.",
+                    diagnostics={"python": "3.14", "pip_upgrade": "updated"},
+                    blockers=blockers, updated=ok,
+                )
+                with (
+                    mock.patch("loopforge.cli.install_loopforge", return_value=result),
+                    contextlib.redirect_stdout(output),
+                    contextlib.redirect_stderr(error),
+                ):
+                    self.assertEqual(main(["update"]), 0 if ok else 1)
+                expected = result.message if ok else "\n".join(blockers or [result.message])
+                self.assertEqual(output.getvalue(), expected + "\n" if ok else "")
+                self.assertEqual(error.getvalue(), "" if ok else expected + "\n")
+
+    def test_update_quiet_suppresses_the_message(self) -> None:
+        output, error = io.StringIO(), io.StringIO()
+        result = InstallationResult(Path("/source"), True, "Updated.", {}, [], True)
+        with (
+            mock.patch("loopforge.cli.install_loopforge", return_value=result),
+            contextlib.redirect_stdout(output),
+            contextlib.redirect_stderr(error),
+        ):
+            self.assertEqual(main(["--quiet", "update"]), 0)
+        self.assertEqual(output.getvalue() + error.getvalue(), "")
+
+    def test_shell_update_errors_are_plain_text_on_stderr(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output, error = io.StringIO(), io.StringIO()
+            result = InstallationResult(
+                Path("/source"), False, "Update failed.", {}, ["Git is unavailable."], False,
+            )
+            with mock.patch("loopforge.cli.interactive.install_loopforge", return_value=result):
+                shell = InteractiveShell(Path(temp_dir), output=output, error=error)
+                dispatch = shell.dispatch("/update")
+            self.assertEqual(dispatch.exit_code, 1)
+            self.assertEqual(output.getvalue(), "")
+            self.assertEqual(error.getvalue(), "Git is unavailable.\n")
 
     def test_no_args_in_non_interactive_mode_prints_help(self) -> None:
         error = io.StringIO()

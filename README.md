@@ -66,6 +66,9 @@ Restart running LoopForge sessions after updating. For local development,
 keep using `python -m pip install -e .`; `loopforge install` reinstalls local
 sources and requires a source checkout.
 
+The update prints only a confirmation with the installed commit. Errors are
+plain text on stderr; `--format json` retains the detailed machine-readable result.
+
 ## MVP Shape
 
 ```text

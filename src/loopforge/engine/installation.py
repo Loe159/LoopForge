@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -137,13 +138,22 @@ def install_loopforge(
             False,
         )
 
+    verification = "import loopforge, rich, textual"
+    verification_command = [sys.executable]
+    if update:
+        # Read metadata in a fresh interpreter: the running process still has
+        # the old package loaded after pip replaces it (including editable installs).
+        # Ignore PYTHONPATH so a developer checkout cannot shadow that installation.
+        verification_command.append("-E")
+        verification += (
+            "; import json; from importlib.metadata import distribution; "
+            "print(json.loads(distribution('loopforge').read_text('direct_url.json') "
+            "or '{}').get('vcs_info', {}).get('commit_id', ''))"
+        )
+    verification_command.extend(["-c", verification])
     try:
         imports = subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                "import loopforge, rich, textual",
-            ],
+            verification_command,
             cwd=root,
             check=False,
             capture_output=True,
@@ -163,6 +173,12 @@ def install_loopforge(
     )
     if diagnostics["runtime_dependencies"] != "available":
         blockers.append("LoopForge or one of its runtime dependencies could not be imported.")
+    if update and diagnostics["runtime_dependencies"] == "available":
+        commit = (imports.stdout or "").strip()
+        if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit):
+            diagnostics["commit"] = commit
+        else:
+            blockers.append("Impossible de vérifier le commit LoopForge installé.")
     if diagnostics["command"] == "missing":
         blockers.append("The installed LoopForge command entry point was not found.")
     if blockers:
@@ -180,7 +196,7 @@ def install_loopforge(
         root,
         True,
         (
-            "LoopForge was updated from GitHub master; restart running LoopForge sessions."
+            f"LoopForge mis à jour (commit {diagnostics['commit'][:12]})."
             if update else "LoopForge is installed and ready to use."
         ),
         diagnostics,
