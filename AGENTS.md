@@ -9,6 +9,12 @@ autonomy: verification is evidence, never review or publication authority.
   `04-reuse-catalog.md`.
 - Before terminal rendering, project navigation, or command UX work on the
   landing screen, read `DESIGN.md`.
+- For any Textual screen or component creation/refinement, read
+  `docs/agent/08-iterative-tui-design.md` and use the repository-maintainer
+  skill `.agents/skills/loopforge-tui-refinement/SKILL.md`. Obtain explicit
+  mockup approval before implementation, change one component at a time,
+  test real terminal widths, commit each iteration, and wait for separate
+  user visual validation before moving on.
 - Reuse the public `loopforge.cli` facade, engine APIs, `CliContext`, handlers,
   `JsonStore`, `PackRegistry`, `MetricsService`, UI helpers, and packaged
   checks. Do not create parallel variants.
